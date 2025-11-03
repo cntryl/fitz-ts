@@ -1,0 +1,5 @@
+# cntryl-ts
+
+TypeScript SDK for cntryl (Node + Browser).
+
+See `README_TEMPLATE.md` at the repository root for guidelines. This folder is a template for the `cntryl-ts` repository.
