@@ -20,7 +20,8 @@ export class KvCodec {
   /**
    * Encode BEGIN request
    * Payload: [route: string][mode: u8][durability: u8]
-   * Note: RouteFamily is derived by the server from the route, not sent by client
+   * Note: Internal broker routing is resolved from authenticated session state;
+   * clients send only the route and documented KV fields.
    */
   static encodeBegin(
     route: string,
