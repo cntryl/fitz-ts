@@ -4,43 +4,35 @@
 
 export type TransportType = "ws" | "tcp" | "auto";
 
-export interface ClientConfig {
-  url: string;
-  jwt: string;
-  timeout?: number;
-  transport?: TransportType;
-  retryAttempts?: number;
-  retryDelayMs?: number;
+export type TokenProvider = () => string | Promise<string>;
+
+export interface ReconnectOptions {
+  enabled?: boolean;
+  maxAttempts?: number;
+  backoffMs?: number;
+  maxBackoffMs?: number;
 }
 
-export interface Route {
-  scheme: string;
-  realm: string;
-  area: string;
-  resource: string;
-  operation?: string;
+export interface ClientConfig {
+  url: string;
+  tokenProvider?: TokenProvider;
+  timeout?: number;
+  transport?: TransportType;
+  reconnect?: ReconnectOptions;
+  maxFrameSize?: number;
+  authSettleDelayMs?: number;
 }
 
 export type TxMode = "ReadOnly" | "ReadWrite";
 export type DurabilityMode = "None" | "Async" | "Sync";
 
-export interface WriteOptions {
-  durability: DurabilityMode;
-  buffered: boolean;
-}
-
-export const DefaultWriteOptions: WriteOptions = {
-  durability: "Async",
-  buffered: true,
-};
-
 /**
  * Deferred is a Promise wrapper that exposes resolve/reject
  */
-export class Deferred<T = any> {
+export class Deferred<T = unknown> {
   promise: Promise<T>;
   resolve!: (value: T | PromiseLike<T>) => void;
-  reject!: (reason?: any) => void;
+  reject!: (reason?: unknown) => void;
 
   constructor() {
     this.promise = new Promise((resolve, reject) => {
@@ -58,5 +50,6 @@ export enum ConnectionState {
   Connecting = "CONNECTING",
   Authenticating = "AUTHENTICATING",
   Authenticated = "AUTHENTICATED",
+  Reconnecting = "RECONNECTING",
   Closed = "CLOSED",
 }

@@ -10,7 +10,6 @@
 
 import { Deferred, ConnectionState } from "../core/types";
 import { TimeoutError } from "../core/errors";
-import { NOTIFICATION_TYPES } from "../frame/types";
 
 export interface PendingRequest {
   deferred: Deferred<Uint8Array>;
@@ -19,8 +18,12 @@ export interface PendingRequest {
 }
 
 /**
- * Notification handler signature
- * @param payload Raw notification payload
+ * Handler for server-pushed frames.
+ *
+ * Most pushed traffic uses dedicated `*_NOTIFY` message types. RPC is the
+ * protocol exception: inbound worker requests and streaming responses arrive on
+ * `MSG_RPC_REQUEST` and `MSG_RPC_RESPONSE`, so those frames are only treated as
+ * pushes when there is no matching FIFO request waiting on the same type.
  */
 export type NotificationHandler = (payload: Uint8Array) => void;
 
@@ -38,8 +41,9 @@ export class Multiplexer {
   // FIFO queue of pending requests per MessageType
   private pending: Map<number, PendingRequest[]> = new Map();
 
-  // Notification handlers for push messages (209, 409, 504, 609, 705)
+  // Handlers for pushed frames, including the RPC same-type exception.
   private notificationHandlers: Map<number, NotificationHandler> = new Map();
+  private optionalResponses: Map<number, number> = new Map();
 
   // RPC correlation handler for streaming responses (future use)
   // private rpcCorrelationHandler?: RpcCorrelationHandler;
@@ -51,6 +55,18 @@ export class Multiplexer {
   private requestsTotal = 0;
   private responsesTotal = 0;
   private responsesDropped = 0;
+  private responsesIgnored = 0;
+
+  private getOrCreatePendingQueue(messageType: number): PendingRequest[] {
+    const existing = this.pending.get(messageType);
+    if (existing) {
+      return existing;
+    }
+
+    const created: PendingRequest[] = [];
+    this.pending.set(messageType, created);
+    return created;
+  }
 
   setConnected(): void {
     this.state = ConnectionState.Authenticated;
@@ -58,21 +74,18 @@ export class Multiplexer {
 
   setDisconnected(): void {
     this.state = ConnectionState.Disconnected;
+    this.optionalResponses.clear();
     this.cancelAll();
   }
 
   /**
-   * Register notification handler for server push messages
-   * @param messageType Notification message type (e.g., 209, 504, 609, 705)
+   * Register a handler for pushed frames.
    * @param handler Handler function to call when notification arrives
    */
   registerNotificationHandler(
     messageType: number,
     handler: NotificationHandler,
   ): void {
-    if (!NOTIFICATION_TYPES.has(messageType)) {
-      throw new Error(`Invalid notification type: ${messageType}`);
-    }
     this.notificationHandlers.set(messageType, handler);
   }
 
@@ -81,6 +94,20 @@ export class Multiplexer {
    */
   unregisterNotificationHandler(messageType: number): void {
     this.notificationHandlers.delete(messageType);
+  }
+
+  expectOptionalResponse(messageType: number): () => void {
+    const nextCount = (this.optionalResponses.get(messageType) ?? 0) + 1;
+    this.optionalResponses.set(messageType, nextCount);
+
+    return () => {
+      const currentCount = this.optionalResponses.get(messageType) ?? 0;
+      if (currentCount <= 1) {
+        this.optionalResponses.delete(messageType);
+        return;
+      }
+      this.optionalResponses.set(messageType, currentCount - 1);
+    };
   }
 
   /**
@@ -110,10 +137,7 @@ export class Multiplexer {
     };
 
     // Add to FIFO queue for this MessageType
-    if (!this.pending.has(messageType)) {
-      this.pending.set(messageType, []);
-    }
-    this.pending.get(messageType)!.push(request);
+    this.getOrCreatePendingQueue(messageType).push(request);
 
     this.requestsInFlight++;
     this.requestsTotal++;
@@ -152,48 +176,52 @@ export class Multiplexer {
    * Dispatch incoming frame to appropriate handler
    */
   dispatch(messageType: number, payload: Uint8Array): void {
-    // Handle notification push messages
-    if (NOTIFICATION_TYPES.has(messageType)) {
-      const handler = this.notificationHandlers.get(messageType);
-      if (handler) {
-        try {
-          handler(payload);
-        } catch (err) {
-          console.error(
-            `Notification handler error for type ${messageType}:`,
-            err,
-          );
-        }
-      } else {
-        this.responsesDropped++;
-        console.warn(
-          `No handler registered for notification type ${messageType}`,
-        );
+    const queue = this.pending.get(messageType);
+    if (queue && queue.length > 0) {
+      // Match to oldest (FIFO) pending request.
+      const request = queue.shift();
+      if (!request) {
+        return;
+      }
+      if (queue.length === 0) {
+        this.pending.delete(messageType);
+      }
+
+      clearTimeout(request.timeout);
+      this.requestsInFlight--;
+      this.responsesTotal++;
+
+      request.deferred.resolve(payload);
+      return;
+    }
+
+    const handler = this.notificationHandlers.get(messageType);
+    if (handler) {
+      try {
+        handler(payload);
+      } catch {
+        // Best-effort notification dispatch.
       }
       return;
     }
 
-    // Handle synchronous request/response - FIFO matching
-    const queue = this.pending.get(messageType);
-    if (!queue || queue.length === 0) {
-      this.responsesDropped++;
-      console.warn(
-        `No pending request for message type ${messageType}, dropping response`,
-      );
+    const optionalResponses = this.optionalResponses.get(messageType) ?? 0;
+    if (optionalResponses > 0) {
+      if (optionalResponses === 1) {
+        this.optionalResponses.delete(messageType);
+      } else {
+        this.optionalResponses.set(messageType, optionalResponses - 1);
+      }
+      this.responsesIgnored++;
       return;
     }
 
-    // Match to oldest (FIFO) pending request
-    const request = queue.shift()!;
-    if (queue.length === 0) {
-      this.pending.delete(messageType);
+    if (this.state !== ConnectionState.Authenticated) {
+      this.responsesIgnored++;
+      return;
     }
 
-    clearTimeout(request.timeout);
-    this.requestsInFlight--;
-    this.responsesTotal++;
-
-    request.deferred.resolve(payload);
+    this.responsesDropped++;
   }
 
   /**
@@ -213,12 +241,19 @@ export class Multiplexer {
   /**
    * Get metrics
    */
-  getMetrics() {
+  getMetrics(): {
+    requestsInFlight: number;
+    requestsTotal: number;
+    responsesTotal: number;
+    responsesDropped: number;
+    responsesIgnored: number;
+  } {
     return {
       requestsInFlight: this.requestsInFlight,
       requestsTotal: this.requestsTotal,
       responsesTotal: this.responsesTotal,
       responsesDropped: this.responsesDropped,
+      responsesIgnored: this.responsesIgnored,
     };
   }
 

@@ -1,11 +1,10 @@
 /**
- * Stream domain client for append-only log operations
- * Per fitz-go/internal/domains/stream/stream.go
+ * Stream domain client for append-only log operations.
  *
  * Stream uses session-based transactional semantics:
- * 1. Begin() starts a write session with expectedOffset (OCC)
- * 2. Send() on session adds records
- * 3. Commit() or Rollback() finalizes the session
+ * 1. `begin()` starts a write session with `expectedOffset` (OCC)
+ * 2. `append()` on the session adds records
+ * 3. `commit()` or `rollback()` finalizes the session
  */
 
 import { DomainClient } from "../base";
@@ -15,6 +14,9 @@ import {
   StreamRecord,
   StreamMetadata,
   StreamStatus,
+  StreamCommitHandler,
+  StreamCommitNotification,
+  StreamSubscription,
 } from "./types";
 import { StreamSessionImpl } from "./session";
 import { StreamError } from "../../core/errors";
@@ -24,18 +26,42 @@ import {
   MSG_STREAM_READ,
   MSG_STREAM_LAST,
   MSG_STREAM_GET_METADATA,
+  MSG_STREAM_SUBSCRIBE,
+  MSG_STREAM_UNSUBSCRIBE,
+  MSG_STREAM_NOTIFY,
 } from "../../frame/types";
 
 export class StreamClient extends DomainClient {
+  private subscriptions = new Map<
+    bigint,
+    { pattern: string; handler: StreamCommitHandler }
+  >();
+  private initialized = false;
+
+  constructor(connection: import("../../client/connection").Connection) {
+    super(connection);
+    this.connection.onReconnect(async () => {
+      if (this.subscriptions.size === 0) {
+        return;
+      }
+
+      const snapshot = Array.from(this.subscriptions.values());
+      this.subscriptions.clear();
+      for (const subscription of snapshot) {
+        await this.subscribe(subscription.pattern, subscription.handler);
+      }
+    });
+  }
+
   /**
-   * Begin a write session on the stream
+   * Begin a write session on the stream.
    * @param route Stream route (e.g., "stream://realm/area/events")
    * @param expectedOffset Client's view of the next offset (OCC - optimistic concurrency control)
-   * @returns StreamSession for send/commit/rollback
+   * @returns StreamSession for append/commit/rollback
    */
   async begin(route: string, expectedOffset: bigint): Promise<StreamSession> {
     const payload = StreamCodec.encodeBegin(route, expectedOffset);
-    const response = await this.request(MSG_STREAM_BEGIN, payload);
+    const response = await this.requestFrame(MSG_STREAM_BEGIN, payload);
     const decoded = StreamCodec.decodeBeginResponse(response);
 
     this.checkStatus(decoded.status, "BEGIN");
@@ -51,7 +77,7 @@ export class StreamClient extends DomainClient {
   }
 
   /**
-   * Read records from the stream
+   * Read records from the stream.
    * @param route Stream route
    * @param startOffset Offset to start reading from (0 for beginning)
    * @param limit Maximum number of records to read (default: 100)
@@ -63,7 +89,7 @@ export class StreamClient extends DomainClient {
     limit: number = 100,
   ): Promise<StreamRecord[]> {
     const payload = StreamCodec.encodeRead(route, startOffset, limit);
-    const response = await this.request(MSG_STREAM_READ, payload);
+    const response = await this.requestFrame(MSG_STREAM_READ, payload);
     const decoded = StreamCodec.decodeReadResponse(response);
 
     this.checkStatus(decoded.status, "READ");
@@ -72,7 +98,7 @@ export class StreamClient extends DomainClient {
   }
 
   /**
-   * Consume records from the stream as an async iterator
+   * Consume records from the stream as an async iterator.
    * @param route Stream route
    * @param startOffset Offset to start reading from (0 for beginning)
    * @param limit Maximum number of records to read (default: 100)
@@ -89,13 +115,13 @@ export class StreamClient extends DomainClient {
   }
 
   /**
-   * Get the last record in the stream
+   * Get the last record in the stream.
    * @param route Stream route
    * @returns The most recent record, or null if stream is empty
    */
-  async last(route: string): Promise<StreamRecord | null> {
+  async peek(route: string): Promise<StreamRecord | null> {
     const payload = StreamCodec.encodeLast(route);
-    const response = await this.request(MSG_STREAM_LAST, payload);
+    const response = await this.requestFrame(MSG_STREAM_LAST, payload);
     const decoded = StreamCodec.decodeLastResponse(response);
 
     this.checkStatus(decoded.status, "LAST");
@@ -104,29 +130,119 @@ export class StreamClient extends DomainClient {
   }
 
   /**
-   * Get stream metadata
+   * Get stream metadata.
    * @param route Stream route
    * @returns Stream metadata (offsets and record count)
    */
-  async getMetadata(route: string): Promise<StreamMetadata> {
-    const payload = StreamCodec.encodeGetMetadata(route);
-    const response = await this.request(MSG_STREAM_GET_METADATA, payload);
-    const decoded = StreamCodec.decodeGetMetadataResponse(response);
+  async metadata(route: string): Promise<StreamMetadata> {
+    const payload = StreamCodec.encodeMetadata(route);
+    const response = await this.requestFrame(MSG_STREAM_GET_METADATA, payload);
+    const decoded = StreamCodec.decodeMetadataResponse(response);
 
     this.checkStatus(decoded.status, "GET_METADATA");
 
-    if (decoded.metadata === undefined) {
+    return (
+      decoded.metadata ?? {
+        firstOffset: 0n,
+        lastOffset: 0n,
+        recordCount: 0n,
+      }
+    );
+  }
+
+  async subscribe(
+    pattern: string,
+    handler: StreamCommitHandler,
+  ): Promise<StreamSubscription> {
+    this.initNotifyHandler();
+
+    const payload = StreamCodec.encodeSubscribe(pattern);
+    const response = await this.requestFrame(MSG_STREAM_SUBSCRIBE, payload);
+    const decoded = StreamCodec.decodeSubscribeResponse(response);
+    this.checkStatus(decoded.status, "SUBSCRIBE");
+
+    if (decoded.subId === undefined) {
       throw new StreamError(
-        "GET_METADATA response missing metadata",
-        "MISSING_METADATA",
+        "SUBSCRIBE response missing subId",
+        "MISSING_SUB_ID",
       );
     }
 
-    return decoded.metadata;
+    this.subscriptions.set(decoded.subId, { pattern, handler });
+    return new StreamSubscription(
+      decoded.subId,
+      pattern,
+      async (routePattern) => {
+        await this.unsubscribe(routePattern);
+      },
+    );
+  }
+
+  private async unsubscribe(pattern: string): Promise<void> {
+    for (const [subId, subscription] of this.subscriptions.entries()) {
+      if (subscription.pattern === pattern) {
+        this.subscriptions.delete(subId);
+      }
+    }
+
+    const payload = StreamCodec.encodeUnsubscribe(pattern);
+    const response = await this.requestFrame(MSG_STREAM_UNSUBSCRIBE, payload);
+    const decoded = StreamCodec.decodeUnsubscribeResponse(response);
+    this.checkStatus(decoded.status, "UNSUBSCRIBE");
+  }
+
+  private initNotifyHandler(): void {
+    if (this.initialized) {
+      return;
+    }
+
+    this.initialized = true;
+    this.connection.registerNotificationHandler(
+      MSG_STREAM_NOTIFY,
+      (payload) => {
+        try {
+          const decoded = StreamCodec.decodeNotification(payload);
+          const subscription = this.subscriptions.get(decoded.subId);
+          if (!subscription) {
+            return;
+          }
+
+          const parsedPayload = decoded.parsedPayload as
+            | {
+                event?: string;
+                first_resource_offset?: number;
+                last_resource_offset?: number;
+                batch_size?: number;
+              }
+            | undefined;
+
+          const notification: StreamCommitNotification = {
+            route: decoded.route,
+            event: parsedPayload?.event,
+            firstResourceOffset:
+              parsedPayload?.first_resource_offset !== undefined
+                ? BigInt(parsedPayload.first_resource_offset)
+                : undefined,
+            lastResourceOffset:
+              parsedPayload?.last_resource_offset !== undefined
+                ? BigInt(parsedPayload.last_resource_offset)
+                : undefined,
+            batchSize: parsedPayload?.batch_size,
+            payload: decoded.parsedPayload,
+          };
+
+          Promise.resolve(subscription.handler(notification)).catch(
+            () => undefined,
+          );
+        } catch {
+          // Best-effort notification dispatch.
+        }
+      },
+    );
   }
 
   /**
-   * Check status and throw error if not OK
+   * Check status and throw an error for non-OK responses.
    */
   private checkStatus(status: number, operation: string): void {
     if (status === StreamStatus.Ok) {

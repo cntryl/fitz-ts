@@ -1,28 +1,27 @@
 /**
- * Queue domain codec for encoding/decoding messages
- * Per fitz-go/internal/domains/queue/protocol.go
+ * Queue domain codec for encoding and decoding protocol messages.
  */
 
 import { BufferWriter, BufferReader } from "../../core/buffer";
 import {
-  QueueSendResponse,
-  QueueReceiveResponse,
-  QueueAckResponse,
+  QueueEnqueueResponse,
+  QueueReserveResponse,
+  QueueCompleteResponse,
   QueueExtendResponse,
   QueueSubscribeResponse,
   QueueUnsubscribeResponse,
-  SendOptions,
+  EnqueueOptions,
 } from "./types";
 
 export class QueueCodec {
   /**
-   * Encode SEND request (wire protocol: ENQUEUE)
+   * Encode ENQUEUE request.
    * Payload: [route: string][body_len: u32][body: bytes][has_delay: u8][delay_seconds: u64 if has_delay]
    */
-  static encodeSend(
+  static encodeEnqueue(
     route: string,
     body: Uint8Array,
-    options?: SendOptions,
+    options?: EnqueueOptions,
   ): Uint8Array {
     const writer = new BufferWriter(512);
     writer.writeRoute(route);
@@ -42,10 +41,10 @@ export class QueueCodec {
   }
 
   /**
-   * Decode SEND response (wire protocol: ENQUEUE)
+   * Decode ENQUEUE response.
    * Payload: [status: u8][message_id: u64]
    */
-  static decodeSendResponse(payload: Uint8Array): QueueSendResponse {
+  static decodeEnqueueResponse(payload: Uint8Array): QueueEnqueueResponse {
     const reader = new BufferReader(payload);
     const status = reader.readU8();
     let messageId: bigint | undefined;
@@ -56,10 +55,10 @@ export class QueueCodec {
   }
 
   /**
-   * Encode RECEIVE request (wire protocol: RESERVE)
+   * Encode RESERVE request.
    * Payload: [route: string][lease_seconds: u64][has_batch_size: u8][batch_size: u32][has_wait_seconds: u8][wait_seconds: u64]
    */
-  static encodeReceive(
+  static encodeReserve(
     route: string,
     leaseSeconds: number,
     batchSize?: number,
@@ -71,24 +70,24 @@ export class QueueCodec {
 
     const hasBatchSize = batchSize !== undefined && batchSize > 0 ? 1 : 0;
     writer.writeU8(hasBatchSize);
-    if (hasBatchSize) {
-      writer.writeU32BE(batchSize!);
+    if (hasBatchSize && batchSize !== undefined) {
+      writer.writeU32BE(batchSize);
     }
 
     const hasWaitSeconds = waitSeconds !== undefined && waitSeconds > 0 ? 1 : 0;
     writer.writeU8(hasWaitSeconds);
-    if (hasWaitSeconds) {
-      writer.writeU64BE(BigInt(waitSeconds!));
+    if (hasWaitSeconds && waitSeconds !== undefined) {
+      writer.writeU64BE(BigInt(waitSeconds));
     }
 
     return writer.getBuffer();
   }
 
   /**
-   * Decode RECEIVE response (wire protocol: RESERVE)
+   * Decode RESERVE response.
    * Payload: [status: u8][lease_count: u32]([message_id: u64][lease_token: u64][body_len: u32][body: bytes] ...)
    */
-  static decodeReceiveResponse(payload: Uint8Array): QueueReceiveResponse {
+  static decodeReserveResponse(payload: Uint8Array): QueueReserveResponse {
     const reader = new BufferReader(payload);
     const status = reader.readU8();
 
@@ -112,10 +111,10 @@ export class QueueCodec {
   }
 
   /**
-   * Encode ACK request (wire protocol: COMPLETE)
+   * Encode COMPLETE request.
    * Payload: [route: string][message_id: u64][lease_token: u64]
    */
-  static encodeAck(
+  static encodeComplete(
     route: string,
     messageId: bigint,
     leaseToken: bigint,
@@ -128,17 +127,17 @@ export class QueueCodec {
   }
 
   /**
-   * Decode ACK response
+   * Decode COMPLETE response.
    * Payload: [status: u8]
    */
-  static decodeAckResponse(payload: Uint8Array): QueueAckResponse {
+  static decodeCompleteResponse(payload: Uint8Array): QueueCompleteResponse {
     const reader = new BufferReader(payload);
     const status = reader.readU8();
     return { status };
   }
 
   /**
-   * Encode EXTEND request
+   * Encode EXTEND request.
    * Payload: [route: string][message_id: u64][lease_token: u64][lease_seconds: u64]
    */
   static encodeExtend(
@@ -156,7 +155,7 @@ export class QueueCodec {
   }
 
   /**
-   * Decode EXTEND response
+   * Decode EXTEND response.
    * Payload: [status: u8]
    */
   static decodeExtendResponse(payload: Uint8Array): QueueExtendResponse {
@@ -166,7 +165,7 @@ export class QueueCodec {
   }
 
   /**
-   * Encode SUBSCRIBE request
+   * Encode SUBSCRIBE request.
    * Payload: [pattern: string]
    */
   static encodeSubscribe(pattern: string): Uint8Array {
@@ -176,31 +175,36 @@ export class QueueCodec {
   }
 
   /**
-   * Decode SUBSCRIBE response
+   * Decode SUBSCRIBE response.
    * Payload: [status: u8][sub_id: u64]
    */
   static decodeSubscribeResponse(payload: Uint8Array): QueueSubscribeResponse {
     const reader = new BufferReader(payload);
     const status = reader.readU8();
-    let subId: bigint | undefined;
-    if (!reader.isEOF()) {
-      subId = reader.readU64BE();
+    if (status !== 0 || reader.isEOF()) {
+      return { status };
     }
-    return { status, subId };
+
+    const hasSubId = reader.readU8();
+    if (hasSubId !== 1 || reader.isEOF()) {
+      return { status };
+    }
+
+    return { status, subId: reader.readU64BE() };
   }
 
   /**
-   * Encode UNSUBSCRIBE request
-   * Payload: [sub_id: u64]
+   * Encode UNSUBSCRIBE request.
+   * Payload: [pattern: string]
    */
-  static encodeUnsubscribe(subId: bigint): Uint8Array {
-    const writer = new BufferWriter(64);
-    writer.writeU64BE(subId);
+  static encodeUnsubscribe(pattern: string): Uint8Array {
+    const writer = new BufferWriter(128);
+    writer.writeRoute(pattern);
     return writer.getBuffer();
   }
 
   /**
-   * Decode UNSUBSCRIBE response
+   * Decode UNSUBSCRIBE response.
    * Payload: [status: u8]
    */
   static decodeUnsubscribeResponse(
@@ -212,7 +216,7 @@ export class QueueCodec {
   }
 
   /**
-   * Decode notification payload
+   * Decode notification payload.
    * Payload: [sub_id: u64][route: string]
    */
   static decodeNotification(payload: Uint8Array): {
@@ -221,7 +225,11 @@ export class QueueCodec {
   } {
     const reader = new BufferReader(payload);
     const subId = reader.readU64BE();
-    const route = reader.readString();
+    const route = reader.readRoute();
+    if (!reader.isEOF()) {
+      const payloadLen = reader.readU32BE();
+      reader.readBytes(payloadLen);
+    }
     return { subId, route };
   }
 }

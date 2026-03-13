@@ -11,5 +11,5 @@ export {
   type InboundRequest,
   type ResponseWriter,
   type RpcHandler,
-  type SendOptions,
+  type RequestOptions,
 } from "./types";

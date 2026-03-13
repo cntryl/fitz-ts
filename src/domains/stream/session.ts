@@ -14,9 +14,9 @@ import {
 } from "../../frame/types";
 
 export class StreamSessionImpl implements StreamSession {
-  private connection: Connection;
-  private sessionId: bigint;
-  private closed: boolean = false;
+  private readonly connection: Connection;
+  private readonly sessionId: bigint;
+  private closed = false;
 
   constructor(connection: Connection, _route: string, sessionId: bigint) {
     this.connection = connection;
@@ -24,27 +24,23 @@ export class StreamSessionImpl implements StreamSession {
   }
 
   /**
-   * Send a record to the stream
+   * Append a record to the stream.
    * Returns the assigned offset
    */
-  async send(body: Uint8Array): Promise<bigint> {
+  async append(body: Uint8Array): Promise<bigint> {
     this.ensureOpen();
 
     const payload = StreamCodec.encodeAppend(this.sessionId, body);
     const response = await this.connection.request(MSG_STREAM_APPEND, payload);
     const decoded = StreamCodec.decodeAppendResponse(response);
 
-    this.checkStatus(decoded.status, "SEND");
+    this.checkStatus(decoded.status, "APPEND");
 
-    if (decoded.offset === undefined) {
-      throw new StreamError("SEND response missing offset", "MISSING_OFFSET");
-    }
-
-    return decoded.offset;
+    return decoded.offset ?? 0n;
   }
 
   /**
-   * Commit the write session and make appends durable
+   * Commit the write session and make appends durable.
    */
   async commit(): Promise<void> {
     this.ensureOpen();
@@ -58,11 +54,11 @@ export class StreamSessionImpl implements StreamSession {
   }
 
   /**
-   * Rollback and discard uncommitted appends
+   * Roll back and discard uncommitted appends.
    */
   async rollback(): Promise<void> {
     if (this.closed) {
-      return; // Already closed
+      return;
     }
     this.closed = true;
 
@@ -74,21 +70,20 @@ export class StreamSessionImpl implements StreamSession {
       );
       const decoded = StreamCodec.decodeRollbackResponse(response);
       this.checkStatus(decoded.status, "ROLLBACK");
-    } catch (err) {
+    } catch {
       // Ignore rollback errors
-      console.warn("Stream rollback error:", err);
     }
   }
 
   /**
-   * Check if session is still open
+   * Check if the session is still open.
    */
   isOpen(): boolean {
     return !this.closed;
   }
 
   /**
-   * Get the session ID
+   * Get the session ID.
    */
   getSessionId(): bigint {
     return this.sessionId;

@@ -1,49 +1,43 @@
 /**
- * KV domain types
+ * KV domain types.
  */
 
 export type TxMode = "ReadOnly" | "ReadWrite";
 export type DurabilityMode = "None" | "Async" | "Sync";
 
-export interface WriteOptions {
-  durability: DurabilityMode;
-  buffered: boolean;
+export interface KvBeginOptions {
+  durability?: DurabilityMode;
 }
 
-export const DefaultWriteOptions: WriteOptions = {
-  durability: "Async",
-  buffered: true,
-};
+export interface KvScanOptions {
+  startKey?: Uint8Array;
+  endKey?: Uint8Array;
+  limit?: number;
+  reverse?: boolean;
+}
+
+export type KvGetResult =
+  | { type: "found"; value: Uint8Array }
+  | { type: "not-found" };
 
 export interface KvBeginResponse {
-  txId: bigint;
   status: number;
+  txId?: bigint;
 }
 
-export interface KvPutResponse {
+export interface KvStatusResponse {
   status: number;
 }
 
 export interface KvGetResponse {
   status: number;
+  found: boolean;
   value?: Uint8Array;
-}
-
-export interface KvDeleteResponse {
-  status: number;
-}
-
-export interface KvCommitResponse {
-  status: number;
-}
-
-export interface KvRollbackResponse {
-  status: number;
 }
 
 export interface KvScanResponse {
   status: number;
-  keys?: Uint8Array[];
+  keys: Uint8Array[];
   nextCursor?: Uint8Array;
 }
 

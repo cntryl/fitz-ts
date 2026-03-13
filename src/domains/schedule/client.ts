@@ -1,148 +1,117 @@
 /**
- * Schedule domain client for cron-based task scheduling
- * Per fitz-go/internal/domains/schedule
+ * Schedule domain client.
  */
 
+import { Connection } from "../../client/connection";
+import {
+  MSG_SCHEDULE_CANCEL,
+  MSG_SCHEDULE_CREATE,
+  MSG_SCHEDULE_LIST,
+  MSG_SCHEDULE_NOTIFY,
+  MSG_SCHEDULE_SUBSCRIBE,
+  MSG_SCHEDULE_UNSUBSCRIBE,
+} from "../../frame/types";
 import { DomainClient } from "../base";
+import { parseStandardResponse } from "../../protocol/response";
 import { ScheduleCodec } from "./codec";
 import {
   ScheduleEntry,
-  ScheduleNotification,
+  ScheduleError,
   ScheduleHandler,
+  ScheduleNotification,
   ScheduleSubscription,
 } from "./types";
-import {
-  MSG_SCHEDULE_CREATE,
-  MSG_SCHEDULE_CANCEL,
-  MSG_SCHEDULE_LIST,
-  MSG_SCHEDULE_SUBSCRIBE,
-  MSG_SCHEDULE_UNSUBSCRIBE,
-  MSG_SCHEDULE_NOTIFY,
-} from "../../frame/types";
-import { assertSuccess } from "../../protocol/response";
 
 export class ScheduleClient extends DomainClient {
-  private subscriptions = new Map<bigint, ScheduleSubscription>();
-  private nextClientSubId = 0n;
+  private readonly subscriptions = new Map<
+    bigint,
+    { pattern: string; handler: ScheduleHandler }
+  >();
   private notifyHandlerInitialized = false;
 
-  /**
-   * Create a cron-based schedule at the given route (upsert semantics).
-   * Returns the schedule route (identity).
-   */
+  constructor(connection: Connection) {
+    super(connection);
+    this.connection.onReconnect(async () => {
+      if (this.subscriptions.size === 0) {
+        return;
+      }
+
+      const subscriptions = Array.from(this.subscriptions.values());
+      this.subscriptions.clear();
+      for (const subscription of subscriptions) {
+        await this.subscribe(subscription.pattern, subscription.handler);
+      }
+    });
+  }
+
   async create(
     route: string,
     cronExpr: string,
     payload: Uint8Array = new Uint8Array(),
   ): Promise<string> {
-    const payloadBytes = ScheduleCodec.encodeCreate(route, cronExpr, payload);
-    const response = await this.request(MSG_SCHEDULE_CREATE, payloadBytes);
-    const data = assertSuccess(response, "SCHEDULE_CREATE");
-    const decoded = ScheduleCodec.decodeCreateResponse(data);
-
-    // Return scheduleId if provided, otherwise use route as identity
-    return decoded.scheduleId || route;
+    const response = await this.requestFrame(
+      MSG_SCHEDULE_CREATE,
+      ScheduleCodec.encodeCreate(route, cronExpr, payload),
+    );
+    const decoded = ScheduleCodec.decodeCreateResponse(
+      this.assertSuccess(response, "CREATE"),
+    );
+    return decoded.scheduleId ?? route;
   }
 
-  /**
-   * Cancel a schedule by route (route-based identity).
-   */
   async cancel(route: string): Promise<void> {
-    const payload = ScheduleCodec.encodeCancel(route);
-    const response = await this.request(MSG_SCHEDULE_CANCEL, payload);
-    assertSuccess(response, "SCHEDULE_CANCEL");
+    const response = await this.requestFrame(
+      MSG_SCHEDULE_CANCEL,
+      ScheduleCodec.encodeCancel(route),
+    );
+    ScheduleCodec.decodeCancelResponse(this.assertSuccess(response, "CANCEL"));
   }
 
-  /**
-   * List schedules with pagination
-   * @param offset Starting position (0-based), default 0
-   * @param limit Maximum entries to return, default 0 (server uses 100)
-   * @returns Tuple of [schedules, totalCount]
-   */
   async list(
     offset: bigint = 0n,
     limit: bigint = 0n,
   ): Promise<[ScheduleEntry[], bigint]> {
-    const payload = ScheduleCodec.encodeList(offset, limit);
-    const response = await this.request(MSG_SCHEDULE_LIST, payload);
-    const data = assertSuccess(response, "SCHEDULE_LIST");
-    const decoded = ScheduleCodec.decodeListResponse(data);
-
+    const response = await this.requestFrame(
+      MSG_SCHEDULE_LIST,
+      ScheduleCodec.encodeList(offset, limit),
+    );
+    const decoded = ScheduleCodec.decodeListResponse(
+      this.assertSuccess(response, "LIST"),
+    );
     return [decoded.entries, decoded.totalCount];
   }
 
-  /**
-   * Subscribe to schedule fire notifications for the given route pattern.
-   * When a schedule fires, the handler is invoked with the schedule's payload.
-   *  Subscriptions are session-scoped and lost on disconnect.
-   */
   async subscribe(
     pattern: string,
     handler: ScheduleHandler,
   ): Promise<ScheduleSubscription> {
     this.initNotifyHandler();
-
-    const payload = ScheduleCodec.encodeSubscribe(pattern);
-    const response = await this.request(MSG_SCHEDULE_SUBSCRIBE, payload);
-    const data = assertSuccess(response, "SCHEDULE_SUBSCRIBE");
-    const decoded = ScheduleCodec.decodeSubscribeResponse(data);
-
-    // Use server subId if provided, otherwise assign client subId
-    let subId = decoded.subId;
-    if (!subId || subId === 0n) {
-      this.nextClientSubId++;
-      subId = this.nextClientSubId;
-    }
-
-    const subscription = new ScheduleSubscription(subId, pattern, handler, () =>
-      this.doUnsubscribe(subId!, pattern),
+    const response = await this.requestFrame(
+      MSG_SCHEDULE_SUBSCRIBE,
+      ScheduleCodec.encodeSubscribe(pattern),
+    );
+    const decoded = ScheduleCodec.decodeSubscribeResponse(
+      this.assertSuccess(response, "SUBSCRIBE"),
     );
 
-    this.subscriptions.set(subId, subscription);
-    return subscription;
-  }
-
-  /**
-   * Handle SCHEDULE_NOTIFY (705) notifications
-   */
-  private handleNotify(payload: Uint8Array): void {
-    const { subId, payload: notificationPayload } =
-      ScheduleCodec.decodeNotification(payload);
-
-    const sub = this.subscriptions.get(subId);
-    if (!sub) {
-      return; // Subscription already removed
-    }
-
-    // Fire-and-forget: invoke handler but don't await
-    const notification: ScheduleNotification = {
-      payload: notificationPayload,
-    };
-
-    sub.handler(notification).catch((err: unknown) => {
-      console.error("Schedule notification handler error:", err);
+    const subId = decoded.subId ?? BigInt(this.subscriptions.size + 1);
+    this.subscriptions.set(subId, { pattern, handler });
+    return new ScheduleSubscription(subId, pattern, handler, async () => {
+      await this.unsubscribe(subId, pattern);
     });
   }
 
-  /**
-   * Internal unsubscribe - removes subscription and sends UNSUBSCRIBE request
-   */
-  private async doUnsubscribe(subId: bigint, pattern: string): Promise<void> {
+  private async unsubscribe(subId: bigint, pattern: string): Promise<void> {
     this.subscriptions.delete(subId);
-
-    // Best-effort unsubscribe; ignore errors to match notice semantics
-    try {
-      const payload = ScheduleCodec.encodeUnsubscribe(pattern);
-      const response = await this.request(MSG_SCHEDULE_UNSUBSCRIBE, payload);
-      assertSuccess(response, "SCHEDULE_UNSUBSCRIBE");
-    } catch (err: unknown) {
-      console.warn("Schedule unsubscribe error:", err);
-    }
+    const response = await this.requestFrame(
+      MSG_SCHEDULE_UNSUBSCRIBE,
+      ScheduleCodec.encodeUnsubscribe(pattern),
+    );
+    ScheduleCodec.decodeUnsubscribeResponse(
+      this.assertSuccess(response, "UNSUBSCRIBE"),
+    );
   }
 
-  /**
-   * Lazy-initialize MSG_SCHEDULE_NOTIFY (705) handler
-   */
   private initNotifyHandler(): void {
     if (this.notifyHandlerInitialized) {
       return;
@@ -152,8 +121,63 @@ export class ScheduleClient extends DomainClient {
     this.connection.registerNotificationHandler(
       MSG_SCHEDULE_NOTIFY,
       (payload) => {
-        this.handleNotify(payload);
+        try {
+          const decoded = ScheduleCodec.decodeNotification(payload);
+          if (decoded.subId !== undefined) {
+            const subscription = this.subscriptions.get(decoded.subId);
+            if (!subscription) {
+              return;
+            }
+
+            const notification: ScheduleNotification = {
+              payload: decoded.payload,
+            };
+            Promise.resolve(subscription.handler(notification)).catch(
+              () => undefined,
+            );
+            return;
+          }
+
+          const subscriptions = Array.from(this.subscriptions.values());
+          if (subscriptions.length === 0) {
+            return;
+          }
+
+          const notification: ScheduleNotification = {
+            payload: decoded.payload,
+          };
+          for (const subscription of subscriptions) {
+            Promise.resolve(subscription.handler(notification)).catch(
+              () => undefined,
+            );
+          }
+        } catch {
+          // Best-effort notification dispatch.
+        }
       },
     );
+  }
+
+  private assertSuccess(payload: Uint8Array, operation: string): Uint8Array {
+    const result = parseStandardResponse(payload);
+    if (result.success) {
+      return result.data;
+    }
+
+    throw new ScheduleError(
+      `${operation} failed: ${result.error ?? "Unknown error"}`,
+      this.mapErrorCode(result.error),
+    );
+  }
+
+  private mapErrorCode(message?: string): string {
+    const normalized = message?.toLowerCase() ?? "";
+    if (normalized.includes("not found")) {
+      return "NOT_FOUND";
+    }
+    if (normalized.includes("cron")) {
+      return "INVALID_CRON";
+    }
+    return "REQUEST_FAILED";
   }
 }

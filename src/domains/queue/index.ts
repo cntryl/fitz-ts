@@ -6,11 +6,11 @@ export { QueueClient } from "./client";
 export { QueueCodec } from "./codec";
 export { QueueItem, QueueSubscription, QueueStatus } from "./types";
 export type {
-  SendOptions,
-  QueueSendResponse,
-  QueueReceiveResponse,
+  EnqueueOptions,
+  QueueEnqueueResponse,
+  QueueReserveResponse,
   QueueExtendResponse,
-  QueueAckResponse,
+  QueueCompleteResponse,
   QueueSubscribeResponse,
   QueueUnsubscribeResponse,
   AvailabilityNotification,

@@ -7,13 +7,20 @@ import { WebSocketTransport } from "./websocket";
 import { TcpTransport } from "./tcp";
 import { TransportError } from "../core/errors";
 
-const isNode = () => {
+type NodeLikeProcess = {
+  versions?: {
+    node?: string;
+  };
+};
+
+const isNode = (): boolean => {
   try {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const candidate = globalThis as typeof globalThis & {
+      process?: NodeLikeProcess;
+    };
     return (
-      typeof (globalThis as any).process !== "undefined" &&
-      (globalThis as any).process.versions &&
-      (globalThis as any).process.versions.node
+      typeof candidate.process !== "undefined" &&
+      typeof candidate.process?.versions?.node === "string"
     );
   } catch {
     return false;
@@ -31,7 +38,7 @@ export function createTransport(
       return new WebSocketTransport(url, options);
     }
     if (url.startsWith("tcp://")) {
-      if (!isNode) {
+      if (!isNode()) {
         throw new TransportError(
           "TCP transport requires Node.js. Use WebSocket (ws://) for browser",
         );

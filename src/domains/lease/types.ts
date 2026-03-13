@@ -56,8 +56,15 @@ export class Lease {
    * @returns New expiry timestamp (seconds since epoch)
    */
   async extend(ttlSecs: number): Promise<bigint> {
-    const payload = LeaseCodec.encodeExtend(this.route, this.token, ttlSecs);
-    const response = await this.connection.request(MSG_LEASE_RENEW, payload);
+    return this.extendWithToken(this.token, ttlSecs);
+  }
+
+  async extendWithToken(token: bigint, ttlSecs: number): Promise<bigint> {
+    const requestPayload = LeaseCodec.encodeExtend(this.route, token, ttlSecs);
+    const response = await this.connection.request(
+      MSG_LEASE_RENEW,
+      requestPayload,
+    );
     const data = assertSuccess(response, "EXTEND");
 
     // Parse new fencing token: [u64 BE new_fencing_token]
@@ -72,11 +79,19 @@ export class Lease {
     return newExpiry;
   }
 
+  async renew(ttlSecs: number): Promise<bigint> {
+    return this.extend(ttlSecs);
+  }
+
   /**
    * Release the lease
    */
   async release(): Promise<void> {
-    const payload = LeaseCodec.encodeRelease(this.route, this.token);
+    await this.releaseWithToken(this.token);
+  }
+
+  async releaseWithToken(token: bigint): Promise<void> {
+    const payload = LeaseCodec.encodeRelease(this.route, token);
     const response = await this.connection.request(MSG_LEASE_RELEASE, payload);
     assertSuccess(response, "RELEASE");
   }
@@ -87,7 +102,7 @@ export class Lease {
  */
 export interface AcquireResponse {
   token: bigint;
-  expiresAt: bigint;
+  expiresAt?: bigint;
 }
 
 /**

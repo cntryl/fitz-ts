@@ -1,8 +1,8 @@
 /**
- * Main Fitz client
+ * Main Fitz client facade.
  */
 
-import { ClientConfig, ConnectionState } from "../core/types";
+import { ClientConfig, ConnectionState, TokenProvider } from "../core/types";
 import { Connection } from "./connection";
 import { createTransport } from "../transport/factory";
 import { ConnectionError } from "../core/errors";
@@ -15,8 +15,11 @@ import { StreamClient } from "../domains/stream/client";
 import { ScheduleClient } from "../domains/schedule/client";
 
 export class Client {
+  private readonly config: Required<
+    Omit<ClientConfig, "tokenProvider" | "reconnect">
+  > &
+    Pick<ClientConfig, "tokenProvider" | "reconnect">;
   private connection: Connection | null = null;
-  private config: ClientConfig;
   private kvClient: KvClient | null = null;
   private queueClient: QueueClient | null = null;
   private rpcClient: RpcClient | null = null;
@@ -29,165 +32,144 @@ export class Client {
     this.config = {
       timeout: 30000,
       transport: "auto",
-      retryAttempts: 3,
-      retryDelayMs: 100,
+      maxFrameSize: 65535,
+      authSettleDelayMs: 100,
+      reconnect: {
+        enabled: false,
+        maxAttempts: Infinity,
+        backoffMs: 250,
+        maxBackoffMs: 5000,
+        ...(config.reconnect ?? {}),
+      },
       ...config,
     };
 
     if (!this.config.url) {
       throw new Error("URL is required");
     }
-    if (!this.config.jwt) {
-      throw new Error("JWT token is required");
-    }
   }
 
-  /**
-   * Connect to Fitz server
-   */
-  async connect(): Promise<void> {
-    try {
-      const transport = createTransport(
-        this.config.url,
-        this.config.transport,
-        {
+  async connect(options: { signal?: AbortSignal } = {}): Promise<void> {
+    if (this.connection?.isConnected()) {
+      return;
+    }
+
+    const tokenProvider = this.resolveTokenProvider();
+
+    this.connection = new Connection(
+      () =>
+        createTransport(this.config.url, this.config.transport, {
           timeout: this.config.timeout,
-          retryAttempts: this.config.retryAttempts,
-          retryDelayMs: this.config.retryDelayMs,
-        },
-      );
+          maxFrameSize: this.config.maxFrameSize,
+        }),
+      tokenProvider,
+      {
+        timeout: this.config.timeout,
+        authSettleDelayMs: this.config.authSettleDelayMs,
+        reconnect: this.config.reconnect,
+      },
+    );
 
-      this.connection = new Connection(
-        transport,
-        this.config.jwt,
-        this.config.timeout,
-      );
-
-      await this.connection.connect();
-    } catch (err) {
-      this.connection = null;
-      throw new ConnectionError(
-        `Failed to connect: ${err instanceof Error ? err.message : String(err)}`,
-      );
-    }
+    await this.connection.connect(options);
   }
 
-  /**
-   * Disconnect from Fitz server
-   */
-  async disconnect(): Promise<void> {
+  async close(): Promise<void> {
     if (this.connection) {
-      await this.connection.disconnect();
+      await this.connection.close();
       this.connection = null;
     }
+    this.kvClient = null;
+    this.queueClient = null;
+    this.rpcClient = null;
+    this.leaseClient = null;
+    this.noticeClient = null;
+    this.streamClient = null;
+    this.scheduleClient = null;
   }
 
-  /**
-   * Check if connected
-   */
   isConnected(): boolean {
     return this.connection?.isConnected() ?? false;
   }
 
-  /**
-   * Get KV client
-   */
   kv(): KvClient {
-    this.ensureConnected();
+    const connection = this.ensureConnection();
     if (!this.kvClient) {
-      this.kvClient = new KvClient(this.connection!);
+      this.kvClient = new KvClient(connection);
     }
     return this.kvClient;
   }
 
-  /**
-   * Get Queue client
-   */
   queue(): QueueClient {
-    this.ensureConnected();
+    const connection = this.ensureConnection();
     if (!this.queueClient) {
-      this.queueClient = new QueueClient(this.connection!);
+      this.queueClient = new QueueClient(connection);
     }
     return this.queueClient;
   }
 
-  /**
-   * Get RPC client
-   */
   rpc(): RpcClient {
-    this.ensureConnected();
+    const connection = this.ensureConnection();
     if (!this.rpcClient) {
-      this.rpcClient = new RpcClient(this.connection!);
+      this.rpcClient = new RpcClient(connection);
     }
     return this.rpcClient;
   }
 
-  /**
-   * Get Lease client
-   */
   lease(): LeaseClient {
-    this.ensureConnected();
+    const connection = this.ensureConnection();
     if (!this.leaseClient) {
-      this.leaseClient = new LeaseClient(this.connection!);
+      this.leaseClient = new LeaseClient(connection);
     }
     return this.leaseClient;
   }
 
-  /**
-   * Get Notice client
-   */
   notice(): NoticeClient {
-    this.ensureConnected();
+    const connection = this.ensureConnection();
     if (!this.noticeClient) {
-      this.noticeClient = new NoticeClient(this.connection!);
+      this.noticeClient = new NoticeClient(connection);
     }
     return this.noticeClient;
   }
 
-  /**
-   * Get Stream client
-   */
   stream(): StreamClient {
-    this.ensureConnected();
+    const connection = this.ensureConnection();
     if (!this.streamClient) {
-      this.streamClient = new StreamClient(this.connection!);
+      this.streamClient = new StreamClient(connection);
     }
     return this.streamClient;
   }
 
-  /**
-   * Get Schedule client
-   */
   schedule(): ScheduleClient {
-    this.ensureConnected();
+    const connection = this.ensureConnection();
     if (!this.scheduleClient) {
-      this.scheduleClient = new ScheduleClient(this.connection!);
+      this.scheduleClient = new ScheduleClient(connection);
     }
     return this.scheduleClient;
   }
 
-  /**
-   * Get connection URL
-   */
   getUrl(): string {
-    if (!this.connection) {
-      throw new ConnectionError("Not connected");
-    }
-    return this.connection.getUrl();
+    return this.ensureConnection().getUrl();
   }
 
-  /**
-   * Get connection state
-   */
   getState(): ConnectionState {
     return this.connection?.getState() ?? ConnectionState.Disconnected;
   }
 
-  private ensureConnected(): void {
-    if (!this.connection?.isConnected()) {
+  private resolveTokenProvider(): TokenProvider {
+    if (this.config.tokenProvider) {
+      return this.config.tokenProvider;
+    }
+
+    return () => "";
+  }
+
+  private ensureConnection(): Connection {
+    if (!this.connection) {
       throw new ConnectionError(
         "Not connected to Fitz server. Call connect() first.",
       );
     }
+
+    return this.connection;
   }
 }

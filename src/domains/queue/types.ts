@@ -9,16 +9,16 @@ import { QueueError } from "../../core/errors";
 import { MSG_QUEUE_EXTEND, MSG_QUEUE_COMPLETE } from "../../frame/types";
 
 /**
- * Queue item represents a received (reserved) queue message
- * Encapsulates route and token for extend/ack operations
+ * Queue item represents a reserved queue message.
+ * It carries the route and token required for `extend()` and `complete()`.
  */
 export class QueueItem {
   readonly id: bigint;
   readonly token: bigint;
   readonly body: Uint8Array;
 
-  private route: string;
-  private connection: Connection;
+  private readonly route: string;
+  private readonly connection: Connection;
 
   constructor(
     id: bigint,
@@ -35,7 +35,7 @@ export class QueueItem {
   }
 
   /**
-   * Extend the lease on this queue item
+   * Extend the lease on this queue item.
    * @param leaseSecs Lease duration in seconds
    */
   async extend(leaseSecs: number): Promise<void> {
@@ -60,19 +60,29 @@ export class QueueItem {
   }
 
   /**
-   * Acknowledge (complete) processing of this queue item
-   * Removes the message from the queue
+   * Complete processing of this queue item and remove it from the queue.
    */
-  async ack(): Promise<void> {
-    const payload = QueueCodec.encodeAck(this.route, this.id, this.token);
-    const response = await this.connection.request(MSG_QUEUE_COMPLETE, payload);
-    const decoded = QueueCodec.decodeAckResponse(response);
+  async complete(): Promise<void> {
+    await this.completeWithToken(this.token);
+  }
+
+  async completeWithToken(token: bigint): Promise<void> {
+    const requestPayload = QueueCodec.encodeComplete(
+      this.route,
+      this.id,
+      token,
+    );
+    const response = await this.connection.request(
+      MSG_QUEUE_COMPLETE,
+      requestPayload,
+    );
+    const decoded = QueueCodec.decodeCompleteResponse(response);
 
     if (decoded.status !== QueueStatus.Ok) {
       const statusName =
         QueueStatus[decoded.status] || `Unknown(${decoded.status})`;
       throw new QueueError(
-        `ACK failed: ${statusName}`,
+        `COMPLETE failed: ${statusName}`,
         statusName,
         decoded.status,
       );
@@ -81,26 +91,26 @@ export class QueueItem {
 }
 
 /**
- * Availability notification from queue
+ * Availability notification from a queue.
  */
 export interface AvailabilityNotification {
   route: string;
 }
 
 /**
- * Handler for availability notifications
+ * Handler for availability notifications.
  */
 export type AvailabilityHandler = (
   notification: AvailabilityNotification,
 ) => void | Promise<void>;
 
 /**
- * Queue availability subscription
+ * Queue availability subscription.
  */
 export class QueueSubscription {
-  private subId: bigint;
-  private pattern: string;
-  private unsubscribeFn: (subId: bigint) => Promise<void>;
+  private readonly subId: bigint;
+  private readonly pattern: string;
+  private readonly unsubscribeFn: (subId: bigint) => Promise<void>;
 
   constructor(
     subId: bigint,
@@ -113,7 +123,7 @@ export class QueueSubscription {
   }
 
   /**
-   * Unsubscribe from availability notifications
+   * Unsubscribe from availability notifications.
    */
   async unsubscribe(): Promise<void> {
     await this.unsubscribeFn(this.subId);
@@ -141,23 +151,23 @@ export enum QueueStatus {
 }
 
 /**
- * Options for send operation
+ * Options for enqueue operations.
  */
-export interface SendOptions {
+export interface EnqueueOptions {
   priority?: number;
   delayMs?: number;
   ttlMs?: number;
 }
 
 /**
- * Internal codec response types
+ * Internal codec response types.
  */
-export interface QueueSendResponse {
+export interface QueueEnqueueResponse {
   status: number;
   messageId?: bigint;
 }
 
-export interface QueueReceiveResponse {
+export interface QueueReserveResponse {
   status: number;
   items?: Array<{
     id: bigint;
@@ -171,7 +181,7 @@ export interface QueueExtendResponse {
   status: number;
 }
 
-export interface QueueAckResponse {
+export interface QueueCompleteResponse {
   status: number;
 }
 

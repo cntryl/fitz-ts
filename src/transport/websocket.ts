@@ -5,16 +5,37 @@
 import { Transport, TransportOptions } from "./types";
 import { TransportError, TimeoutError } from "../core/errors";
 
-// Detect environment and set up WebSocket
-let WS: any;
+type NodeLikeProcess = {
+  versions?: {
+    node?: string;
+  };
+};
+
+type WebSocketConstructor = new (url: string) => WebSocketLike;
+type WebSocketMessageEvent = {
+  data: ArrayBuffer | Uint8Array | Blob;
+};
+type WebSocketLike = {
+  binaryType: string;
+  onopen: (() => void) | null;
+  onmessage: ((event: WebSocketMessageEvent) => void) | null;
+  onerror: ((event: { message?: string }) => void) | null;
+  onclose: (() => void) | null;
+  send(data: Uint8Array, callback?: (err?: Error) => void): void;
+  close(code?: number, reason?: string): void;
+  terminate?(): void;
+};
+
+let WS: WebSocketConstructor;
 
 const isNodeEnv = (): boolean => {
   try {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const candidate = globalThis as typeof globalThis & {
+      process?: NodeLikeProcess;
+    };
     return (
-      typeof (globalThis as any).process !== "undefined" &&
-      (globalThis as any).process.versions &&
-      (globalThis as any).process.versions.node
+      typeof candidate.process !== "undefined" &&
+      typeof candidate.process?.versions?.node === "string"
     );
   } catch {
     return false;
@@ -22,31 +43,37 @@ const isNodeEnv = (): boolean => {
 };
 
 if (isNodeEnv()) {
-  // Node.js: use ws package
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
-    WS = require("ws");
+    WS = require("ws") as WebSocketConstructor;
   } catch {
     throw new Error(
       "ws package is required for Node.js. Install with: npm install ws",
     );
   }
 } else {
-  // Browser: use native WebSocket
-  WS = (globalThis as any).WebSocket;
+  const browserWebSocket = globalThis.WebSocket as unknown as
+    | WebSocketConstructor
+    | undefined;
+  if (!browserWebSocket) {
+    throw new Error("WebSocket is not available in this environment");
+  }
+  WS = browserWebSocket;
 }
 
 export class WebSocketTransport implements Transport {
-  private ws: any;
-  private url: string;
-  private connected: boolean = false;
+  private ws: WebSocketLike | null = null;
+  private readonly url: string;
+  private connected = false;
   private receiveQueue: Uint8Array[] = [];
-  private receiverResolve: ((data: Uint8Array) => void) | null = null;
-  private timeout: number;
+  private receiverResolve: ((data: Uint8Array | null) => void) | null = null;
+  private readonly timeout: number;
+  private readonly maxFrameSize: number;
 
   constructor(url: string, options: TransportOptions = {}) {
     this.url = url;
     this.timeout = options.timeout ?? 30000;
+    this.maxFrameSize = options.maxFrameSize ?? 65535;
   }
 
   async connect(): Promise<void> {
@@ -65,14 +92,7 @@ export class WebSocketTransport implements Transport {
         }
 
         this.ws = new WS(wsUrl);
-
-        if (isNodeEnv()) {
-          // Node.js WebSocket setup
-          this.ws.binaryType = "arraybuffer";
-        } else {
-          // Browser WebSocket setup
-          this.ws.binaryType = "arraybuffer";
-        }
+        this.ws.binaryType = "arraybuffer";
 
         const connectTimeout = setTimeout(() => {
           this.ws?.close?.();
@@ -89,7 +109,7 @@ export class WebSocketTransport implements Transport {
           resolve();
         };
 
-        this.ws.onmessage = (event: any) => {
+        this.ws.onmessage = (event: WebSocketMessageEvent) => {
           let data: Uint8Array;
           if (event.data instanceof ArrayBuffer) {
             data = new Uint8Array(event.data);
@@ -103,16 +123,16 @@ export class WebSocketTransport implements Transport {
               });
               return;
             }
-            console.warn(
-              "Unexpected WebSocket message type:",
-              typeof event.data,
-            );
+            return;
+          }
+          if (data.length > this.maxFrameSize) {
+            this.ws?.close?.(1009, "Frame too large");
             return;
           }
           this.enqueueMessage(data);
         };
 
-        this.ws.onerror = (event: any) => {
+        this.ws.onerror = (event: { message?: string }) => {
           clearTimeout(connectTimeout);
           const error = new TransportError(
             `WebSocket error: ${event.message || "unknown error"}`,
@@ -123,7 +143,7 @@ export class WebSocketTransport implements Transport {
         this.ws.onclose = () => {
           this.connected = false;
           if (this.receiverResolve) {
-            this.receiverResolve(new Uint8Array(0)); // Signal EOF
+            this.receiverResolve(null);
           }
         };
       } catch (err) {
@@ -158,7 +178,7 @@ export class WebSocketTransport implements Transport {
           );
         }, this.timeout);
 
-        this.ws.send(data, (err: any) => {
+        this.ws?.send(data, (err?: Error) => {
           clearTimeout(timeout);
           if (err) {
             reject(new TransportError(`WebSocket send failed: ${err.message}`));
@@ -179,7 +199,17 @@ export class WebSocketTransport implements Transport {
   async receive(): Promise<Uint8Array> {
     // Return queued message if available
     if (this.receiveQueue.length > 0) {
-      return this.receiveQueue.shift()!;
+      const message = this.receiveQueue.shift();
+      if (!message) {
+        throw new TransportError(
+          "WebSocket receive queue was unexpectedly empty",
+        );
+      }
+      return message;
+    }
+
+    if (!this.connected) {
+      throw new TransportError("Connection closed");
     }
 
     // Create new receiver promise
@@ -191,9 +221,13 @@ export class WebSocketTransport implements Transport {
         );
       }, this.timeout);
 
-      this.receiverResolve = (data: Uint8Array) => {
+      this.receiverResolve = (data: Uint8Array | null) => {
         clearTimeout(timeout);
         this.receiverResolve = null;
+        if (data === null) {
+          reject(new TransportError("Connection closed"));
+          return;
+        }
         resolve(data);
       };
     });
@@ -201,22 +235,25 @@ export class WebSocketTransport implements Transport {
 
   async close(): Promise<void> {
     if (this.ws) {
+      const ws = this.ws;
       return new Promise<void>((resolve) => {
         const timeout = setTimeout(() => {
-          this.ws?.terminate?.(); // For Node.js ws
+          ws.terminate?.();
           this.connected = false;
           resolve();
         }, 5000);
 
-        this.ws.onclose = () => {
+        ws.onclose = () => {
           clearTimeout(timeout);
           this.connected = false;
           resolve();
         };
 
-        this.ws.close(1000, "Normal closure");
+        ws.close(1000, "Normal closure");
       });
     }
+
+    this.connected = false;
   }
 
   getUrl(): string {

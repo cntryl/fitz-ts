@@ -1,57 +1,62 @@
 /**
- * Notice domain client (Pub/Sub)
- * Per fitz-go/internal/domains/notice/notice.go
+ * Notice domain client.
  */
 
-import { DomainClient } from "../base";
-import { NoticeCodec } from "./codec";
-import { NoticeMsg, NoticeHandler, NoticeSubscription } from "./types";
+import { Connection } from "../../client/connection";
+import { NoticeError } from "../../core/errors";
 import {
+  MSG_NOTICE_NOTIFY,
   MSG_NOTICE_PUBLISH,
   MSG_NOTICE_SUBSCRIBE,
   MSG_NOTICE_UNSUBSCRIBE,
-  MSG_NOTICE_NOTIFY,
 } from "../../frame/types";
-import { NoticeError } from "../../core/errors";
-import { parseStandardResponse, assertSuccess } from "../../protocol/response";
+import { DomainClient } from "../base";
+import { NoticeCodec } from "./codec";
+import { NoticeHandler, NoticeMsg, NoticeSubscription } from "./types";
 
 export class NoticeClient extends DomainClient {
-  private subscriptions: Map<
+  private readonly subscriptions = new Map<
     bigint,
-    { handler: NoticeHandler; pattern: string }
-  > = new Map();
+    { pattern: string; handler: NoticeHandler }
+  >();
   private initialized = false;
 
-  /**
-   * Publish a message to a route (fire-and-forget)
-   * @param route Target route (exact route, not pattern)
-   * @param body Message body
-   */
-  async publish(route: string, body: Uint8Array): Promise<void> {
-    const payload = NoticeCodec.encodePublish(route, body);
-    // Send fire-and-forget (no response expected)
-    await this.connection.sendFireAndForget(MSG_NOTICE_PUBLISH, payload);
+  constructor(connection: Connection) {
+    super(connection);
+    this.connection.onReconnect(async () => {
+      if (this.subscriptions.size === 0) {
+        return;
+      }
+
+      const subscriptions = Array.from(this.subscriptions.values());
+      this.subscriptions.clear();
+      for (const subscription of subscriptions) {
+        await this.subscribe(subscription.pattern, subscription.handler);
+      }
+    });
   }
 
-  /**
-   * Subscribe to notification messages matching a pattern
-   * @param pattern Pattern to match (e.g., "notice://realm/area/*")
-   * @param handler Handler to call when messages arrive
-   * @returns Subscription object with unsubscribe() method
-   */
+  async publish(route: string, body: Uint8Array): Promise<void> {
+    const payload = NoticeCodec.encodePublish(route, body);
+    const cancelOptionalResponse = this.connection
+      .getMultiplexer()
+      .expectOptionalResponse(MSG_NOTICE_PUBLISH);
+    try {
+      await this.connection.sendFireAndForget(MSG_NOTICE_PUBLISH, payload);
+    } catch (error) {
+      cancelOptionalResponse();
+      throw error;
+    }
+  }
+
   async subscribe(
     pattern: string,
     handler: NoticeHandler,
   ): Promise<NoticeSubscription> {
     this.initNotifyHandler();
-
     const payload = NoticeCodec.encodeSubscribe(pattern);
-    const response = await this.request(MSG_NOTICE_SUBSCRIBE, payload);
-    const { success, data } = parseStandardResponse(response);
-
-    assertSuccess(success, data, "SUBSCRIBE");
-
-    const decoded = NoticeCodec.decodeSubscribeResponse(data!);
+    const response = await this.requestFrame(MSG_NOTICE_SUBSCRIBE, payload);
+    const decoded = NoticeCodec.decodeSubscribeResponse(response);
 
     if (decoded.subId === undefined) {
       throw new NoticeError(
@@ -60,19 +65,12 @@ export class NoticeClient extends DomainClient {
       );
     }
 
-    const subId = decoded.subId;
-    this.subscriptions.set(subId, { handler, pattern });
-
-    const unsubscribeFn = async (id: bigint) => {
-      await this.unsubscribe(id);
-    };
-
-    return new NoticeSubscription(subId, pattern, unsubscribeFn);
+    this.subscriptions.set(decoded.subId, { pattern, handler });
+    return new NoticeSubscription(decoded.subId, pattern, async (subId) => {
+      await this.unsubscribe(subId);
+    });
   }
 
-  /**
-   * Internal method to unsubscribe from notifications
-   */
   private async unsubscribe(subId: bigint): Promise<void> {
     const subscription = this.subscriptions.get(subId);
     if (!subscription) {
@@ -80,50 +78,31 @@ export class NoticeClient extends DomainClient {
     }
 
     this.subscriptions.delete(subId);
-
-    try {
-      const payload = NoticeCodec.encodeUnsubscribe(subscription.pattern);
-      const response = await this.request(MSG_NOTICE_UNSUBSCRIBE, payload);
-      const { success, data } = parseStandardResponse(response);
-
-      assertSuccess(success, data, "UNSUBSCRIBE");
-    } catch (error) {
-      console.warn("UNSUBSCRIBE failed:", error);
-    }
+    const payload = NoticeCodec.encodeUnsubscribe(subscription.pattern);
+    await this.requestFrame(MSG_NOTICE_UNSUBSCRIBE, payload);
   }
 
-  /**
-   * Initialize notification handler (lazy, on first subscribe)
-   */
   private initNotifyHandler(): void {
     if (this.initialized) {
       return;
     }
-    this.initialized = true;
 
+    this.initialized = true;
     this.connection.registerNotificationHandler(
       MSG_NOTICE_NOTIFY,
-      (payload: Uint8Array) => {
+      (payload) => {
         try {
           const { subId, route, body } =
             NoticeCodec.decodeNotification(payload);
           const subscription = this.subscriptions.get(subId);
-
           if (!subscription) {
-            console.warn(
-              `No handler registered for notice subscription ${subId}`,
-            );
             return;
           }
 
           const msg: NoticeMsg = { route, body };
-
-          // Call handler asynchronously to avoid blocking dispatch loop
-          Promise.resolve(subscription.handler(msg)).catch((err) => {
-            console.error("Notice handler error:", err);
-          });
-        } catch (err) {
-          console.error("Notice notification decode error:", err);
+          Promise.resolve(subscription.handler(msg)).catch(() => undefined);
+        } catch {
+          // Best-effort notification dispatch.
         }
       },
     );

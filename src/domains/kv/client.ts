@@ -1,37 +1,39 @@
 /**
- * KV domain client
+ * KV domain client.
  */
 
 import { DomainClient } from "../base";
 import { KvCodec } from "./codec";
 import { KvTransaction } from "./transaction";
-import { TxMode, DurabilityMode, DefaultWriteOptions } from "./types";
+import { KvBeginOptions, KvStatus, TxMode } from "./types";
 import { MSG_KV_BEGIN } from "../../frame/types";
 import { KvError } from "../../core/errors";
 
+function isValidKvRoute(route: string): boolean {
+  const match = /^kv:\/\/([^/]+)\/([^/]+)\/([^/]+)$/.exec(route);
+  return match !== null;
+}
+
 export class KvClient extends DomainClient {
-  /**
-   * Begin a new transaction
-   */
   async begin(
     route: string,
     mode: TxMode = "ReadWrite",
-    options?: {
-      durability?: DurabilityMode;
-    },
+    options: KvBeginOptions = {},
   ): Promise<KvTransaction> {
-    const durability = options?.durability ?? DefaultWriteOptions.durability;
+    if (!isValidKvRoute(route)) {
+      throw new KvError(`Invalid route: ${route}`, "INVALID_ROUTE");
+    }
 
-    const payload = KvCodec.encodeBegin(route, mode, durability);
-    const response = await this.request(MSG_KV_BEGIN, payload);
+    const payload = KvCodec.encodeBegin(
+      route,
+      mode,
+      options.durability ?? "Async",
+    );
+    const response = await this.requestFrame(MSG_KV_BEGIN, payload);
     const decoded = KvCodec.decodeBeginResponse(response);
 
-    if (decoded.status !== 0) {
-      throw new KvError(
-        `Failed to begin transaction with status ${decoded.status}`,
-        "BEGIN_FAILED",
-        decoded.status,
-      );
+    if (decoded.status !== KvStatus.Ok || decoded.txId === undefined) {
+      throw new KvError("BEGIN failed", "BEGIN_FAILED", decoded.status);
     }
 
     return new KvTransaction(this.connection, route, decoded.txId);

@@ -83,9 +83,9 @@ export class MockConnection implements Connection {
   }
 
   /**
-   * Disconnect from broker (mock - no-op)
+   * Close broker connection (mock - no-op)
    */
-  async disconnect(): Promise<void> {
+  async close(): Promise<void> {
     return Promise.resolve();
   }
 

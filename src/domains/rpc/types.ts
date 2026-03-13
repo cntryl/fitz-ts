@@ -51,10 +51,11 @@ export class RpcSubscription {
 }
 
 /**
- * RPC send options
+ * RPC request options
  */
-export interface SendOptions {
+export interface RequestOptions {
   timeoutMs?: number;
+  signal?: AbortSignal;
 }
 
 /**

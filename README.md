@@ -4,11 +4,11 @@ TypeScript client library for [Fitz](https://github.com/cntryl/fitz), a distribu
 
 ## Features
 
-- **Isomorphic**: Works in Node.js and browsers with automatic transport detection
-- **7 Domains**: KV (transactions), Queue, RPC, Lease (distributed locking), Notice (pub/sub), Stream (append-only logs), Schedule (delayed tasks)
-- **Async/Await**: Native TypeScript Promise-based API
-- **Type-Safe**: Full TypeScript support with proper error types
-- **Connection Pooling**: Single connection shared across all domain clients
+- WebSocket and TCP transport support
+- Token-provider based authentication with anonymous mode support
+- Reconnect-aware connection manager
+- Domain clients for KV, Queue, RPC, Lease, Notice, Stream, and Schedule
+- Promise-based TypeScript API with typed domain errors
 
 ## Installation
 
@@ -23,8 +23,9 @@ import { Client } from "@cntryl/fitz";
 
 // Create client
 const client = new Client({
-  url: "ws://localhost:4090",
-  jwt: "your-jwt-token",
+  url: "ws://localhost:4090/ws",
+  tokenProvider: async () => "your-jwt-token",
+  reconnect: { enabled: true },
 });
 
 // Connect
@@ -40,10 +41,13 @@ await tx.put(
 );
 
 const value = await tx.get(new TextEncoder().encode("user-1"));
+if (value.type === "found") {
+  console.log(value.value);
+}
 await tx.commit();
 
-// Disconnect
-await client.disconnect();
+// Close
+await client.close();
 ```
 
 ## Supported Transports
@@ -55,20 +59,20 @@ await client.disconnect();
 ```typescript
 // WebSocket
 const client = new Client({
-  url: "ws://localhost:4090",
-  jwt: token,
+  url: "ws://localhost:4090/ws",
+  tokenProvider: () => token,
 });
 
 // TCP
 const client = new Client({
   url: "tcp://localhost:4090",
-  jwt: token,
+  tokenProvider: () => token,
 });
 
 // Auto-detect
 const client = new Client({
   url: "localhost:4090", // Defaults to WebSocket
-  jwt: token,
+  tokenProvider: () => token,
 });
 ```
 
@@ -79,11 +83,17 @@ const client = new Client({
 ```typescript
 interface ClientConfig {
   url: string;
-  jwt: string;
+  tokenProvider?: () => string | Promise<string>;
   timeout?: number; // Default: 30000ms
   transport?: "ws" | "tcp" | "auto"; // Default: 'auto'
-  retryAttempts?: number;
-  retryDelayMs?: number;
+  reconnect?: {
+    enabled?: boolean;
+    maxAttempts?: number;
+    backoffMs?: number;
+    maxBackoffMs?: number;
+  };
+  maxFrameSize?: number;
+  authSettleDelayMs?: number;
 }
 ```
 
@@ -93,8 +103,8 @@ interface ClientConfig {
 const client = new Client(config);
 
 await client.connect();
-const isConnected = client.isConnected();
-await client.disconnect();
+const state = client.getState();
+await client.close();
 ```
 
 ### KV Domain
@@ -109,7 +119,9 @@ const tx = await kv.begin("kv://realm/area/resources", "ReadWrite");
 await tx.put(key, value);
 const value = await tx.get(key);
 await tx.delete(key);
-const { keys, nextCursor } = await tx.scan(cursor);
+await tx.insert(key, valueBytes);
+await tx.deleteRange(startKey, endKey);
+const keys = await tx.scan({ startKey, endKey, limit: 100, reverse: false });
 
 // Finalize
 await tx.commit();
@@ -127,9 +139,17 @@ const lease = client.lease();
 const notice = client.notice();
 const stream = client.stream();
 const schedule = client.schedule();
-```
 
-(Full implementations coming in follow-up phases)
+const messageId = await queue.enqueue("queue://realm/area/tasks", body);
+const items = await queue.reserve("queue://realm/area/tasks", 30, 10);
+const responses = await rpc.call("rpc://realm/area/worker", body);
+const worker = await rpc.registerWorker(
+  "rpc://realm/area/worker",
+  async (request, writer) => {
+    await writer.send(request.body, true);
+  },
+);
+```
 
 ## Error Handling
 
@@ -171,18 +191,51 @@ Outputs:
 ## Testing
 
 ```bash
-# Run all tests
+# Run unit + integration tests
 npm test
 
-# Watch mode
-npm test -- --watch
+# Run unit tests only
+npm run test:unit
+
+# Run broker-backed integration tests only
+npm run test:integration
+
+# Watch unit tests
+npm run test:watch
 
 # With coverage
-npm test -- --coverage
+npm run test:unit -- --coverage
 
 # Run benchmarks
 npm run bench
 ```
+
+## Integration Testing
+
+`fitz-ts` mirrors the real-broker integration coverage in `fitz-go/test/*.go`.
+The integration suite does not start brokers for you; it expects the Fitz
+brokers from `fitz-go/compose.yml` to already be running.
+
+Default broker addresses:
+
+- Anonymous TCP: `localhost:4191`
+- Anonymous WebSocket: `ws://localhost:4190/ws`
+- Auth TCP: `localhost:4091`
+- Auth WebSocket: `ws://localhost:4090/ws`
+
+Supported environment variables:
+
+- `FITZ_BROKER_TCP_ADDR`
+- `FITZ_BROKER_WS_ADDR`
+- `FITZ_BROKER_AUTH_TCP_ADDR`
+- `FITZ_BROKER_AUTH_WS_ADDR`
+- `FITZ_BROKER_ANON_TCP_ADDR`
+- `FITZ_BROKER_ANON_WS_ADDR`
+- `FITZ_BROKER_JWT_HMAC_SECRET`
+- `FITZ_BROKER_JWT_AUDIENCE`
+
+Use `npm run test:integration` to run only the broker-backed suite. `npm test`
+now runs both the unit project and the full broker-backed integration project.
 
 ## Development
 
@@ -196,6 +249,14 @@ npm run lint
 # Type check
 npx tsc --noEmit
 ```
+
+## Canonical Spec
+
+`fitz-ts` follows the canonical client docs in the server repo:
+
+- [`../fitz/docs/clients/CLIENT_SPEC.md`](../fitz/docs/clients/CLIENT_SPEC.md)
+- [`../fitz/docs/clients/CLIENT_ACCEPTANCE_CRITERIA.md`](../fitz/docs/clients/CLIENT_ACCEPTANCE_CRITERIA.md)
+- [`../fitz/docs/clients/CLIENT_IMPLEMENTATION_GUIDE.md`](../fitz/docs/clients/CLIENT_IMPLEMENTATION_GUIDE.md)
 
 ## Architecture
 

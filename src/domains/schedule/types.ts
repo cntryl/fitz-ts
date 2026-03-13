@@ -21,13 +21,18 @@ export interface ScheduleNotification {
   payload: Uint8Array;
 }
 
+export interface DecodedScheduleNotification {
+  subId?: bigint;
+  payload: Uint8Array;
+}
+
 /**
  * ScheduleHandler is called when a schedule fires for a subscribed pattern
  * It is fire-and-forget; the return value is not used
  */
 export type ScheduleHandler = (
   notification: ScheduleNotification,
-) => Promise<void>;
+) => void | Promise<void>;
 
 /**
  * ScheduleSubscription represents an active subscription to schedule fire notifications
@@ -46,36 +51,32 @@ export class ScheduleSubscription {
 }
 
 export interface ScheduleCreateResponse {
-  status: number;
   scheduleId?: string;
 }
 
-export interface ScheduleCancelResponse {
-  status: number;
-}
+export type ScheduleCancelResponse = Record<string, never>;
 
 export interface ScheduleListResponse {
-  status: number;
   totalCount: bigint;
   entries: ScheduleEntry[];
 }
 
 export interface ScheduleSubscribeResponse {
-  status: number;
   subId?: bigint;
 }
 
-export interface ScheduleUnsubscribeResponse {
-  status: number;
-}
+export type ScheduleUnsubscribeResponse = Record<string, never>;
 
 /**
  * Schedule domain errors
  */
 export class ScheduleError extends Error {
-  constructor(message: string, _code?: string) {
+  public readonly code?: string;
+
+  constructor(message: string, code?: string) {
     super(message);
     this.name = "ScheduleError";
+    this.code = code;
   }
 }
 

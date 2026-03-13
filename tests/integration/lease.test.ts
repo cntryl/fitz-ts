@@ -1,0 +1,145 @@
+import { describe, expect, it } from "vitest";
+
+import { sleep } from "./helpers";
+import { TestFixture } from "./fixture/fixture";
+import { runWithBothTransports } from "./fixture/transport";
+
+describe("Lease integration", () => {
+  runWithBothTransports(({ transport, authMode }) => {
+    it("should acquire lease when it is free", async () => {
+      const f = new TestFixture(transport, authMode);
+      await f.connectOrFail();
+
+      const lease = await f
+        .client()
+        .lease()
+        .acquire(f.uniqueRoute("lease"), 30);
+      expect(lease).toBeTruthy();
+      expect(lease.token).toBeGreaterThan(0n);
+      expect(lease.expiresAt).toBeGreaterThan(
+        BigInt(Math.floor(Date.now() / 1000)),
+      );
+    });
+
+    it("should reject acquire when lease is already held", async () => {
+      const f1 = new TestFixture(transport, authMode);
+      const f2 = new TestFixture(transport, authMode);
+      await f1.connectOrFail();
+      await f2.connectOrFail();
+
+      const route = f1.uniqueRoute("lease");
+      const lease = await f1.client().lease().acquire(route, 30);
+      expect(lease.token).toBeGreaterThan(0n);
+
+      await expect(f2.client().lease().acquire(route, 30)).rejects.toBeTruthy();
+    });
+
+    it("should extend ttl when renew is called with a valid token", async () => {
+      const f = new TestFixture(transport, authMode);
+      await f.connectOrFail();
+
+      const lease = await f
+        .client()
+        .lease()
+        .acquire(f.uniqueRoute("lease"), 10);
+      const originalExpiry = lease.expiresAt;
+      const newExpiry = await lease.extend(60);
+
+      expect(newExpiry).toBeGreaterThan(originalExpiry);
+      expect(lease.expiresAt).toBe(newExpiry);
+    });
+
+    it("should reject renew when token does not match", async () => {
+      const f = new TestFixture(transport, authMode);
+      await f.connectOrFail();
+
+      const lease = await f
+        .client()
+        .lease()
+        .acquire(f.uniqueRoute("lease"), 30);
+      await expect(
+        lease.extendWithToken(lease.token + 1n, 60),
+      ).rejects.toBeTruthy();
+    });
+
+    it("should release lease when token is valid", async () => {
+      const f = new TestFixture(transport, authMode);
+      await f.connectOrFail();
+
+      const route = f.uniqueRoute("lease");
+      const lease = await f.client().lease().acquire(route, 30);
+      await lease.release();
+
+      const reacquired = await f.client().lease().acquire(route, 30);
+      expect(reacquired.token).toBeGreaterThan(0n);
+    });
+
+    it("should reject release when token does not match", async () => {
+      const f = new TestFixture(transport, authMode);
+      await f.connectOrFail();
+
+      const lease = await f
+        .client()
+        .lease()
+        .acquire(f.uniqueRoute("lease"), 30);
+      await expect(
+        lease.releaseWithToken(lease.token + 1n),
+      ).rejects.toBeTruthy();
+    });
+
+    it("should allow re-acquire after ttl expires", async () => {
+      const f = new TestFixture(transport, authMode);
+      await f.connectOrFail();
+
+      const route = f.uniqueRoute("lease");
+      const lease = await f.client().lease().acquire(route, 2);
+      expect(lease.token).toBeGreaterThan(0n);
+
+      await sleep(3000);
+
+      const reacquired = await f.client().lease().acquire(route, 30);
+      expect(reacquired.token).toBeGreaterThan(0n);
+    });
+
+    it("should query lease status for an existing lease", async () => {
+      const f = new TestFixture(transport, authMode);
+      await f.connectOrFail();
+
+      const route = f.uniqueRoute("lease");
+      await f.client().lease().acquire(route, 30);
+
+      const info = await f.client().lease().query(route);
+      expect(info.isHeld).toBe(true);
+      expect(
+        info.owner !== undefined ||
+          info.expiresAt !== undefined ||
+          info.token !== undefined,
+      ).toBe(true);
+    });
+
+    it("should deliver subscription notifications on release", async () => {
+      const f = new TestFixture(transport, authMode);
+      await f.connectOrFail();
+
+      const route = f.uniqueRoute("lease");
+      const notification = new Promise<string>((resolve, reject) => {
+        const timer = setTimeout(() => {
+          reject(new Error("timed out waiting for lease notification"));
+        }, 5000);
+
+        void f
+          .client()
+          .lease()
+          .subscribe(route, async (notif) => {
+            clearTimeout(timer);
+            resolve(notif.route);
+          });
+      });
+
+      const lease = await f.client().lease().acquire(route, 30);
+      await lease.release();
+
+      await expect(notification).resolves.toBe(route);
+    });
+  });
+});

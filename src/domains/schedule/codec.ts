@@ -5,6 +5,7 @@
 
 import { BufferWriter, BufferReader } from "../../core/buffer";
 import {
+  DecodedScheduleNotification,
   ScheduleEntry,
   ScheduleCreateResponse,
   ScheduleCancelResponse,
@@ -26,24 +27,23 @@ export class ScheduleCodec {
     const writer = new BufferWriter(512);
     writer.writeRoute(route);
     writer.writeString(cronExpr);
+    writer.writeU32BE(payload.length);
     writer.writeBytes(payload);
     return writer.getBuffer();
   }
 
   /**
    * Decode CREATE response
-   * Payload: [status: u8][optional has_schedule_id: u8][schedule_id: string if has=1]
+   * Success payload: [optional has_schedule_id: u8][schedule_id: string if has=1]
    */
-  static decodeCreateResponse(payload: Uint8Array): ScheduleCreateResponse {
-    const reader = new BufferReader(payload);
-    const status = reader.readU8();
-
+  static decodeCreateResponse(data: Uint8Array): ScheduleCreateResponse {
+    const reader = new BufferReader(data);
     let scheduleId: string | undefined;
     if (!reader.isEOF() && reader.readU8() === 1) {
       scheduleId = reader.readString();
     }
 
-    return { status, scheduleId };
+    return { scheduleId };
   }
 
   /**
@@ -58,12 +58,10 @@ export class ScheduleCodec {
 
   /**
    * Decode CANCEL response
-   * Payload: [status: u8]
+   * Success payload: empty
    */
-  static decodeCancelResponse(payload: Uint8Array): ScheduleCancelResponse {
-    const reader = new BufferReader(payload);
-    const status = reader.readU8();
-    return { status };
+  static decodeCancelResponse(_data: Uint8Array): ScheduleCancelResponse {
+    return {};
   }
 
   /**
@@ -79,16 +77,13 @@ export class ScheduleCodec {
 
   /**
    * Decode LIST response
-   * Payload: [status: u8][total_count: u64][has_entry: u8]...[route: string][cron: string][payload: bytes when has_entry=1]
+   * Success payload: [total_count: u64][has_entry: u8]...[route: string][cron: string][payload: bytes when has_entry=1]
    */
-  static decodeListResponse(payload: Uint8Array): ScheduleListResponse {
-    const reader = new BufferReader(payload);
-    const status = reader.readU8();
-
-    if (reader.isEOF()) {
-      return { status, totalCount: 0n, entries: [] };
+  static decodeListResponse(data: Uint8Array): ScheduleListResponse {
+    const reader = new BufferReader(data);
+    if (reader.remainingBytes() < 8) {
+      throw new Error("LIST response missing total_count");
     }
-
     const totalCount = reader.readU64BE();
     const entries: ScheduleEntry[] = [];
 
@@ -100,7 +95,7 @@ export class ScheduleCodec {
 
       const route = reader.readString();
       const cron = reader.readString();
-      const payloadBytes = reader.readBytes(reader.remainingBytes());
+      const payloadBytes = reader.readBytes(reader.readU32BE());
 
       entries.push({
         id: route, // Route as identity
@@ -110,7 +105,7 @@ export class ScheduleCodec {
       });
     }
 
-    return { status, totalCount, entries };
+    return { totalCount, entries };
   }
 
   /**
@@ -125,20 +120,16 @@ export class ScheduleCodec {
 
   /**
    * Decode SUBSCRIBE response
-   * Payload: [status: u8][optional has_sub_id: u8][sub_id: u64 if has=1]
+   * Success payload: optional [has_sub_id: u8][sub_id: u64 if has=1]
    */
-  static decodeSubscribeResponse(
-    payload: Uint8Array,
-  ): ScheduleSubscribeResponse {
-    const reader = new BufferReader(payload);
-    const status = reader.readU8();
-
+  static decodeSubscribeResponse(data: Uint8Array): ScheduleSubscribeResponse {
+    const reader = new BufferReader(data);
     let subId: bigint | undefined;
     if (!reader.isEOF() && reader.readU8() === 1) {
       subId = reader.readU64BE();
     }
 
-    return { status, subId };
+    return { subId };
   }
 
   /**
@@ -153,30 +144,40 @@ export class ScheduleCodec {
 
   /**
    * Decode UNSUBSCRIBE response
-   * Payload: [status: u8]
+   * Success payload: empty
    */
   static decodeUnsubscribeResponse(
-    payload: Uint8Array,
+    _data: Uint8Array,
   ): ScheduleUnsubscribeResponse {
-    const reader = new BufferReader(payload);
-    const status = reader.readU8();
-    return { status };
+    return {};
   }
 
   /**
    * Decode NOTIFY notification (MSG_SCHEDULE_NOTIFY 705)
-   * Payload: [subscription_id: u64][payload: bytes]
+   *
+   * Current brokers emit raw bytes payloads. The canonical spec allows an
+   * optional subscription id prefix, so the decoder accepts both:
+   * - [bytes payload]
+   * - [subscription_id: u64][payload: bytes]
    */
-  static decodeNotification(payload: Uint8Array): {
-    subId: bigint;
-    payload: Uint8Array;
-  } {
+  static decodeNotification(payload: Uint8Array): DecodedScheduleNotification {
+    if (payload.length < 4) {
+      return { payload: new Uint8Array(0) };
+    }
+
+    const bytesOnlyLength =
+      ((payload[0] << 24) |
+        (payload[1] << 16) |
+        (payload[2] << 8) |
+        payload[3]) >>>
+      0;
+    if (bytesOnlyLength === payload.length - 4) {
+      const reader = new BufferReader(payload);
+      return { payload: reader.readBytes(reader.readU32BE()) };
+    }
+
     const reader = new BufferReader(payload);
     const subId = reader.readU64BE();
-    const notificationPayload =
-      reader.remainingBytes() > 0
-        ? reader.readBytes(reader.remainingBytes())
-        : new Uint8Array(0);
-    return { subId, payload: notificationPayload };
+    return { subId, payload: reader.readBytes(reader.readU32BE()) };
   }
 }

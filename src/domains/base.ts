@@ -11,14 +11,14 @@ export class DomainClient {
     this.connection = connection;
   }
 
-  protected async request(
+  protected async requestFrame(
     messageType: number,
     payload: Uint8Array,
   ): Promise<Uint8Array> {
     return this.connection.request(messageType, payload);
   }
 
-  protected async send(
+  protected async sendFrame(
     messageType: number,
     payload: Uint8Array,
   ): Promise<void> {

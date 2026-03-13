@@ -14,6 +14,7 @@ export class NoticeCodec {
   static encodePublish(route: string, body: Uint8Array): Uint8Array {
     const writer = new BufferWriter(256);
     writer.writeRoute(route);
+    writer.writeU32BE(body.length);
     writer.writeBytes(body);
     return writer.getBuffer();
   }
@@ -33,11 +34,12 @@ export class NoticeCodec {
    * Standard response: [u8 status=0][u8 has_sub_id][u64 sub_id if has=1]
    */
   static decodeSubscribeResponse(payload: Uint8Array): SubscribeResponse {
-    if (payload.length < 1) {
+    if (payload.length < 2) {
       throw new Error("SUBSCRIBE response too short");
     }
 
     const reader = new BufferReader(payload);
+    const status = reader.readU8();
     const hasSubId = reader.readU8();
 
     if (hasSubId !== 1) {
@@ -49,7 +51,7 @@ export class NoticeCodec {
     }
 
     const subId = reader.readU64BE();
-    return { status: 0, subId };
+    return { status, subId };
   }
 
   /**

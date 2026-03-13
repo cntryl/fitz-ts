@@ -196,6 +196,7 @@ describe("KvCodec", () => {
       writer.writeU8(0); // status = success
       writer.writeU8(1); // found = 1
       const value = testData("found_value");
+      writer.writeU32BE(value.length);
       writer.writeBytes(value);
       const response = writer.getBuffer();
 
@@ -283,9 +284,14 @@ describe("KvCodec", () => {
       // Key 1
       writer.writeU32BE(testData("key1").length);
       writer.writeBytes(testData("key1"));
+      writer.writeU32BE(testData("value1").length);
+      writer.writeBytes(testData("value1"));
       // Key 2
       writer.writeU32BE(testData("key2").length);
       writer.writeBytes(testData("key2"));
+      writer.writeU32BE(testData("value2").length);
+      writer.writeBytes(testData("value2"));
+      writer.writeU8(0); // has_more = false
       const response = writer.getBuffer();
 
       // Act
@@ -303,6 +309,7 @@ describe("KvCodec", () => {
       const writer = new BufferWriter(8);
       writer.writeU8(0); // status
       writer.writeU32BE(0); // count = 0
+      writer.writeU8(0); // has_more = false
       const response = writer.getBuffer();
 
       // Act
@@ -320,7 +327,9 @@ describe("KvCodec", () => {
       writer.writeU32BE(1); // count = 1
       writer.writeU32BE(testData("key1").length);
       writer.writeBytes(testData("key1"));
-      writer.writeBytes(new Uint8Array([1, 2, 3, 4])); // cursor bytes
+      writer.writeU32BE(testData("value1").length);
+      writer.writeBytes(testData("value1"));
+      writer.writeU8(1); // has_more = true
       const response = writer.getBuffer();
 
       // Act
@@ -328,7 +337,7 @@ describe("KvCodec", () => {
 
       // Assert
       expect(decoded.keys).toHaveLength(1);
-      expect(decoded.nextCursor).toEqual(new Uint8Array([1, 2, 3, 4]));
+      expect(decoded.nextCursor).toEqual(new Uint8Array(0));
     });
   });
 
@@ -394,6 +403,7 @@ describe("KvCodec", () => {
       const getWriter = new BufferWriter(256);
       getWriter.writeU8(0); // status
       getWriter.writeU8(1); // found
+      getWriter.writeU32BE(value.length);
       getWriter.writeBytes(value);
       const getResponse = getWriter.getBuffer();
       const getDecoded = KvCodec.decodeGetResponse(getResponse);

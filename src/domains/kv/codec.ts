@@ -1,28 +1,20 @@
 /**
- * KV domain codec for encoding/decoding messages
+ * KV domain codec.
  */
 
 import { BufferWriter, BufferReader } from "../../core/buffer";
 import { CodecError } from "../../core/errors";
 import {
   KvBeginResponse,
-  KvPutResponse,
   KvGetResponse,
-  KvDeleteResponse,
-  KvCommitResponse,
-  KvRollbackResponse,
+  KvScanOptions,
   KvScanResponse,
+  KvStatusResponse,
   TxMode,
   DurabilityMode,
 } from "./types";
 
 export class KvCodec {
-  /**
-   * Encode BEGIN request
-   * Payload: [route: string][mode: u8][durability: u8]
-   * Note: Internal broker routing is resolved from authenticated session state;
-   * clients send only the route and documented KV fields.
-   */
   static encodeBegin(
     route: string,
     mode: TxMode,
@@ -35,21 +27,13 @@ export class KvCodec {
     return writer.getBuffer();
   }
 
-  /**
-   * Decode BEGIN response
-   * Payload: [status: u8][tx_id: u64][...]
-   */
   static decodeBeginResponse(payload: Uint8Array): KvBeginResponse {
     const reader = new BufferReader(payload);
     const status = reader.readU8();
-    const txId = reader.readU64BE();
-    return { txId, status };
+    const txId = reader.isEOF() ? undefined : reader.readU64BE();
+    return { status, txId };
   }
 
-  /**
-   * Encode PUT request
-   * Payload: [tx_id: u64][route: string][key: bytes][value: bytes]
-   */
   static encodePut(
     txId: bigint,
     route: string,
@@ -59,54 +43,58 @@ export class KvCodec {
     const writer = new BufferWriter(512);
     writer.writeU64BE(txId);
     writer.writeRoute(route);
+    writer.writeU32BE(key.length);
     writer.writeBytes(key);
+    writer.writeU32BE(value.length);
     writer.writeBytes(value);
     return writer.getBuffer();
   }
 
-  /**
-   * Decode PUT response
-   * Payload: [status: u8]
-   */
-  static decodePutResponse(payload: Uint8Array): KvPutResponse {
-    const reader = new BufferReader(payload);
-    const status = reader.readU8();
-    return { status };
+  static encodeInsert(
+    txId: bigint,
+    route: string,
+    key: Uint8Array,
+    value: Uint8Array,
+  ): Uint8Array {
+    return this.encodePut(txId, route, key, value);
   }
 
-  /**
-   * Encode GET request
-   * Payload: [tx_id: u64][route: string][key: bytes]
-   */
+  static decodeStatusResponse(payload: Uint8Array): KvStatusResponse {
+    const reader = new BufferReader(payload);
+    return { status: reader.readU8() };
+  }
+
+  static decodePutResponse(payload: Uint8Array): KvStatusResponse {
+    return this.decodeStatusResponse(payload);
+  }
+
   static encodeGet(txId: bigint, route: string, key: Uint8Array): Uint8Array {
     const writer = new BufferWriter(256);
     writer.writeU64BE(txId);
     writer.writeRoute(route);
+    writer.writeU32BE(key.length);
     writer.writeBytes(key);
     return writer.getBuffer();
   }
 
-  /**
-   * Decode GET response
-   * Payload: [status: u8][found: u8][value_len: u32][value: bytes]
-   */
   static decodeGetResponse(payload: Uint8Array): KvGetResponse {
     const reader = new BufferReader(payload);
     const status = reader.readU8();
-    const found = reader.readU8();
+    const found = !reader.isEOF() && reader.readU8() === 1;
 
-    if (found === 0 || reader.isEOF()) {
-      return { status, value: undefined };
+    if (!found || reader.isEOF()) {
+      return { status, found: false };
     }
 
-    const value = reader.readBytes(reader.remainingBytes());
-    return { status, value };
+    const valueLen = reader.readU32BE();
+
+    return {
+      status,
+      found: true,
+      value: reader.readBytes(valueLen),
+    };
   }
 
-  /**
-   * Encode DELETE request
-   * Payload: [tx_id: u64][route: string][key: bytes]
-   */
   static encodeDelete(
     txId: bigint,
     route: string,
@@ -115,84 +103,74 @@ export class KvCodec {
     const writer = new BufferWriter(256);
     writer.writeU64BE(txId);
     writer.writeRoute(route);
+    writer.writeU32BE(key.length);
     writer.writeBytes(key);
     return writer.getBuffer();
   }
 
-  /**
-   * Decode DELETE response
-   * Payload: [status: u8]
-   */
-  static decodeDeleteResponse(payload: Uint8Array): KvDeleteResponse {
-    const reader = new BufferReader(payload);
-    const status = reader.readU8();
-    return { status };
+  static encodeDeleteRange(
+    txId: bigint,
+    route: string,
+    startKey: Uint8Array,
+    endKey: Uint8Array,
+  ): Uint8Array {
+    const writer = new BufferWriter(256);
+    writer.writeU64BE(txId);
+    writer.writeRoute(route);
+    writer.writeU32BE(startKey.length);
+    writer.writeBytes(startKey);
+    writer.writeU32BE(endKey.length);
+    writer.writeBytes(endKey);
+    return writer.getBuffer();
   }
 
-  /**
-   * Encode COMMIT request
-   * Payload: [tx_id: u64][route: string]
-   */
   static encodeCommit(txId: bigint, route: string): Uint8Array {
-    const writer = new BufferWriter(256);
+    const writer = new BufferWriter(128);
     writer.writeU64BE(txId);
     writer.writeRoute(route);
     return writer.getBuffer();
   }
 
-  /**
-   * Decode COMMIT response
-   * Payload: [status: u8]
-   */
-  static decodeCommitResponse(payload: Uint8Array): KvCommitResponse {
-    const reader = new BufferReader(payload);
-    const status = reader.readU8();
-    return { status };
-  }
-
-  /**
-   * Encode ROLLBACK request
-   * Payload: [tx_id: u64][route: string]
-   */
   static encodeRollback(txId: bigint, route: string): Uint8Array {
-    const writer = new BufferWriter(256);
-    writer.writeU64BE(txId);
-    writer.writeRoute(route);
-    return writer.getBuffer();
+    return this.encodeCommit(txId, route);
   }
 
-  /**
-   * Decode ROLLBACK response
-   * Payload: [status: u8]
-   */
-  static decodeRollbackResponse(payload: Uint8Array): KvRollbackResponse {
-    const reader = new BufferReader(payload);
-    const status = reader.readU8();
-    return { status };
-  }
-
-  /**
-   * Encode SCAN request
-   * Payload: [tx_id: u64][route: string][cursor: bytes]
-   */
   static encodeScan(
     txId: bigint,
     route: string,
-    cursor?: Uint8Array,
+    options: KvScanOptions = {},
   ): Uint8Array {
     const writer = new BufferWriter(512);
     writer.writeU64BE(txId);
     writer.writeRoute(route);
-    if (cursor) {
-      writer.writeBytes(cursor);
+
+    if (options.startKey) {
+      writer.writeU8(1);
+      writer.writeU32BE(options.startKey.length);
+      writer.writeBytes(options.startKey);
+    } else {
+      writer.writeU8(0);
     }
+
+    if (options.endKey) {
+      writer.writeU8(1);
+      writer.writeU32BE(options.endKey.length);
+      writer.writeBytes(options.endKey);
+    } else {
+      writer.writeU8(0);
+    }
+
+    if (typeof options.limit === "number" && options.limit > 0) {
+      writer.writeU8(1);
+      writer.writeU32BE(options.limit);
+    } else {
+      writer.writeU8(0);
+    }
+
+    writer.writeU8(options.reverse ? 1 : 0);
     return writer.getBuffer();
   }
 
-  /**
-   * Decode SCAN response
-   * Payload: [status: u8][count: u32]([key_len: u32][key: bytes] ...)[next_cursor_len: u32][cursor: bytes]
-   */
   static decodeScanResponse(payload: Uint8Array): KvScanResponse {
     const reader = new BufferReader(payload);
     const status = reader.readU8();
@@ -203,16 +181,16 @@ export class KvCodec {
 
     const count = reader.readU32BE();
     const keys: Uint8Array[] = [];
-
-    for (let i = 0; i < count; i++) {
+    for (let i = 0; i < count; i += 1) {
       const keyLen = reader.readU32BE();
       keys.push(reader.readBytes(keyLen));
+
+      const valueLen = reader.readU32BE();
+      reader.readBytes(valueLen);
     }
 
-    let nextCursor: Uint8Array | undefined;
-    if (!reader.isEOF()) {
-      nextCursor = reader.readBytes(reader.remainingBytes());
-    }
+    const hasMore = !reader.isEOF() ? reader.readU8() : 0;
+    const nextCursor = hasMore === 1 ? new Uint8Array(0) : undefined;
 
     return { status, keys, nextCursor };
   }
@@ -220,11 +198,10 @@ export class KvCodec {
   private static encodeDurability(durability: DurabilityMode): number {
     switch (durability) {
       case "None":
-        return 0;
       case "Async":
-        return 1;
+        return 0;
       case "Sync":
-        return 2;
+        return 1;
       default:
         throw new CodecError(`Unknown durability mode: ${durability}`);
     }

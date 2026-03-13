@@ -18,6 +18,5 @@ export type TransportConstructor = new (
 
 export interface TransportOptions {
   timeout?: number;
-  retryAttempts?: number;
-  retryDelayMs?: number;
+  maxFrameSize?: number;
 }

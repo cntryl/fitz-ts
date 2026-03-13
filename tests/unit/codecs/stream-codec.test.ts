@@ -34,9 +34,11 @@ describe("StreamCodec", () => {
   describe("BEGIN decoding", () => {
     it("should_decode_begin_response_with_session_id", () => {
       // Arrange
-      const writer = new BufferWriter(16);
+      const writer = new BufferWriter(24);
       writer.writeU8(0); // status = success
+      writer.writeU8(1); // has_session_id = 1
       writer.writeU64BE(456n); // sessionId
+      writer.writeU32BE(0); // empty data
       const response = writer.getBuffer();
 
       // Act
@@ -63,11 +65,10 @@ describe("StreamCodec", () => {
     it("should_encode_append_with_records", () => {
       // Arrange
       const sessionId = 456n;
-      const route = "stream://test/events";
-      const records = [testData("record1"), testData("record2")];
+      const body = testData("record1");
 
       // Act
-      const encoded = StreamCodec.encodeAppend(sessionId, route, records);
+      const encoded = StreamCodec.encodeAppend(sessionId, body);
 
       // Assert
       expect(encoded).toBeInstanceOf(Uint8Array);
@@ -76,11 +77,7 @@ describe("StreamCodec", () => {
 
     it("should_encode_append_with_empty_records", () => {
       // Arrange/Act
-      const encoded = StreamCodec.encodeAppend(
-        456n,
-        "stream://test/events",
-        [],
-      );
+      const encoded = StreamCodec.encodeAppend(456n, new Uint8Array(0));
 
       // Assert
       expect(encoded).toBeInstanceOf(Uint8Array);
@@ -108,19 +105,20 @@ describe("StreamCodec", () => {
   describe("READ decoding", () => {
     it("should_decode_read_response_with_records", () => {
       // Arrange
-      const writer = new BufferWriter(256);
+      const data = new BufferWriter(256);
+      data.writeU32BE(2); // count
+      data.writeU64BE(100n); // offset
+      data.writeU32BE(testData("record1").length);
+      data.writeBytes(testData("record1"));
+      data.writeU64BE(101n); // offset
+      data.writeU32BE(testData("record2").length);
+      data.writeBytes(testData("record2"));
+
+      const writer = new BufferWriter(320);
       writer.writeU8(0); // status
-      writer.writeU32BE(2); // count
-      // Record 1
-      writer.writeU64BE(100n); // offset
-      writer.writeU64BE(1234567890n); // timestamp
-      writer.writeU32BE(testData("record1").length);
-      writer.writeBytes(testData("record1"));
-      // Record 2
-      writer.writeU64BE(101n); // offset
-      writer.writeU64BE(1234567891n); // timestamp
-      writer.writeU32BE(testData("record2").length);
-      writer.writeBytes(testData("record2"));
+      writer.writeU8(0); // has_session_id = 0
+      writer.writeU32BE(data.getLength());
+      writer.writeBytes(data.getBuffer());
       const response = writer.getBuffer();
 
       // Act
@@ -135,9 +133,14 @@ describe("StreamCodec", () => {
 
     it("should_decode_read_response_empty", () => {
       // Arrange
-      const writer = new BufferWriter(8);
+      const data = new BufferWriter(8);
+      data.writeU32BE(0); // count
+
+      const writer = new BufferWriter(16);
       writer.writeU8(0); // status
-      writer.writeU32BE(0); // count
+      writer.writeU8(0); // has_session_id = 0
+      writer.writeU32BE(data.getLength());
+      writer.writeBytes(data.getBuffer());
       const response = writer.getBuffer();
 
       // Act

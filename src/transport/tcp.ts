@@ -5,39 +5,68 @@
 import { Transport, TransportOptions } from "./types";
 import { TransportError, TimeoutError } from "../core/errors";
 
-const isNode = () => {
+type NodeLikeProcess = {
+  versions?: {
+    node?: string;
+  };
+};
+
+type NetModule = {
+  createConnection(options: {
+    host: string;
+    port: number;
+    timeout: number;
+  }): TcpSocket;
+};
+
+type TcpSocket = {
+  on(event: "connect", listener: () => void): void;
+  on(event: "data", listener: (chunk: Uint8Array | Buffer) => void): void;
+  on(event: "error", listener: (err: Error) => void): void;
+  on(event: "close", listener: () => void): void;
+  on(event: "timeout", listener: () => void): void;
+  write(data: Uint8Array, callback: (err?: Error | null) => void): void;
+  setNoDelay(noDelay?: boolean): void;
+  setTimeout(timeout: number): void;
+  end(): void;
+  destroy(error?: Error): void;
+};
+
+const isNode = (): boolean => {
   try {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const candidate = globalThis as typeof globalThis & {
+      process?: NodeLikeProcess;
+    };
     return (
-      typeof (globalThis as any).process !== "undefined" &&
-      (globalThis as any).process.versions &&
-      (globalThis as any).process.versions.node
+      typeof candidate.process !== "undefined" &&
+      typeof candidate.process?.versions?.node === "string"
     );
   } catch {
     return false;
   }
 };
 
-let net: any;
+let netModule: NetModule | undefined;
 if (isNode()) {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
-  net = require("net");
+  netModule = require("net") as NetModule;
 }
 
 export class TcpTransport implements Transport {
-  private socket: any;
-  private url: string;
-  private connected: boolean = false;
+  private socket: TcpSocket | null = null;
+  private readonly url: string;
+  private connected = false;
   private receiveQueue: Uint8Array[] = [];
   private receiverResolve: ((data: Uint8Array) => void) | null = null;
-  private timeout: number;
-  private host: string;
-  private port: number;
+  private readonly timeout: number;
+  private readonly maxFrameSize: number;
+  private readonly host: string;
+  private readonly port: number;
   private lengthBuffer: Uint8Array = new Uint8Array(4);
-  private lengthOffset: number = 0;
+  private lengthOffset = 0;
   private currentMessageLength: number | null = null;
   private messageBuffer: Uint8Array | null = null;
-  private messageOffset: number = 0;
+  private messageOffset = 0;
 
   constructor(url: string, options: TransportOptions = {}) {
     if (!isNode()) {
@@ -46,6 +75,7 @@ export class TcpTransport implements Transport {
 
     this.url = url;
     this.timeout = options.timeout ?? 30000;
+    this.maxFrameSize = options.maxFrameSize ?? 65535;
 
     // Parse URL: tcp://host:port
     const urlObj = new URL(url.startsWith("tcp://") ? url : `tcp://${url}`);
@@ -56,7 +86,12 @@ export class TcpTransport implements Transport {
   async connect(): Promise<void> {
     return new Promise((resolve, reject) => {
       try {
-        this.socket = net.createConnection({
+        if (!netModule) {
+          reject(new TransportError("TCP transport module unavailable"));
+          return;
+        }
+
+        this.socket = netModule.createConnection({
           host: this.host,
           port: this.port,
           timeout: this.timeout,
@@ -69,19 +104,23 @@ export class TcpTransport implements Transport {
           );
         }, this.timeout);
 
-        this.socket.on("connect", () => {
+        const socket = this.socket;
+
+        socket.on("connect", () => {
           clearTimeout(connectTimeout);
           this.connected = true;
-          this.socket.setNoDelay(true);
-          this.socket.setTimeout(this.timeout);
+          socket.setNoDelay(true);
+          socket.setTimeout(this.timeout);
           resolve();
         });
 
-        this.socket.on("data", (chunk: any) => {
-          this.handleData(new Uint8Array(chunk));
+        socket.on("data", (chunk: Uint8Array | Buffer) => {
+          this.handleData(
+            chunk instanceof Uint8Array ? chunk : new Uint8Array(chunk),
+          );
         });
 
-        this.socket.on("error", (err: any) => {
+        socket.on("error", (err: Error) => {
           clearTimeout(connectTimeout);
           this.connected = false;
           const error = new TransportError(
@@ -93,15 +132,15 @@ export class TcpTransport implements Transport {
           reject(error);
         });
 
-        this.socket.on("close", () => {
+        socket.on("close", () => {
           this.connected = false;
           if (this.receiverResolve) {
             this.receiverResolve(new Uint8Array(0)); // Signal close
           }
         });
 
-        this.socket.on("timeout", () => {
-          this.socket?.destroy();
+        socket.on("timeout", () => {
+          socket.destroy();
           this.connected = false;
         });
       } catch (err) {
@@ -135,6 +174,16 @@ export class TcpTransport implements Transport {
           // We have the full length header
           const lengthView = new DataView(this.lengthBuffer.buffer);
           this.currentMessageLength = lengthView.getUint32(0, false); // Big-endian
+          if (this.currentMessageLength > this.maxFrameSize) {
+            this.socket?.destroy(
+              new Error(
+                `TCP frame length ${this.currentMessageLength} exceeds max frame size ${this.maxFrameSize}`,
+              ),
+            );
+            this.currentMessageLength = null;
+            this.lengthOffset = 0;
+            return;
+          }
           this.messageBuffer = new Uint8Array(this.currentMessageLength);
           this.messageOffset = 0;
         }
@@ -193,7 +242,7 @@ export class TcpTransport implements Transport {
         reject(new TimeoutError(`TCP send timeout after ${this.timeout}ms`));
       }, this.timeout);
 
-      this.socket.write(fullMessage, (err: any) => {
+      this.socket?.write(fullMessage, (err?: Error | null) => {
         clearTimeout(timeout);
         if (err) {
           reject(new TransportError(`TCP send failed: ${err.message}`));
@@ -207,7 +256,11 @@ export class TcpTransport implements Transport {
   async receive(): Promise<Uint8Array> {
     // Return queued message if available
     if (this.receiveQueue.length > 0) {
-      return this.receiveQueue.shift()!;
+      const message = this.receiveQueue.shift();
+      if (!message) {
+        throw new TransportError("TCP receive queue was unexpectedly empty");
+      }
+      return message;
     }
 
     // Wait for next message
@@ -231,22 +284,25 @@ export class TcpTransport implements Transport {
 
   async close(): Promise<void> {
     if (this.socket) {
+      const socket = this.socket;
       return new Promise<void>((resolve) => {
         const timeout = setTimeout(() => {
-          this.socket?.destroy();
+          socket.destroy();
           this.connected = false;
           resolve();
         }, 5000);
 
-        this.socket.on("close", () => {
+        socket.on("close", () => {
           clearTimeout(timeout);
           this.connected = false;
           resolve();
         });
 
-        this.socket.end();
+        socket.end();
       });
     }
+
+    this.connected = false;
   }
 
   getUrl(): string {

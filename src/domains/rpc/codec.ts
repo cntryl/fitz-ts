@@ -42,9 +42,11 @@ export class RpcCodec {
     body: Uint8Array,
   ): Uint8Array {
     const writer = new BufferWriter(256);
-    writer.writeBytes(correlationId); // [u32 len=16][16 bytes]
+    writer.writeU32BE(correlationId.length);
+    writer.writeBytes(correlationId);
     writer.writeRoute(route);
     writer.writeRoute(replyRoute);
+    writer.writeU32BE(body.length);
     writer.writeBytes(body);
     return writer.getBuffer();
   }
@@ -73,8 +75,10 @@ export class RpcCodec {
     streamEnd: boolean,
   ): Uint8Array {
     const writer = new BufferWriter(256);
+    writer.writeU32BE(correlationId.length);
     writer.writeBytes(correlationId);
     writer.writeU64BE(sequence);
+    writer.writeU32BE(body.length);
     writer.writeBytes(body);
     writer.writeU8(streamEnd ? 1 : 0);
     return writer.getBuffer();
@@ -93,21 +97,17 @@ export class RpcCodec {
   } {
     const reader = new BufferReader(payload);
 
-    // Read correlation ID (bytes = [u32 len][data])
     const corrLen = reader.readU32BE();
     if (corrLen !== 16) {
       throw new Error(`Invalid correlation ID length: ${corrLen}, expected 16`);
     }
     const correlationId = reader.readBytes(corrLen);
 
-    // Read sequence
     const sequence = reader.readU64BE();
 
-    // Read body (bytes = [u32 len][data])
     const bodyLen = reader.readU32BE();
     const body = reader.readBytes(bodyLen);
 
-    // Read stream_end flag
     let streamEnd = false;
     if (!reader.isEOF()) {
       streamEnd = reader.readU8() === 1;
@@ -169,20 +169,15 @@ export class RpcCodec {
   static decodeInboundRequest(payload: Uint8Array): InboundRequest {
     const reader = new BufferReader(payload);
 
-    // Read correlation ID length prefix
     const corrLen = reader.readU32BE();
     if (corrLen !== 16) {
       throw new Error(`Invalid correlation ID length: ${corrLen}, expected 16`);
     }
+    const correlationId = reader.readBytes(corrLen);
 
-    // Read correlation ID
-    const correlationId = reader.readBytes(16);
-
-    // Read route and reply route (TLV strings)
     const route = reader.readRoute();
     const replyRoute = reader.readRoute();
 
-    // Read body (TLV bytes)
     const bodyLen = reader.readU32BE();
     const body = reader.readBytes(bodyLen);
 

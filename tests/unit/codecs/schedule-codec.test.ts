@@ -40,7 +40,6 @@ describe("ScheduleCodec", () => {
     it("should_decode_create_response_with_schedule_id", () => {
       // Arrange
       const writer = new BufferWriter(64);
-      writer.writeU8(0); // status = success
       writer.writeU8(1); // has_schedule_id
       writer.writeString("schedule_id_12345");
       const response = writer.getBuffer();
@@ -49,19 +48,17 @@ describe("ScheduleCodec", () => {
       const decoded = ScheduleCodec.decodeCreateResponse(response);
 
       // Assert
-      expect(decoded.status).toBe(0);
       expect(decoded.scheduleId).toBe("schedule_id_12345");
     });
 
     it("should_decode_create_response_success_without_id", () => {
       // Arrange
-      const response = new Uint8Array([0]); // status = success, no id
+      const response = new Uint8Array(0);
 
       // Act
       const decoded = ScheduleCodec.decodeCreateResponse(response);
 
       // Assert
-      expect(decoded.status).toBe(0);
       expect(decoded.scheduleId).toBeUndefined();
     });
   });
@@ -101,12 +98,12 @@ describe("ScheduleCodec", () => {
     it("should_decode_list_response_with_single_entry", () => {
       // Arrange
       const writer = new BufferWriter(128);
-      writer.writeU8(0); // status
       writer.writeU64BE(1n); // totalCount = 1
       // Entry 1
       writer.writeU8(1); // hasEntry = 1
       writer.writeString("schedule://acme/job1");
       writer.writeString("0 0 * * *");
+      writer.writeU32BE(testData("payload1").length);
       writer.writeBytes(testData("payload1"));
       // End marker
       writer.writeU8(0); // hasEntry = 0
@@ -117,17 +114,16 @@ describe("ScheduleCodec", () => {
       const decoded = ScheduleCodec.decodeListResponse(response);
 
       // Assert
-      expect(decoded.status).toBe(0);
       expect(decoded.totalCount).toBe(1n);
       expect(decoded.entries).toHaveLength(1);
       expect(decoded.entries[0].route).toBe("schedule://acme/job1");
       expect(decoded.entries[0].cron).toBe("0 0 * * *");
+      expect(decoded.entries[0].payload).toEqual(testData("payload1"));
     });
 
     it("should_decode_list_response_empty", () => {
       // Arrange
       const writer = new BufferWriter(16);
-      writer.writeU8(0); // status
       writer.writeU64BE(0n); // totalCount
       writer.writeU8(0); // hasEntry = 0 (no entries)
       const response = writer.getBuffer();
@@ -158,7 +154,6 @@ describe("ScheduleCodec", () => {
     it("should_decode_subscribe_response_with_sub_id", () => {
       // Arrange
       const writer = new BufferWriter(16);
-      writer.writeU8(0); // status
       writer.writeU8(1); // has_sub_id
       writer.writeU64BE(444n); // subId
       const response = writer.getBuffer();
@@ -167,16 +162,16 @@ describe("ScheduleCodec", () => {
       const decoded = ScheduleCodec.decodeSubscribeResponse(response);
 
       // Assert
-      expect(decoded.status).toBe(0);
       expect(decoded.subId).toBe(444n);
     });
   });
 
   describe("NOTIFY decoding", () => {
-    it("should_decode_schedule_fire_notification", () => {
+    it("should_decode_schedule_fire_notification_with_sub_id", () => {
       // Arrange
       const writer = new BufferWriter(256);
       writer.writeU64BE(444n); // subId
+      writer.writeU32BE(testData('{"execution_id": "exec_123"}').length);
       writer.writeBytes(testData('{"execution_id": "exec_123"}'));
       const payload = writer.getBuffer();
 
@@ -186,6 +181,21 @@ describe("ScheduleCodec", () => {
       // Assert
       expect(decoded.subId).toBe(444n);
       expect(decoded.payload).toEqual(testData('{"execution_id": "exec_123"}'));
+    });
+
+    it("should_decode_schedule_fire_notification_without_sub_id", () => {
+      // Arrange
+      const writer = new BufferWriter(256);
+      writer.writeU32BE(testData('{"execution_id": "exec_456"}').length);
+      writer.writeBytes(testData('{"execution_id": "exec_456"}'));
+      const payload = writer.getBuffer();
+
+      // Act
+      const decoded = ScheduleCodec.decodeNotification(payload);
+
+      // Assert
+      expect(decoded.subId).toBeUndefined();
+      expect(decoded.payload).toEqual(testData('{"execution_id": "exec_456"}'));
     });
   });
 

@@ -35,6 +35,7 @@ describe("LeaseCodec", () => {
     it("should_decode_acquire_response_with_token", () => {
       // Arrange
       const writer = new BufferWriter(32);
+      writer.writeU8(0); // status = success
       writer.writeU8(0); // response_type = Acquired
       writer.writeU64BE(888n); // token
       const response = writer.getBuffer();
@@ -44,7 +45,7 @@ describe("LeaseCodec", () => {
 
       // Assert
       expect(decoded.token).toBe(888n);
-      expect(decoded.expiresAt).toBe(0n); // Computed by client
+      expect(decoded.expiresAt).toBeUndefined(); // Computed by client
     });
   });
 
@@ -94,7 +95,8 @@ describe("LeaseCodec", () => {
     it("should_decode_subscribe_response_with_sub_id", () => {
       // Arrange
       const writer = new BufferWriter(16);
-      writer.writeU64BE(222n); // subId (no has_sub_id flag)
+      writer.writeU8(0); // status = success
+      writer.writeU64BE(222n); // subId
       const response = writer.getBuffer();
 
       // Act

@@ -30,19 +30,23 @@ export class LeaseCodec {
    * response_type: 0=Acquired, 1=AlreadyHeld (idempotent)
    */
   static decodeAcquireResponse(payload: Uint8Array): AcquireResponse {
-    if (payload.length < 9) {
+    if (payload.length < 10) {
       throw new Error(
-        `ACQUIRE response too short: got ${payload.length} bytes, expected >= 9`,
+        `ACQUIRE response too short: got ${payload.length} bytes, expected >= 10`,
       );
     }
 
     const reader = new BufferReader(payload);
+    const status = reader.readU8();
+    if (status !== 0) {
+      throw new Error(`ACQUIRE failed with status ${status}`);
+    }
     reader.readU8(); // responseType: 0=Acquired, 1=AlreadyHeld
     const fencingToken = reader.readU64BE();
 
     // response_type: 0=Acquired, 1=AlreadyHeld
     // For now, treat both as success
-    return { token: fencingToken, expiresAt: 0n }; // expiresAt computed by client
+    return { token: fencingToken };
   }
 
   /**
@@ -60,6 +64,14 @@ export class LeaseCodec {
     writer.writeU64BE(token);
     writer.writeU64BE(BigInt(ttlSecs));
     return writer.getBuffer();
+  }
+
+  static encodeRenew(
+    route: string,
+    token: bigint,
+    ttlSecs: number,
+  ): Uint8Array {
+    return this.encodeExtend(route, token, ttlSecs);
   }
 
   /**
@@ -91,12 +103,16 @@ export class LeaseCodec {
    */
   static decodeQueryResponse(payload: Uint8Array): QueryResponse {
     const reader = new BufferReader(payload);
+    const status = reader.readU8();
+    if (status !== 0) {
+      return { status };
+    }
     const hasHolder = reader.readU8();
 
     if (hasHolder === 0) {
       // Free
       reader.readU32BE(); // pendingWaiters
-      return { status: 0, isHeld: false };
+      return { status, isHeld: false };
     }
 
     // Held
@@ -106,7 +122,7 @@ export class LeaseCodec {
 
     // Note: token not returned in QUERY response
     return {
-      status: 0,
+      status,
       isHeld: true,
       owner,
       expiresAt: BigInt(Math.floor(Date.now() / 1000)) + ttlRemainingSecs,
@@ -128,16 +144,20 @@ export class LeaseCodec {
    * Standard response: [u8 status=0][u64 subscription_id]
    */
   static decodeSubscribeResponse(payload: Uint8Array): SubscribeResponse {
-    if (payload.length < 8) {
+    if (payload.length < 9) {
       throw new Error(
-        `SUBSCRIBE response too short: got ${payload.length} bytes, expected >= 8`,
+        `SUBSCRIBE response too short: got ${payload.length} bytes, expected >= 9`,
       );
     }
 
     const reader = new BufferReader(payload);
+    const status = reader.readU8();
+    if (status !== 0) {
+      return { status };
+    }
     const subId = reader.readU64BE();
 
-    return { status: 0, subId };
+    return { status, subId };
   }
 
   /**
@@ -154,8 +174,13 @@ export class LeaseCodec {
    * Decode UNSUBSCRIBE response
    * Standard response: [u8 status=0]
    */
-  static decodeUnsubscribeResponse(_payload: Uint8Array): UnsubscribeResponse {
-    return { status: 0 };
+  static decodeUnsubscribeResponse(payload: Uint8Array): UnsubscribeResponse {
+    if (payload.length === 0) {
+      return { status: 0 };
+    }
+
+    const reader = new BufferReader(payload);
+    return { status: reader.readU8() };
   }
 
   /**

@@ -1,0 +1,57 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out fitz-ts
+        uses: actions/checkout@v4
+        with:
+          path: fitz-ts
+
+      - name: Check out Fitz broker
+        uses: actions/checkout@v4
+        with:
+          repository: cntryl/fitz
+          path: fitz
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: fitz-ts/package-lock.json
+
+      - name: Start broker stack
+        working-directory: fitz-ts
+        run: docker compose -f compose.yml up -d --build
+
+      - name: Wait for brokers
+        run: sleep 10
+
+      - name: Install dependencies
+        working-directory: fitz-ts
+        run: npm ci
+
+      - name: Run checks
+        working-directory: fitz-ts
+        env:
+          FITZ_BROKER_ANON_TCP_ADDR: localhost:4191
+          FITZ_BROKER_ANON_WS_ADDR: ws://localhost:4190/ws
+          FITZ_BROKER_AUTH_TCP_ADDR: localhost:4091
+          FITZ_BROKER_AUTH_WS_ADDR: ws://localhost:4090/ws
+          FITZ_BROKER_JWT_HMAC_SECRET: test-secret-key
+          FITZ_BROKER_JWT_AUDIENCE: fitz
+        run: |
+          npx tsc --noEmit
+          npm run build
+          npm test
+
+      - name: Stop broker stack
+        if: always()
+        working-directory: fitz-ts
+        run: docker compose -f compose.yml down -v

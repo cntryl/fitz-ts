@@ -1,7 +1,5 @@
 /**
  * Stream domain type definitions
- * Per CLIENT_SPEC.md and fitz-go/internal/domains/stream/stream.go
- *
  * Stream uses session-based transactional semantics:
  * 1. Begin() returns a session with server-assigned sessionID
  * 2. Append() on session (no offset tracking needed)
@@ -18,7 +16,7 @@ export interface StreamRecord {
 }
 
 /**
- * Stream metadata
+ * Stream metadata.
  */
 export interface StreamMetadata {
   firstOffset: bigint;
@@ -26,24 +24,49 @@ export interface StreamMetadata {
   recordCount: bigint;
 }
 
+export interface StreamCommitNotification {
+  route: string;
+  event?: string;
+  firstResourceOffset?: bigint;
+  lastResourceOffset?: bigint;
+  batchSize?: number;
+  payload: unknown;
+}
+
+export type StreamCommitHandler = (
+  notification: StreamCommitNotification,
+) => void | Promise<void>;
+
+export class StreamSubscription {
+  constructor(
+    public readonly subId: bigint,
+    public readonly pattern: string,
+    private readonly unsubscribeFn: (pattern: string) => Promise<void>,
+  ) {}
+
+  async unsubscribe(): Promise<void> {
+    await this.unsubscribeFn(this.pattern);
+  }
+}
+
 /**
- * Stream session for write operations
- * Obtained from StreamClient.begin()
+ * Stream session for write operations.
+ * Obtained from `StreamClient.begin()`.
  */
 export interface StreamSession {
   /**
-   * Send a record to the stream
+   * Append a record to the stream.
    * Returns the assigned offset
    */
-  send(body: Uint8Array): Promise<bigint>;
+  append(body: Uint8Array): Promise<bigint>;
 
   /**
-   * Commit the write session and make sends durable
+   * Commit the write session and make appended records durable.
    */
   commit(): Promise<void>;
 
   /**
-   * Rollback and discard uncommitted sends
+   * Roll back and discard uncommitted appends.
    */
   rollback(): Promise<void>;
 
@@ -53,7 +76,7 @@ export interface StreamSession {
   isOpen(): boolean;
 
   /**
-   * Get the session ID
+   * Get the session ID.
    */
   getSessionId(): bigint;
 }

@@ -51,22 +51,22 @@ describe("QueueCodec", () => {
     });
   });
 
-  describe("RECEIVE encoding", () => {
-    it("should_encode_receive_with_route_and_ttl", () => {
+  describe("RESERVE encoding", () => {
+    it("should_encode_reserve_with_route_and_ttl", () => {
       // Arrange
       const route = "queue://acme/jobs/tasks";
       const ttlSecs = 30;
 
       // Act
-      const encoded = QueueCodec.encodeReceive(route, ttlSecs);
+      const encoded = QueueCodec.encodeReserve(route, ttlSecs);
 
       // Assert
       expect(encoded).toBeInstanceOf(Uint8Array);
     });
   });
 
-  describe("RECEIVE decoding", () => {
-    it("should_decode_receive_response_with_item", () => {
+  describe("RESERVE decoding", () => {
+    it("should_decode_reserve_response_with_item", () => {
       // Arrange
       const writer = new BufferWriter(256);
       writer.writeU8(0); // status
@@ -149,7 +149,8 @@ describe("QueueCodec", () => {
       // Arrange
       const writer = new BufferWriter(16);
       writer.writeU8(0); // status
-      writer.writeU64BE(555n); // subId (no has_sub_id flag)
+      writer.writeU8(1); // has_sub_id
+      writer.writeU64BE(555n); // subId
       const response = writer.getBuffer();
 
       // Act
