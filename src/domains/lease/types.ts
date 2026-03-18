@@ -79,10 +79,6 @@ export class Lease {
     return newExpiry;
   }
 
-  async renew(ttlSecs: number): Promise<bigint> {
-    return this.extend(ttlSecs);
-  }
-
   /**
    * Release the lease
    */
