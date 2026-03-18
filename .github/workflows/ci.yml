@@ -5,17 +5,10 @@ on:
   pull_request:
 
 jobs:
-  test:
+  fast:
     runs-on: ubuntu-latest
-    env:
-      FITZ_BROKER_ANON_TCP_ADDR: localhost:4191
-      FITZ_BROKER_ANON_WS_ADDR: ws://localhost:4190/ws
-      FITZ_BROKER_AUTH_TCP_ADDR: localhost:4091
-      FITZ_BROKER_AUTH_WS_ADDR: ws://localhost:4090/ws
-      FITZ_BROKER_JWT_HMAC_SECRET: test-secret-key
-      FITZ_BROKER_JWT_AUDIENCE: fitz
     steps:
-      - name: Check out fitz-ts
+      - name: Check out repository
         uses: actions/checkout@v6
 
       - name: Set up Node
@@ -34,13 +27,103 @@ jobs:
       - name: Run build
         run: npm run build
 
-      # - name: Start broker stack
-      #   if: always()
-      #   run: docker compose up -d
+      - name: Run unit tests
+        run: npm run test:unit
 
-      # - name: Run tests
-      #   run: npm test
+  spec:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        transport: [ws, tcp]
+        auth_mode: [anonymous, valid_jwt]
+    env:
+      FITZ_BROKER_ANON_TCP_ADDR: localhost:4191
+      FITZ_BROKER_ANON_WS_ADDR: ws://localhost:4190/ws
+      FITZ_BROKER_AUTH_TCP_ADDR: localhost:4091
+      FITZ_BROKER_AUTH_WS_ADDR: ws://localhost:4090/ws
+      FITZ_BROKER_JWT_HMAC_SECRET: test-secret-key
+      FITZ_BROKER_JWT_AUDIENCE: fitz
+      CONFORMANCE_OUTPUT: conformance-results.json
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
 
-      # - name: Stop broker stack
-      #   if: always()
-      #   run: docker compose down --volumes
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Start broker stack
+        run: docker compose up -d
+
+      - name: Run conformance suite
+        env:
+          CONFORMANCE_TRANSPORT: ${{ matrix.transport }}
+          CONFORMANCE_AUTH_MODE: ${{ matrix.auth_mode }}
+        run: npm run test:spec
+
+      - name: Run invalid JWT auth scenario
+        env:
+          CONFORMANCE_TRANSPORT: ${{ matrix.transport }}
+          CONFORMANCE_AUTH_MODE: anonymous
+        run: npx vitest run --config vitest.conformance.config.ts --reporter=verbose -t "CS-002 auth failure"
+
+      - name: Enforce P0 conformance
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          required = {"CS-001","CS-002","CS-003","CS-004","CS-005","CS-006","CS-007","CS-008"}
+          path = Path("conformance-results.json")
+          data = json.loads(path.read_text(encoding="utf-8"))
+          observed = {s["scenario_id"] for s in data["scenarios"]}
+          missing = sorted(required - observed)
+          failing = sorted(s["scenario_id"] for s in data["scenarios"] if s["scenario_id"] in required and s["verdict"] != "pass")
+          print(f"transport={data['transport']} auth={data['auth_mode']} p0={data['p0_pass_rate']:.0%} p1={data['p1_pass_rate']:.0%} failing={failing} missing={missing}")
+          if failing or missing:
+              raise SystemExit(1)
+          PY
+
+      - name: Upload conformance results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fitz-ts-conformance-${{ matrix.transport }}-${{ matrix.auth_mode }}
+          path: conformance-results.json
+
+      - name: Stop broker stack
+        if: always()
+        run: docker compose down --volumes
+
+  integration:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Start broker stack
+        run: docker compose up -d
+
+      - name: Run integration suite
+        run: npm run test:integration
+
+      - name: Stop broker stack
+        if: always()
+        run: docker compose down --volumes

@@ -20,6 +20,7 @@
   "scripts": {
     "build": "vite build",
     "test": "npm run test:unit && npm run test:integration",
+    "test:spec": "npm run test:conformance",
     "test:unit": "vitest run --config vitest.unit.config.ts",
     "test:integration": "vitest run --config vitest.integration.config.ts",
     "test:conformance": "vitest run --config vitest.conformance.config.ts --reporter=verbose",

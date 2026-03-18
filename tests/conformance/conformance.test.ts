@@ -24,7 +24,6 @@ import { Client } from "../../src/client/client.js";
 import type { ClientConfig } from "../../src/core/types.js";
 import {
   AuthenticationError,
-  ConnectionError,
   TimeoutError,
 } from "../../src/core/errors.js";
 
@@ -59,8 +58,6 @@ const SECRET = process.env["FITZ_BROKER_JWT_HMAC_SECRET"] ?? "test-secret-key";
 const AUDIENCE = process.env["FITZ_BROKER_JWT_AUDIENCE"] ?? "fitz";
 
 const BROKER_ADDR = brokerAddrFor(TRANSPORT, AUTH_MODE);
-const AUTH_BROKER_ADDR = brokerAddrFor(TRANSPORT, "valid_jwt");
-
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -682,7 +679,6 @@ describe(`Fitz conformance — fitz-ts [transport=${TRANSPORT}, auth=${AUTH_MODE
       "P1",
       async () => {
         const evidence: string[] = [];
-        let verdict: Verdict = "pass";
 
         // Verify reconnect API is accessible
         const client = new Client({

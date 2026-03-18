@@ -200,6 +200,9 @@ npm run test:unit
 # Run broker-backed integration tests only
 npm run test:integration
 
+# Run the spec-compliance conformance suite
+npm run test:spec
+
 # Watch unit tests
 npm run test:watch
 
@@ -215,6 +218,12 @@ npm run bench
 `fitz-ts` mirrors the real-broker integration coverage in `fitz-go/test/*.go`.
 The integration suite does not start brokers for you; it expects the Fitz
 brokers from `fitz-go/compose.yml` to already be running.
+
+The required repo-local spec gate is the conformance suite:
+
+```bash
+npm run test:spec
+```
 
 Default broker addresses:
 

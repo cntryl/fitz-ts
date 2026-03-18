@@ -35,6 +35,7 @@ describe("Stream integration", () => {
       await session.commit();
 
       const records = await f.client().stream().read(route, 0n, 10);
+      expect(records.length).toBeGreaterThanOrEqual(3);
       for (let i = 1; i < records.length; i += 1) {
         expect(records[i].offset).toBeGreaterThan(records[i - 1].offset);
       }
@@ -78,9 +79,8 @@ describe("Stream integration", () => {
       await session.commit();
 
       const record = await f.client().stream().peek(route);
-      if (record !== null) {
-        expect(Buffer.from(record.body).toString()).toBe("last-one");
-      }
+      expect(record).not.toBeNull();
+      expect(Buffer.from(record!.body).toString()).toBe("last-one");
     });
 
     it("should return metadata for an existing stream", async () => {
@@ -93,7 +93,7 @@ describe("Stream integration", () => {
       await session.commit();
 
       const metadata = await f.client().stream().metadata(route);
-      expect(metadata.recordCount).toBeGreaterThanOrEqual(0n);
+      expect(metadata.recordCount).toBeGreaterThanOrEqual(1n);
     });
 
     it("should reject or return empty when reading beyond watermark", async () => {
