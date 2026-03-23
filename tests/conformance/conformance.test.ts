@@ -7,7 +7,7 @@
  * Configuration via environment variables:
  *   CONFORMANCE_TRANSPORT   "ws" (default) | "tcp"
  *   CONFORMANCE_AUTH_MODE   "anonymous" (default) | "valid_jwt"
- *   CONFORMANCE_OUTPUT      path to write JSON results (default: ./conformance-results.json)
+ *   CONFORMANCE_OUTPUT      path to write JSON results (default: ./artifacts/conformance-results.json)
  *
  * Broker address resolved via the same env vars as integration tests
  * (FITZ_BROKER_WS_ADDR / FITZ_BROKER_TCP_ADDR / FITZ_BROKER_ANON_* / FITZ_BROKER_AUTH_*).
@@ -17,8 +17,8 @@
  *   CONFORMANCE_TRANSPORT=tcp CONFORMANCE_AUTH_MODE=valid_jwt npm run test:conformance
  */
 import { afterAll, describe, expect, it } from "vitest";
-import { writeFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
 
 import { Client } from "../../src/client/client.js";
 import type { ClientConfig } from "../../src/core/types.js";
@@ -51,7 +51,7 @@ const TRANSPORT = (process.env["CONFORMANCE_TRANSPORT"] ??
 const AUTH_MODE = (process.env["CONFORMANCE_AUTH_MODE"] ??
   "anonymous") as AuthMode;
 const OUTPUT_PATH = resolve(
-  process.env["CONFORMANCE_OUTPUT"] ?? "./conformance-results.json",
+  process.env["CONFORMANCE_OUTPUT"] ?? "./artifacts/conformance-results.json",
 );
 const CLIENT_NAME = "fitz-ts";
 const SECRET = process.env["FITZ_BROKER_JWT_HMAC_SECRET"] ?? "test-secret-key";
@@ -1011,6 +1011,7 @@ describe(`Fitz conformance — fitz-ts [transport=${TRANSPORT}, auth=${AUTH_MODE
 
     const json = JSON.stringify(aggregate, null, 2);
     try {
+      mkdirSync(dirname(OUTPUT_PATH), { recursive: true });
       writeFileSync(OUTPUT_PATH, json, "utf-8");
       console.log(`\nConformance results written to: ${OUTPUT_PATH}`);
       console.log(

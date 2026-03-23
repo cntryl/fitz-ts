@@ -1,11 +1,13 @@
 node_modules/
 dist/
 build/
+artifacts/
 .turbo/
 coverage/
 .nyc_output/
 .vitest/
 *.tsbuildinfo
+conformance-results.json
 .env
 .env.local
 .env.*.local

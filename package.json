@@ -14,11 +14,13 @@
       "require": "./dist/index.js"
     }
   },
+  "sideEffects": false,
   "files": [
     "dist"
   ],
   "scripts": {
     "build": "vite build",
+    "pack:smoke": "npm pack --pack-destination ./artifacts",
     "test": "npm run test:unit && npm run test:integration",
     "test:spec": "npm run test:conformance",
     "test:unit": "vitest run --config vitest.unit.config.ts",
@@ -41,15 +43,27 @@
     "vitest": "^4.1.0",
     "ws": "^8.19.0"
   },
-  "peerDependencies": {
-    "typescript": "^5.0 || ^4.9"
-  },
   "engines": {
     "node": ">=16.0.0"
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/cntryl/fitz-ts.git",
-    "directory": "/"
+    "url": "https://github.com/cntryl/fitz-ts.git"
+  },
+  "homepage": "https://github.com/cntryl/fitz-ts#readme",
+  "bugs": {
+    "url": "https://github.com/cntryl/fitz-ts/issues"
+  },
+  "keywords": [
+    "fitz",
+    "distributed-systems",
+    "websocket",
+    "tcp",
+    "rpc",
+    "queue",
+    "stream"
+  ],
+  "publishConfig": {
+    "access": "public"
   }
 }
