@@ -43,9 +43,7 @@ Fast local checks:
 
 ```bash
 npm ci
-npm run lint
-npm run build
-npm run test:unit
+npm run verify
 ```
 
 Broker-backed verification:

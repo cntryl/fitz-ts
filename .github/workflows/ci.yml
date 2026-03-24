@@ -148,7 +148,6 @@ jobs:
 
   integration:
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
