@@ -139,9 +139,9 @@ export class QueueClient extends DomainClient {
         }
 
         const notification: AvailabilityNotification = { route };
-        Promise.resolve(subscription.handler(notification)).catch(
-          () => undefined,
-        );
+        this.connection.dispatchAsyncHandler(async () => {
+          await subscription.handler(notification);
+        });
       } catch {
         // Best-effort notification dispatch.
       }

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { FrameCodec } from "../../src/frame/codec";
-import { ConnectionError } from "../../src/core/errors";
+import { AuthenticationError, ConnectionError } from "../../src/core/errors";
 import { MSG_KV_BEGIN } from "../../src/frame/types";
 import { createTransport } from "../../src/transport/factory";
 import { sleep } from "./helpers";
@@ -51,6 +51,24 @@ describe("Transport integration", () => {
       }
 
       await expect(f.connect()).rejects.toBeTruthy();
+    });
+
+    it("should transition to closed and never auto-reconnect after auth rejection", async () => {
+      const f = new TestFixture(transport, "invalid_signature");
+
+      await expect(
+        f.connect({
+          reconnect: {
+            enabled: true,
+            maxAttempts: 3,
+            backoffMs: 10,
+            maxBackoffMs: 20,
+          },
+        }),
+      ).rejects.toBeInstanceOf(AuthenticationError);
+
+      expect(f.client().getState()).toBe("CLOSED");
+      expect(f.client().isConnected()).toBe(false);
     });
   });
 

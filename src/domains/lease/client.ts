@@ -118,9 +118,9 @@ export class LeaseClient extends DomainClient {
         }
 
         const notification: ChangeNotification = { route };
-        Promise.resolve(subscription.handler(notification)).catch(
-          () => undefined,
-        );
+        this.connection.dispatchAsyncHandler(async () => {
+          await subscription.handler(notification);
+        });
       } catch {
         // Best-effort notification dispatch.
       }

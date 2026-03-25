@@ -2,7 +2,12 @@
  * Main Fitz client facade.
  */
 
-import { ClientConfig, ConnectionState, TokenProvider } from "../core/types";
+import {
+  ClientConfig,
+  ConnectionState,
+  FitzObservability,
+  TokenProvider,
+} from "../core/types";
 import { Connection } from "./connection";
 import { createTransport } from "../transport/factory";
 import { ConnectionError } from "../core/errors";
@@ -16,9 +21,10 @@ import { ScheduleClient } from "../domains/schedule/client";
 
 export class Client {
   private readonly config: Required<
-    Omit<ClientConfig, "tokenProvider" | "reconnect">
+    Omit<ClientConfig, "tokenProvider" | "reconnect" | "asyncHandlers">
   > &
-    Pick<ClientConfig, "tokenProvider" | "reconnect">;
+    Pick<ClientConfig, "tokenProvider" | "reconnect" | "asyncHandlers">;
+  private readonly observability: FitzObservability | undefined;
   private connection: Connection | null = null;
   private kvClient: KvClient | null = null;
   private queueClient: QueueClient | null = null;
@@ -29,6 +35,7 @@ export class Client {
   private scheduleClient: ScheduleClient | null = null;
 
   constructor(config: ClientConfig) {
+    this.observability = config.observability;
     this.config = {
       timeout: 30000,
       transport: "auto",
@@ -40,6 +47,11 @@ export class Client {
         backoffMs: 250,
         maxBackoffMs: 5000,
         ...(config.reconnect ?? {}),
+      },
+      asyncHandlers: {
+        maxConcurrency: Infinity,
+        timeoutMs: 30000,
+        ...(config.asyncHandlers ?? {}),
       },
       ...config,
     };
@@ -67,6 +79,8 @@ export class Client {
         timeout: this.config.timeout,
         authSettleDelayMs: this.config.authSettleDelayMs,
         reconnect: this.config.reconnect,
+        observability: this.observability,
+        asyncHandlers: this.config.asyncHandlers,
       },
     );
 
@@ -167,6 +181,7 @@ export class Client {
     if (!this.connection) {
       throw new ConnectionError(
         "Not connected to Fitz server. Call connect() first.",
+        { state: this.getState() },
       );
     }
 

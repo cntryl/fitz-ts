@@ -27,7 +27,7 @@ export class KvClient extends DomainClient {
     const payload = KvCodec.encodeBegin(
       route,
       mode,
-      options.durability ?? "Async",
+      options.durability ?? "Sync",
     );
     const response = await this.requestFrame(MSG_KV_BEGIN, payload);
     const decoded = KvCodec.decodeBeginResponse(response);

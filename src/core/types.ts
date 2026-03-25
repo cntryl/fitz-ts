@@ -6,6 +6,65 @@ export type TransportType = "ws" | "tcp" | "auto";
 
 export type TokenProvider = () => string | Promise<string>;
 
+export type FitzLogLevel = "debug" | "info" | "warn" | "error";
+
+export interface FitzLogger {
+  log(
+    level: FitzLogLevel,
+    event: string,
+    fields?: Record<string, unknown>,
+  ): void;
+}
+
+export interface FitzTracer {
+  startSpan(name: string, attributes?: Record<string, unknown>): FitzSpan;
+}
+
+export interface FitzSpan {
+  setAttribute(key: string, value: unknown): void;
+  recordException(error: unknown): void;
+  end(): void;
+}
+
+export interface FitzMeter {
+  counter(
+    name: string,
+    value: number,
+    attributes?: Record<string, unknown>,
+  ): void;
+  histogram(
+    name: string,
+    value: number,
+    attributes?: Record<string, unknown>,
+  ): void;
+  gauge?(
+    name: string,
+    value: number,
+    attributes?: Record<string, unknown>,
+  ): void;
+}
+
+export interface FitzLifecycleEvent {
+  event: string;
+  state: ConnectionState;
+  transport?: string;
+  url?: string;
+  attempt?: number;
+  error?: string;
+}
+
+export interface FitzObservability {
+  logger?: FitzLogger;
+  tracer?: FitzTracer;
+  meter?: FitzMeter;
+  onLifecycleEvent?: (event: FitzLifecycleEvent) => void;
+}
+
+export interface AsyncHandlerOptions {
+  maxConcurrency?: number;
+  timeoutMs?: number;
+}
+
 export interface ReconnectOptions {
   enabled?: boolean;
   maxAttempts?: number;
@@ -21,6 +80,8 @@ export interface ClientConfig {
   reconnect?: ReconnectOptions;
   maxFrameSize?: number;
   authSettleDelayMs?: number;
+  observability?: FitzObservability;
+  asyncHandlers?: AsyncHandlerOptions;
 }
 
 export type TxMode = "ReadOnly" | "ReadWrite";
@@ -48,6 +109,7 @@ export class Deferred<T = unknown> {
 export enum ConnectionState {
   Disconnected = "DISCONNECTED",
   Connecting = "CONNECTING",
+  Connected = "CONNECTED",
   Authenticating = "AUTHENTICATING",
   Authenticated = "AUTHENTICATED",
   Reconnecting = "RECONNECTING",

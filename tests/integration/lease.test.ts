@@ -15,8 +15,7 @@ describe("Lease integration", () => {
         .lease()
         .acquire(f.uniqueRoute("lease"), 30);
       expect(lease).toBeTruthy();
-      expect(lease.token).toBeGreaterThan(0n);
-      expect(lease.expiresAt).toBeGreaterThan(
+      expect(lease.getExpiry()).toBeGreaterThan(
         BigInt(Math.floor(Date.now() / 1000)),
       );
     });
@@ -29,7 +28,9 @@ describe("Lease integration", () => {
 
       const route = f1.uniqueRoute("lease");
       const lease = await f1.client().lease().acquire(route, 30);
-      expect(lease.token).toBeGreaterThan(0n);
+      expect(lease.getExpiry()).toBeGreaterThan(
+        BigInt(Math.floor(Date.now() / 1000)),
+      );
 
       await expect(f2.client().lease().acquire(route, 30)).rejects.toBeTruthy();
     });
@@ -42,11 +43,11 @@ describe("Lease integration", () => {
         .client()
         .lease()
         .acquire(f.uniqueRoute("lease"), 10);
-      const originalExpiry = lease.expiresAt;
+      const originalExpiry = lease.getExpiry();
       const newExpiry = await lease.extend(60);
 
       expect(newExpiry).toBeGreaterThan(originalExpiry);
-      expect(lease.expiresAt).toBe(newExpiry);
+      expect(lease.getExpiry()).toBe(newExpiry);
     });
 
     it("should reject renew when token does not match", async () => {
@@ -58,7 +59,7 @@ describe("Lease integration", () => {
         .lease()
         .acquire(f.uniqueRoute("lease"), 30);
       await expect(
-        lease.extendWithToken(lease.token + 1n, 60),
+        lease.testOnlyExtendWithToken(lease.testOnlyInvalidToken(), 60),
       ).rejects.toBeTruthy();
     });
 
@@ -71,7 +72,9 @@ describe("Lease integration", () => {
       await lease.release();
 
       const reacquired = await f.client().lease().acquire(route, 30);
-      expect(reacquired.token).toBeGreaterThan(0n);
+      expect(reacquired.getExpiry()).toBeGreaterThan(
+        BigInt(Math.floor(Date.now() / 1000)),
+      );
     });
 
     it("should reject release when token does not match", async () => {
@@ -83,7 +86,7 @@ describe("Lease integration", () => {
         .lease()
         .acquire(f.uniqueRoute("lease"), 30);
       await expect(
-        lease.releaseWithToken(lease.token + 1n),
+        lease.testOnlyReleaseWithToken(lease.testOnlyInvalidToken()),
       ).rejects.toBeTruthy();
     });
 
@@ -93,12 +96,16 @@ describe("Lease integration", () => {
 
       const route = f.uniqueRoute("lease");
       const lease = await f.client().lease().acquire(route, 2);
-      expect(lease.token).toBeGreaterThan(0n);
+      expect(lease.getExpiry()).toBeGreaterThan(
+        BigInt(Math.floor(Date.now() / 1000)),
+      );
 
       await sleep(3000);
 
       const reacquired = await f.client().lease().acquire(route, 30);
-      expect(reacquired.token).toBeGreaterThan(0n);
+      expect(reacquired.getExpiry()).toBeGreaterThan(
+        BigInt(Math.floor(Date.now() / 1000)),
+      );
     });
 
     it("should query lease status for an existing lease", async () => {

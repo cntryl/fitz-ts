@@ -4,6 +4,7 @@
  */
 
 import { BufferWriter, BufferReader } from "../../core/buffer";
+import { ProtocolError } from "../../core/errors";
 import {
   InboundRequest,
   SubscribeResponse,
@@ -17,16 +18,16 @@ export class RpcCodec {
    */
   static generateCorrelationId(): Uint8Array {
     const correlationId = new Uint8Array(16);
-    if (typeof window !== "undefined" && window.crypto) {
-      window.crypto.getRandomValues(correlationId);
-    } else if (typeof globalThis !== "undefined" && globalThis.crypto) {
-      globalThis.crypto.getRandomValues(correlationId);
-    } else {
-      // Fallback for older environments
-      for (let i = 0; i < 16; i++) {
-        correlationId[i] = Math.floor(Math.random() * 256);
-      }
+    const cryptoProvider = globalThis.crypto;
+    if (!cryptoProvider?.getRandomValues) {
+      throw new ProtocolError(
+        "Cryptographic randomness is required for RPC correlation IDs",
+        undefined,
+        { operation: "RPC_GENERATE_CORRELATION_ID" },
+      );
     }
+
+    cryptoProvider.getRandomValues(correlationId);
     return correlationId;
   }
 
@@ -57,7 +58,9 @@ export class RpcCodec {
    */
   static decodeRequestResponse(payload: Uint8Array): { status: number } {
     if (payload.length === 0) {
-      throw new Error("Empty REQUEST response");
+      throw new ProtocolError("Empty REQUEST response", undefined, {
+        operation: "RPC_REQUEST",
+      });
     }
     const reader = new BufferReader(payload);
     const status = reader.readU8();
@@ -99,7 +102,11 @@ export class RpcCodec {
 
     const corrLen = reader.readU32BE();
     if (corrLen !== 16) {
-      throw new Error(`Invalid correlation ID length: ${corrLen}, expected 16`);
+      throw new ProtocolError(
+        `Invalid correlation ID length: ${corrLen}, expected 16`,
+        undefined,
+        { correlationLength: corrLen, expectedLength: 16 },
+      );
     }
     const correlationId = reader.readBytes(corrLen);
 
@@ -131,7 +138,9 @@ export class RpcCodec {
    */
   static decodeSubscribeWorkerResponse(payload: Uint8Array): SubscribeResponse {
     if (payload.length === 0) {
-      throw new Error("Empty SUBSCRIBE_WORKER response");
+      throw new ProtocolError("Empty SUBSCRIBE_WORKER response", undefined, {
+        operation: "RPC_SUBSCRIBE_WORKER",
+      });
     }
     const reader = new BufferReader(payload);
     const status = reader.readU8();
@@ -155,7 +164,9 @@ export class RpcCodec {
     payload: Uint8Array,
   ): UnsubscribeResponse {
     if (payload.length === 0) {
-      throw new Error("Empty UNSUBSCRIBE_WORKER response");
+      throw new ProtocolError("Empty UNSUBSCRIBE_WORKER response", undefined, {
+        operation: "RPC_UNSUBSCRIBE_WORKER",
+      });
     }
     const reader = new BufferReader(payload);
     const status = reader.readU8();
@@ -171,7 +182,11 @@ export class RpcCodec {
 
     const corrLen = reader.readU32BE();
     if (corrLen !== 16) {
-      throw new Error(`Invalid correlation ID length: ${corrLen}, expected 16`);
+      throw new ProtocolError(
+        `Invalid correlation ID length: ${corrLen}, expected 16`,
+        undefined,
+        { correlationLength: corrLen, expectedLength: 16 },
+      );
     }
     const correlationId = reader.readBytes(corrLen);
 

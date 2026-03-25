@@ -20,12 +20,17 @@ import { SliceIterator, AsyncIterableIterator } from "../../core/iterator";
 
 export class KvTransaction {
   private closed = false;
+  private readonly unsubscribeDisconnect: () => void;
 
   constructor(
     private readonly connection: Connection,
     private readonly route: string,
     private readonly txId: bigint,
-  ) {}
+  ) {
+    this.unsubscribeDisconnect = this.connection.onDisconnect(() => {
+      this.closed = true;
+    });
+  }
 
   async put(key: Uint8Array, value: Uint8Array): Promise<void> {
     this.ensureOpen();
@@ -90,6 +95,7 @@ export class KvTransaction {
   async commit(): Promise<void> {
     this.ensureOpen();
     this.closed = true;
+    this.unsubscribeDisconnect();
     const payload = KvCodec.encodeCommit(this.txId, this.route);
     const response = await this.connection.request(MSG_KV_COMMIT, payload);
     this.checkStatus(KvCodec.decodeStatusResponse(response).status, "COMMIT");
@@ -101,6 +107,7 @@ export class KvTransaction {
     }
 
     this.closed = true;
+    this.unsubscribeDisconnect();
     const payload = KvCodec.encodeRollback(this.txId, this.route);
     try {
       const response = await this.connection.request(MSG_KV_ROLLBACK, payload);

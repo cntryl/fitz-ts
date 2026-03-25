@@ -10,6 +10,7 @@
  */
 
 import { BufferReader } from "../core/buffer";
+import { ProtocolError } from "../core/errors";
 
 export interface ParsedResponse {
   success: boolean;
@@ -24,7 +25,9 @@ export interface ParsedResponse {
  */
 export function parseStandardResponse(payload: Uint8Array): ParsedResponse {
   if (payload.length === 0) {
-    throw new Error("Response payload is empty");
+    throw new ProtocolError("Response payload is empty", undefined, {
+      payloadLength: 0,
+    });
   }
 
   const reader = new BufferReader(payload);
@@ -50,7 +53,9 @@ export function parseStandardResponse(payload: Uint8Array): ParsedResponse {
   }
 
   // Unknown status code
-  throw new Error(`Unknown response status: ${status}`);
+  throw new ProtocolError(`Unknown response status: ${status}`, status, {
+    status,
+  });
 }
 
 /**
@@ -63,7 +68,14 @@ export function assertSuccess(
 ): Uint8Array {
   const result = parseStandardResponse(payload);
   if (!result.success) {
-    throw new Error(`${operation} failed: ${result.error || "Unknown error"}`);
+    throw new ProtocolError(
+      `${operation} failed: ${result.error || "Unknown error"}`,
+      1,
+      {
+        operation,
+        error: result.error || "Unknown error",
+      },
+    );
   }
   return result.data;
 }

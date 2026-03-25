@@ -39,8 +39,8 @@ export type StreamCommitHandler = (
 
 export class StreamSubscription {
   constructor(
-    public readonly subId: bigint,
-    public readonly pattern: string,
+    private readonly subId: bigint,
+    private readonly pattern: string,
     private readonly unsubscribeFn: (pattern: string) => Promise<void>,
   ) {}
 
@@ -74,11 +74,6 @@ export interface StreamSession {
    * Check if session is still open
    */
   isOpen(): boolean;
-
-  /**
-   * Get the session ID.
-   */
-  getSessionId(): bigint;
 }
 
 /**

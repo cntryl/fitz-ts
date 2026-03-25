@@ -98,6 +98,7 @@ export class TestFixture {
   private cleanupFns: Array<() => void | Promise<void>> = [];
   private clientInstance: Client | null = null;
   private brokerAddr: string;
+  private tokenProviderOverride: (() => string | Promise<string>) | null = null;
 
   constructor(
     public readonly transport: TransportType,
@@ -118,6 +119,10 @@ export class TestFixture {
     this.brokerAddr = addr;
   }
 
+  setTokenProvider(provider: () => string | Promise<string>): void {
+    this.tokenProviderOverride = provider;
+  }
+
   addCleanup(fn: () => void | Promise<void>): void {
     this.cleanupFns.push(fn);
   }
@@ -129,7 +134,8 @@ export class TestFixture {
     this.clientInstance = new Client({
       url: this.brokerAddr,
       transport: this.transport,
-      tokenProvider: tokenProviderForMode(this.authMode),
+      tokenProvider:
+        this.tokenProviderOverride ?? tokenProviderForMode(this.authMode),
       timeout: 30000,
       ...overrides,
     });

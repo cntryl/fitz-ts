@@ -17,10 +17,14 @@ export class StreamSessionImpl implements StreamSession {
   private readonly connection: Connection;
   private readonly sessionId: bigint;
   private closed = false;
+  private readonly unsubscribeDisconnect: () => void;
 
   constructor(connection: Connection, _route: string, sessionId: bigint) {
     this.connection = connection;
     this.sessionId = sessionId;
+    this.unsubscribeDisconnect = this.connection.onDisconnect(() => {
+      this.closed = true;
+    });
   }
 
   /**
@@ -45,6 +49,7 @@ export class StreamSessionImpl implements StreamSession {
   async commit(): Promise<void> {
     this.ensureOpen();
     this.closed = true;
+    this.unsubscribeDisconnect();
 
     const payload = StreamCodec.encodeCommit(this.sessionId);
     const response = await this.connection.request(MSG_STREAM_COMMIT, payload);
@@ -61,6 +66,7 @@ export class StreamSessionImpl implements StreamSession {
       return;
     }
     this.closed = true;
+    this.unsubscribeDisconnect();
 
     const payload = StreamCodec.encodeRollback(this.sessionId);
     try {
@@ -80,13 +86,6 @@ export class StreamSessionImpl implements StreamSession {
    */
   isOpen(): boolean {
     return !this.closed;
-  }
-
-  /**
-   * Get the session ID.
-   */
-  getSessionId(): bigint {
-    return this.sessionId;
   }
 
   private ensureOpen(): void {

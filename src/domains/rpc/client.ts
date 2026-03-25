@@ -426,19 +426,24 @@ export class RpcClient extends DomainClient {
 
     const writer = new RpcResponseWriter(this.connection, req.correlationId);
 
-    Promise.resolve(handler(req, writer)).catch(async (error) => {
-      if (isBenignShutdownError(error, this.connection)) {
-        return;
-      }
-
-      const message = error instanceof Error ? error.message : "Handler error";
+    this.connection.dispatchAsyncHandler(async () => {
       try {
-        await writer.send(
-          new TextEncoder().encode(`Handler error: ${message}`),
-          true,
-        );
-      } catch {
-        // Best-effort error response.
+        await handler(req, writer);
+      } catch (error) {
+        if (isBenignShutdownError(error, this.connection)) {
+          return;
+        }
+
+        const message =
+          error instanceof Error ? error.message : "Handler error";
+        try {
+          await writer.send(
+            new TextEncoder().encode(`Handler error: ${message}`),
+            true,
+          );
+        } catch {
+          // Best-effort error response.
+        }
       }
     });
   }

@@ -22,10 +22,7 @@ import { dirname, resolve } from "node:path";
 
 import { Client } from "../../src/client/client.js";
 import type { ClientConfig } from "../../src/core/types.js";
-import {
-  AuthenticationError,
-  TimeoutError,
-} from "../../src/core/errors.js";
+import { AuthenticationError, TimeoutError } from "../../src/core/errors.js";
 
 import {
   ResultCollector,

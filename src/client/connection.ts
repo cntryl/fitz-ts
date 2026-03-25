@@ -7,7 +7,13 @@
  */
 
 import { Transport } from "../transport/types";
-import { ConnectionState, Deferred, TokenProvider } from "../core/types";
+import {
+  AsyncHandlerOptions,
+  ConnectionState,
+  Deferred,
+  FitzObservability,
+  TokenProvider,
+} from "../core/types";
 import { FrameCodec, FrameParser } from "../frame/codec";
 import { MSG_CONNECT } from "../frame/types";
 import {
@@ -26,6 +32,8 @@ export interface ConnectionOptions {
     maxBackoffMs?: number;
   };
   authSettleDelayMs?: number;
+  observability?: FitzObservability;
+  asyncHandlers?: AsyncHandlerOptions;
 }
 
 export interface ConnectOptions {
@@ -34,9 +42,60 @@ export interface ConnectOptions {
 
 type TransportFactory = () => Transport;
 type ReconnectListener = () => void | Promise<void>;
+type DisconnectListener = () => void;
 
 const sleep = (ms: number) =>
   new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+class AsyncHandlerDispatcher {
+  private activeCount = 0;
+  private readonly queue: Array<() => void> = [];
+
+  constructor(
+    private readonly maxConcurrency: number,
+    private readonly timeoutMs: number,
+    private readonly onError: (error: unknown) => void,
+  ) {}
+
+  dispatch(task: () => void | Promise<void>): void {
+    const run = () => {
+      this.activeCount += 1;
+      void this.runTask(task).finally(() => {
+        this.activeCount -= 1;
+        this.flush();
+      });
+    };
+
+    if (this.activeCount < this.maxConcurrency) {
+      run();
+      return;
+    }
+
+    this.queue.push(run);
+  }
+
+  private flush(): void {
+    if (this.activeCount >= this.maxConcurrency) {
+      return;
+    }
+
+    const next = this.queue.shift();
+    next?.();
+  }
+
+  private async runTask(task: () => void | Promise<void>): Promise<void> {
+    try {
+      await Promise.race([
+        Promise.resolve().then(task),
+        sleep(this.timeoutMs).then(() => {
+          throw new Error(`Async handler timeout after ${this.timeoutMs}ms`);
+        }),
+      ]);
+    } catch (error) {
+      this.onError(error);
+    }
+  }
+}
 
 function abortError(): Error {
   const error = new Error("The operation was aborted");
@@ -61,15 +120,20 @@ export class Connection {
   private readonly reconnectMaxAttempts: number;
   private readonly reconnectBackoffMs: number;
   private readonly reconnectMaxBackoffMs: number;
-  private readonly multiplexer = new Multiplexer();
+  private readonly observability?: FitzObservability;
+  private readonly multiplexer: Multiplexer;
+  private readonly asyncHandlerDispatcher: AsyncHandlerDispatcher;
   private readonly frameParser = new FrameParser();
   private readonly reconnectListeners = new Set<ReconnectListener>();
+  private readonly disconnectListeners = new Set<DisconnectListener>();
+  private writeChain: Promise<void> = Promise.resolve();
 
   private receiveLoop: Promise<void> | null = null;
   private receiveLoopAbort = false;
   private closeRequested = false;
   private reconnectPromise: Promise<void> | null = null;
   private authOutcome: Deferred<void> | null = null;
+  private authRejected = false;
 
   constructor(
     transportFactory: TransportFactory,
@@ -84,10 +148,25 @@ export class Connection {
     this.reconnectMaxAttempts = options.reconnect?.maxAttempts ?? Infinity;
     this.reconnectBackoffMs = options.reconnect?.backoffMs ?? 250;
     this.reconnectMaxBackoffMs = options.reconnect?.maxBackoffMs ?? 5000;
+    this.observability = options.observability;
+    this.asyncHandlerDispatcher = new AsyncHandlerDispatcher(
+      options.asyncHandlers?.maxConcurrency ?? Infinity,
+      options.asyncHandlers?.timeoutMs ?? this.timeout,
+      (error) => {
+        this.log("warn", "fitz.connection.handler_failed", {
+          error: this.describeError(error),
+        });
+      },
+    );
+    this.multiplexer = new Multiplexer({
+      meter: this.observability?.meter,
+      tracer: this.observability?.tracer,
+    });
   }
 
   async connect(options: ConnectOptions = {}): Promise<void> {
     this.closeRequested = false;
+    this.authRejected = false;
     await this.openAndAuthenticate(false, options.signal);
   }
 
@@ -99,9 +178,13 @@ export class Connection {
     this.closeRequested = true;
     this.receiveLoopAbort = true;
     this.setState(ConnectionState.Closed);
-    this.authOutcome?.reject(new ConnectionError("Connection closed"));
+    this.authOutcome?.reject(
+      new ConnectionError("Connection closed", { state: this.state }),
+    );
     this.authOutcome = null;
     this.multiplexer.setDisconnected();
+    this.emitDisconnect();
+    this.emitLifecycleEvent("closed");
 
     const receiveLoop = this.receiveLoop;
     this.receiveLoop = null;
@@ -129,10 +212,14 @@ export class Connection {
       return await this.multiplexer.request(
         messageType,
         frame,
-        (data) => transport.send(data),
+        (data) => this.sendSerialized(transport, data),
         this.timeout,
       );
     } catch (error) {
+      this.log("error", "fitz.connection.request_failed", {
+        messageType,
+        error: this.describeError(error),
+      });
       this.handlePossibleTransportFailure(error);
       throw error;
     }
@@ -144,8 +231,12 @@ export class Connection {
     const frame = FrameCodec.encodeFrame(messageType, requestPayload);
 
     try {
-      await transport.send(frame);
+      await this.sendSerialized(transport, frame);
     } catch (error) {
+      this.log("error", "fitz.connection.send_failed", {
+        messageType,
+        error: this.describeError(error),
+      });
       this.handlePossibleTransportFailure(error);
       throw error;
     }
@@ -176,8 +267,19 @@ export class Connection {
     };
   }
 
+  onDisconnect(listener: DisconnectListener): () => void {
+    this.disconnectListeners.add(listener);
+    return () => {
+      this.disconnectListeners.delete(listener);
+    };
+  }
+
   getMultiplexer(): Multiplexer {
     return this.multiplexer;
+  }
+
+  dispatchAsyncHandler(task: () => void | Promise<void>): void {
+    this.asyncHandlerDispatcher.dispatch(task);
   }
 
   getState(): ConnectionState {
@@ -203,12 +305,15 @@ export class Connection {
     this.setState(
       isReconnect ? ConnectionState.Reconnecting : ConnectionState.Connecting,
     );
+    this.emitLifecycleEvent(isReconnect ? "reconnect_start" : "connect_start");
 
     await this.transport.connect();
     throwIfAborted(signal);
     this.receiveLoop = this.startReceiveLoop();
 
+    this.setState(ConnectionState.Connected);
     this.setState(ConnectionState.Authenticating);
+    this.emitLifecycleEvent("auth_start");
     this.authOutcome = new Deferred<void>();
 
     try {
@@ -221,19 +326,33 @@ export class Connection {
       throwIfAborted(signal);
       this.authOutcome?.resolve();
       this.authOutcome = null;
-      this.setState(ConnectionState.Authenticated);
-      this.multiplexer.setConnected();
       if (isReconnect) {
         await this.restoreReconnectState();
       }
+      this.setState(ConnectionState.Authenticated);
+      this.multiplexer.setConnected();
+      this.emitLifecycleEvent(
+        isReconnect ? "reconnect_succeeded" : "connect_succeeded",
+      );
     } catch (error) {
       this.authOutcome = null;
       this.multiplexer.setDisconnected();
+      this.emitDisconnect();
       if (this.transport) {
         await this.transport.close().catch(() => undefined);
         this.transport = null;
       }
-      this.setState(ConnectionState.Disconnected);
+      const rejectedAuth =
+        error instanceof AuthenticationError ||
+        (this.state === ConnectionState.Authenticating && !isReconnect);
+      this.authRejected = rejectedAuth;
+      this.setState(
+        rejectedAuth ? ConnectionState.Closed : ConnectionState.Disconnected,
+      );
+      this.emitLifecycleEvent(
+        isReconnect ? "reconnect_failed" : "connect_failed",
+        error,
+      );
       throw error;
     }
   }
@@ -270,10 +389,18 @@ export class Connection {
 
   private async handleConnectionLoss(error: unknown): Promise<void> {
     this.multiplexer.setDisconnected();
+    this.emitDisconnect();
+    this.log("warn", "fitz.connection.lost", {
+      error: this.describeError(error),
+      state: this.state,
+    });
 
     if (this.state === ConnectionState.Authenticating && this.authOutcome) {
+      this.authRejected = true;
       this.authOutcome.reject(
-        new AuthenticationError(this.describeConnectionLoss(error)),
+        new AuthenticationError(this.describeConnectionLoss(error), {
+          state: this.state,
+        }),
       );
     }
 
@@ -282,7 +409,14 @@ export class Connection {
       return;
     }
 
+    if (this.authRejected) {
+      this.setState(ConnectionState.Closed);
+      this.emitLifecycleEvent("auth_rejected", error);
+      return;
+    }
+
     this.setState(ConnectionState.Disconnected);
+    this.emitLifecycleEvent("connection_lost", error);
 
     if (!this.reconnectEnabled) {
       return;
@@ -304,17 +438,24 @@ export class Connection {
     while (!this.closeRequested && attempts < this.reconnectMaxAttempts) {
       attempts += 1;
       this.setState(ConnectionState.Reconnecting);
+      this.emitLifecycleEvent("reconnect_scheduled", undefined, attempts);
 
       try {
         await sleep(delayMs);
         await this.openAndAuthenticate(true);
         return;
-      } catch {
+      } catch (error) {
+        this.log("warn", "fitz.connection.reconnect_retry", {
+          attempts,
+          delayMs,
+          error: this.describeError(error),
+        });
         delayMs = Math.min(delayMs * 2, this.reconnectMaxBackoffMs);
       }
     }
 
     this.setState(ConnectionState.Disconnected);
+    this.emitLifecycleEvent("reconnect_exhausted", undefined, attempts);
   }
 
   private async restoreReconnectState(): Promise<void> {
@@ -325,7 +466,7 @@ export class Connection {
 
   private ensureTransport(): Transport {
     if (!this.transport) {
-      throw new ConnectionError("No active transport");
+      throw new ConnectionError("No active transport", { state: this.state });
     }
     return this.transport;
   }
@@ -334,12 +475,78 @@ export class Connection {
     if (this.closeRequested || this.state !== ConnectionState.Authenticated) {
       throw new ConnectionError(
         `Cannot use connection while state is ${this.state}`,
+        { state: this.state },
       );
     }
   }
 
   private setState(newState: ConnectionState): void {
     this.state = newState;
+  }
+
+  private async sendSerialized(
+    transport: Transport,
+    data: Uint8Array,
+  ): Promise<void> {
+    const prior = this.writeChain;
+    let release!: () => void;
+    this.writeChain = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+
+    await prior;
+    try {
+      await transport.send(data);
+    } finally {
+      release();
+    }
+  }
+
+  private emitLifecycleEvent(
+    event: string,
+    error?: unknown,
+    attempt?: number,
+  ): void {
+    const payload = {
+      event,
+      state: this.state,
+      transport: this.transport?.constructor.name,
+      url: this.transport?.getUrl(),
+      attempt,
+      error: error ? this.describeError(error) : undefined,
+    };
+
+    this.observability?.onLifecycleEvent?.(payload);
+    this.log("info", `fitz.connection.${event}`, payload);
+    this.observability?.meter?.counter("fitz.connection.lifecycle", 1, {
+      event,
+      state: this.state,
+    });
+  }
+
+  private emitDisconnect(): void {
+    for (const listener of this.disconnectListeners) {
+      try {
+        listener();
+      } catch {
+        // Best-effort disconnect fanout.
+      }
+    }
+  }
+
+  private log(
+    level: "debug" | "info" | "warn" | "error",
+    event: string,
+    fields?: Record<string, unknown>,
+  ): void {
+    this.observability?.logger?.log(level, event, fields);
+  }
+
+  private describeError(error: unknown): string {
+    if (error instanceof Error) {
+      return error.message;
+    }
+    return String(error);
   }
 
   private handlePossibleTransportFailure(error: unknown): void {

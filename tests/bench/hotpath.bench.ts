@@ -1,5 +1,6 @@
 import { bench, describe } from "vitest";
 
+import { Multiplexer } from "../../src/client/multiplexer";
 import { FrameCodec } from "../../src/frame/codec";
 import { NoticeCodec } from "../../src/domains/notice/codec";
 import { KvCodec } from "../../src/domains/kv/codec";
@@ -15,6 +16,10 @@ const body = encoder.encode("benchmark-payload");
 const key = encoder.encode("bench-key");
 const txId = 42n;
 const leaseTtlSecs = 30;
+
+function buildResponseFrame(index: number): Uint8Array {
+  return encoder.encode(`response-${index}`);
+}
 
 describe("fitz-ts hotpath benchmarks", () => {
   bench("frame encode (small payload)", () => {
@@ -45,5 +50,43 @@ describe("fitz-ts hotpath benchmarks", () => {
       replyRoute,
       body,
     );
+  });
+
+  bench("rpc correlation id generation", () => {
+    RpcCodec.generateCorrelationId();
+  });
+
+  bench("multiplexer request/response round-trip", async () => {
+    const multiplexer = new Multiplexer();
+    multiplexer.setConnected();
+
+    const pending = multiplexer.request(302, body, async () => undefined, 1000);
+    multiplexer.dispatch(302, body);
+    await pending;
+  });
+
+  bench("multiplexer 1k in-flight FIFO drain", async () => {
+    const multiplexer = new Multiplexer();
+    multiplexer.setConnected();
+
+    const pending = Array.from({ length: 1000 }, (_, index) =>
+      multiplexer.request(
+        302,
+        buildResponseFrame(index),
+        async () => undefined,
+        5000,
+      ),
+    );
+
+    for (let index = 0; index < 1000; index += 1) {
+      multiplexer.dispatch(302, buildResponseFrame(index));
+    }
+
+    await Promise.all(pending);
+  });
+
+  bench("notice publish frame encode throughput", () => {
+    const payload = NoticeCodec.encodePublish(noticeRoute, body);
+    FrameCodec.encodeFrame(401, payload);
   });
 });

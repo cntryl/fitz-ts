@@ -1,6 +1,50 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { Multiplexer } from "../../../src/client/multiplexer";
+import type { FitzMeter, FitzSpan, FitzTracer } from "../../../src/core/types";
+
+class FakeSpan implements FitzSpan {
+  public ended = false;
+  public exceptions: unknown[] = [];
+
+  setAttribute(): void {}
+
+  recordException(error: unknown): void {
+    this.exceptions.push(error);
+  }
+
+  end(): void {
+    this.ended = true;
+  }
+}
+
+class FakeTracer implements FitzTracer {
+  public spans: FakeSpan[] = [];
+
+  startSpan(): FitzSpan {
+    const span = new FakeSpan();
+    this.spans.push(span);
+    return span;
+  }
+}
+
+class FakeMeter implements FitzMeter {
+  public counters: string[] = [];
+  public histograms: string[] = [];
+  public gauges: string[] = [];
+
+  counter(name: string): void {
+    this.counters.push(name);
+  }
+
+  histogram(name: string): void {
+    this.histograms.push(name);
+  }
+
+  gauge(name: string): void {
+    this.gauges.push(name);
+  }
+}
 
 describe("Multiplexer", () => {
   it("ignores optional broker replies without treating them as dropped", () => {
@@ -41,5 +85,54 @@ describe("Multiplexer", () => {
       responsesDropped: 1,
       responsesIgnored: 0,
     });
+  });
+
+  it("records tracing and metrics for successful requests", async () => {
+    const tracer = new FakeTracer();
+    const meter = new FakeMeter();
+    const multiplexer = new Multiplexer({ tracer, meter });
+    multiplexer.setConnected();
+
+    const request = multiplexer.request(
+      77,
+      new Uint8Array([1]),
+      async () => undefined,
+      100,
+    );
+
+    multiplexer.dispatch(77, new Uint8Array([2]));
+
+    await expect(request).resolves.toEqual(new Uint8Array([2]));
+    expect(tracer.spans).toHaveLength(1);
+    expect(tracer.spans[0].ended).toBe(true);
+    expect(meter.counters).toContain("fitz.request.started");
+    expect(meter.counters).toContain("fitz.response.received");
+    expect(meter.histograms).toContain("fitz.request.duration");
+  });
+
+  it("records timeout failures once and closes the span", async () => {
+    vi.useFakeTimers();
+    const tracer = new FakeTracer();
+    const meter = new FakeMeter();
+    const multiplexer = new Multiplexer({ tracer, meter });
+    multiplexer.setConnected();
+
+    const request = multiplexer.request(
+      88,
+      new Uint8Array([1]),
+      async () => undefined,
+      10,
+    );
+
+    const assertion = expect(request).rejects.toThrow(/Request timeout/);
+
+    await vi.advanceTimersByTimeAsync(10);
+    await assertion;
+    expect(tracer.spans).toHaveLength(1);
+    expect(tracer.spans[0].ended).toBe(true);
+    expect(tracer.spans[0].exceptions).toHaveLength(1);
+    expect(meter.counters).toContain("fitz.request.timeout");
+
+    vi.useRealTimers();
   });
 });

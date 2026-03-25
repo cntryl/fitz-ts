@@ -100,7 +100,9 @@ export class NoticeClient extends DomainClient {
           }
 
           const msg: NoticeMsg = { route, body };
-          Promise.resolve(subscription.handler(msg)).catch(() => undefined);
+          this.connection.dispatchAsyncHandler(async () => {
+            await subscription.handler(msg);
+          });
         } catch {
           // Best-effort notification dispatch.
         }

@@ -22,8 +22,8 @@ export type ChangeHandler = (notif: ChangeNotification) => Promise<void>;
  */
 export class LeaseSubscription {
   constructor(
-    public readonly subId: bigint,
-    public readonly pattern: string,
+    private readonly subId: bigint,
+    private readonly pattern: string,
     private readonly unsubscribeFn: (subId: bigint) => Promise<void>,
   ) {}
 
@@ -37,8 +37,8 @@ export class LeaseSubscription {
  * Provides renew() and release() methods
  */
 export class Lease {
-  public token: bigint;
-  public expiresAt: bigint;
+  private token: bigint;
+  private expiresAt: bigint;
 
   constructor(
     token: bigint,
@@ -56,11 +56,11 @@ export class Lease {
    * @returns New expiry timestamp (seconds since epoch)
    */
   async extend(ttlSecs: number): Promise<bigint> {
-    return this.extendWithToken(this.token, ttlSecs);
-  }
-
-  async extendWithToken(token: bigint, ttlSecs: number): Promise<bigint> {
-    const requestPayload = LeaseCodec.encodeExtend(this.route, token, ttlSecs);
+    const requestPayload = LeaseCodec.encodeExtend(
+      this.route,
+      this.token,
+      ttlSecs,
+    );
     const response = await this.connection.request(
       MSG_LEASE_RENEW,
       requestPayload,
@@ -83,10 +83,42 @@ export class Lease {
    * Release the lease
    */
   async release(): Promise<void> {
-    await this.releaseWithToken(this.token);
+    const payload = LeaseCodec.encodeRelease(this.route, this.token);
+    const response = await this.connection.request(MSG_LEASE_RELEASE, payload);
+    assertSuccess(response, "RELEASE");
   }
 
-  async releaseWithToken(token: bigint): Promise<void> {
+  getExpiry(): bigint {
+    return this.expiresAt;
+  }
+
+  testOnlyInvalidToken(): bigint {
+    return this.token + 1n;
+  }
+
+  async testOnlyExtendWithToken(
+    token: bigint,
+    ttlSecs: number,
+  ): Promise<bigint> {
+    const requestPayload = LeaseCodec.encodeExtend(this.route, token, ttlSecs);
+    const response = await this.connection.request(
+      MSG_LEASE_RENEW,
+      requestPayload,
+    );
+    const data = assertSuccess(response, "EXTEND");
+
+    if (data && data.length >= 8) {
+      const reader = new BufferReader(data);
+      const newToken = reader.readU64BE();
+      this.token = newToken;
+    }
+
+    const newExpiry = BigInt(Math.floor(Date.now() / 1000)) + BigInt(ttlSecs);
+    this.expiresAt = newExpiry;
+    return newExpiry;
+  }
+
+  async testOnlyReleaseWithToken(token: bigint): Promise<void> {
     const payload = LeaseCodec.encodeRelease(this.route, token);
     const response = await this.connection.request(MSG_LEASE_RELEASE, payload);
     assertSuccess(response, "RELEASE");

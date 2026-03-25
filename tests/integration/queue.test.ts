@@ -65,7 +65,7 @@ describe("Queue integration", () => {
 
       expect(items).toHaveLength(1);
       await expect(
-        items[0].completeWithToken(items[0].token + 1n),
+        items[0].testOnlyCompleteWithToken(items[0].testOnlyInvalidToken()),
       ).rejects.toBeTruthy();
     });
 

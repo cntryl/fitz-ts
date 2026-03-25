@@ -8,8 +8,18 @@
  * - No correlation IDs for most operations (except RPC streaming)
  */
 
-import { Deferred, ConnectionState } from "../core/types";
-import { TimeoutError } from "../core/errors";
+import {
+  Deferred,
+  ConnectionState,
+  FitzMeter,
+  FitzTracer,
+} from "../core/types";
+import { ConnectionError, TimeoutError } from "../core/errors";
+
+export interface MultiplexerObservability {
+  meter?: FitzMeter;
+  tracer?: FitzTracer;
+}
 
 export interface PendingRequest {
   deferred: Deferred<Uint8Array>;
@@ -56,6 +66,8 @@ export class Multiplexer {
   private responsesTotal = 0;
   private responsesDropped = 0;
   private responsesIgnored = 0;
+
+  constructor(private readonly observability: MultiplexerObservability = {}) {}
 
   private getOrCreatePendingQueue(messageType: number): PendingRequest[] {
     const existing = this.pending.get(messageType);
@@ -119,13 +131,29 @@ export class Multiplexer {
     send: (data: Uint8Array) => Promise<void>,
     timeoutMs: number,
   ): Promise<Uint8Array> {
+    const attributes = { messageType };
+    const span = this.observability.tracer?.startSpan(
+      "fitz.request",
+      attributes,
+    );
+    let spanEnded = false;
     const deferred = new Deferred<Uint8Array>();
 
     const timeout = setTimeout(() => {
       this.unregisterRequest(messageType, deferred);
+      this.observability.meter?.counter("fitz.request.timeout", 1, attributes);
+      span?.recordException(
+        new TimeoutError(
+          `Request timeout for message type ${messageType} after ${timeoutMs}ms`,
+          { messageType, timeoutMs },
+        ),
+      );
+      span?.end();
+      spanEnded = true;
       deferred.reject(
         new TimeoutError(
           `Request timeout for message type ${messageType} after ${timeoutMs}ms`,
+          { messageType, timeoutMs },
         ),
       );
     }, timeoutMs);
@@ -141,13 +169,40 @@ export class Multiplexer {
 
     this.requestsInFlight++;
     this.requestsTotal++;
+    this.observability.meter?.counter("fitz.request.started", 1, attributes);
+    this.observability.meter?.gauge?.(
+      "fitz.requests.in_flight",
+      this.requestsInFlight,
+      attributes,
+    );
 
     try {
       await send(frameData);
-      return await deferred.promise;
+      const payload = await deferred.promise;
+      const durationMs = Date.now() - request.sentAt.getTime();
+      span?.setAttribute("fitz.request.duration_ms", durationMs);
+      this.observability.meter?.histogram(
+        "fitz.request.duration",
+        durationMs,
+        attributes,
+      );
+      if (!spanEnded) {
+        span?.end();
+        spanEnded = true;
+      }
+      return payload;
     } catch (err) {
       clearTimeout(timeout);
       this.unregisterRequest(messageType, deferred);
+      this.observability.meter?.counter("fitz.request.failed", 1, {
+        ...attributes,
+        error: err instanceof Error ? err.name : "unknown",
+      });
+      if (!spanEnded) {
+        span?.recordException(err);
+        span?.end();
+        spanEnded = true;
+      }
       throw err;
     }
   }
@@ -166,6 +221,11 @@ export class Multiplexer {
     if (index >= 0) {
       queue.splice(index, 1);
       this.requestsInFlight--;
+      this.observability.meter?.gauge?.(
+        "fitz.requests.in_flight",
+        this.requestsInFlight,
+        { messageType },
+      );
       if (queue.length === 0) {
         this.pending.delete(messageType);
       }
@@ -190,6 +250,14 @@ export class Multiplexer {
       clearTimeout(request.timeout);
       this.requestsInFlight--;
       this.responsesTotal++;
+      this.observability.meter?.counter("fitz.response.received", 1, {
+        messageType,
+      });
+      this.observability.meter?.gauge?.(
+        "fitz.requests.in_flight",
+        this.requestsInFlight,
+        { messageType },
+      );
 
       request.deferred.resolve(payload);
       return;
@@ -213,15 +281,25 @@ export class Multiplexer {
         this.optionalResponses.set(messageType, optionalResponses - 1);
       }
       this.responsesIgnored++;
+      this.observability.meter?.counter("fitz.response.ignored", 1, {
+        messageType,
+      });
       return;
     }
 
     if (this.state !== ConnectionState.Authenticated) {
       this.responsesIgnored++;
+      this.observability.meter?.counter("fitz.response.ignored", 1, {
+        messageType,
+        state: this.state,
+      });
       return;
     }
 
     this.responsesDropped++;
+    this.observability.meter?.counter("fitz.response.dropped", 1, {
+      messageType,
+    });
   }
 
   /**
@@ -231,11 +309,16 @@ export class Multiplexer {
     for (const [, queue] of this.pending) {
       for (const request of queue) {
         clearTimeout(request.timeout);
-        request.deferred.reject(new Error("Connection closed or reset"));
+        request.deferred.reject(
+          new ConnectionError("Connection closed or reset", {
+            state: this.state,
+          }),
+        );
       }
     }
     this.pending.clear();
     this.requestsInFlight = 0;
+    this.observability.meter?.gauge?.("fitz.requests.in_flight", 0);
   }
 
   /**

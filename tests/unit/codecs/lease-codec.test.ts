@@ -5,6 +5,7 @@
 import { describe, it, expect } from "vitest";
 import { LeaseCodec } from "../../../src/domains/lease/codec";
 import { BufferWriter } from "../../../src/core/buffer";
+import { ProtocolError } from "../../../src/core/errors";
 import { testData as _testData } from "../helpers/test-utils";
 
 describe("LeaseCodec", () => {
@@ -46,6 +47,12 @@ describe("LeaseCodec", () => {
       // Assert
       expect(decoded.token).toBe(888n);
       expect(decoded.expiresAt).toBeUndefined(); // Computed by client
+    });
+
+    it("throws ProtocolError for short acquire responses", () => {
+      expect(() =>
+        LeaseCodec.decodeAcquireResponse(new Uint8Array([0, 0])),
+      ).toThrowError(ProtocolError);
     });
   });
 
@@ -105,6 +112,12 @@ describe("LeaseCodec", () => {
       // Assert
       expect(decoded.status).toBe(0);
       expect(decoded.subId).toBe(222n);
+    });
+
+    it("throws ProtocolError for short subscribe responses", () => {
+      expect(() =>
+        LeaseCodec.decodeSubscribeResponse(new Uint8Array([0])),
+      ).toThrowError(ProtocolError);
     });
   });
 

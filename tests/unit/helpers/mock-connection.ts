@@ -2,10 +2,8 @@
  * Mock connection for testing domain clients
  */
 
-import {
-  Connection,
-  NotificationHandler,
-} from "../../../src/client/connection";
+import { Connection } from "../../../src/client/connection";
+import { NotificationHandler } from "../../../src/client/multiplexer";
 
 type RequestHandler = (msgType: number, payload: Uint8Array) => Uint8Array;
 
@@ -94,6 +92,14 @@ export class MockConnection implements Connection {
    */
   isConnected(): boolean {
     return true;
+  }
+
+  onReconnect(): () => void {
+    return () => undefined;
+  }
+
+  onDisconnect(): () => void {
+    return () => undefined;
   }
 
   /**

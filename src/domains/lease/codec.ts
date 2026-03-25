@@ -4,6 +4,7 @@
  */
 
 import { BufferWriter, BufferReader } from "../../core/buffer";
+import { ProtocolError } from "../../core/errors";
 import {
   AcquireResponse,
   QueryResponse,
@@ -31,15 +32,20 @@ export class LeaseCodec {
    */
   static decodeAcquireResponse(payload: Uint8Array): AcquireResponse {
     if (payload.length < 10) {
-      throw new Error(
+      throw new ProtocolError(
         `ACQUIRE response too short: got ${payload.length} bytes, expected >= 10`,
+        undefined,
+        { operation: "LEASE_ACQUIRE", payloadLength: payload.length },
       );
     }
 
     const reader = new BufferReader(payload);
     const status = reader.readU8();
     if (status !== 0) {
-      throw new Error(`ACQUIRE failed with status ${status}`);
+      throw new ProtocolError(`ACQUIRE failed with status ${status}`, status, {
+        operation: "LEASE_ACQUIRE",
+        status,
+      });
     }
     reader.readU8(); // responseType: 0=Acquired, 1=AlreadyHeld
     const fencingToken = reader.readU64BE();
@@ -145,8 +151,10 @@ export class LeaseCodec {
    */
   static decodeSubscribeResponse(payload: Uint8Array): SubscribeResponse {
     if (payload.length < 9) {
-      throw new Error(
+      throw new ProtocolError(
         `SUBSCRIBE response too short: got ${payload.length} bytes, expected >= 9`,
+        undefined,
+        { operation: "LEASE_SUBSCRIBE", payloadLength: payload.length },
       );
     }
 

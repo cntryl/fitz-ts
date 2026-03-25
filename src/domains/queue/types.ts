@@ -13,10 +13,10 @@ import { MSG_QUEUE_EXTEND, MSG_QUEUE_COMPLETE } from "../../frame/types";
  * It carries the route and token required for `extend()` and `complete()`.
  */
 export class QueueItem {
-  readonly id: bigint;
-  readonly token: bigint;
   readonly body: Uint8Array;
 
+  private id: bigint;
+  private token: bigint;
   private readonly route: string;
   private readonly connection: Connection;
 
@@ -63,10 +63,33 @@ export class QueueItem {
    * Complete processing of this queue item and remove it from the queue.
    */
   async complete(): Promise<void> {
-    await this.completeWithToken(this.token);
+    const requestPayload = QueueCodec.encodeComplete(
+      this.route,
+      this.id,
+      this.token,
+    );
+    const response = await this.connection.request(
+      MSG_QUEUE_COMPLETE,
+      requestPayload,
+    );
+    const decoded = QueueCodec.decodeCompleteResponse(response);
+
+    if (decoded.status !== QueueStatus.Ok) {
+      const statusName =
+        QueueStatus[decoded.status] || `Unknown(${decoded.status})`;
+      throw new QueueError(
+        `COMPLETE failed: ${statusName}`,
+        statusName,
+        decoded.status,
+      );
+    }
   }
 
-  async completeWithToken(token: bigint): Promise<void> {
+  testOnlyInvalidToken(): bigint {
+    return this.token + 1n;
+  }
+
+  async testOnlyCompleteWithToken(token: bigint): Promise<void> {
     const requestPayload = QueueCodec.encodeComplete(
       this.route,
       this.id,
@@ -127,14 +150,6 @@ export class QueueSubscription {
    */
   async unsubscribe(): Promise<void> {
     await this.unsubscribeFn(this.subId);
-  }
-
-  getSubId(): bigint {
-    return this.subId;
-  }
-
-  getPattern(): string {
-    return this.pattern;
   }
 }
 

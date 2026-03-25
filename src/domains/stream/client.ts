@@ -231,9 +231,9 @@ export class StreamClient extends DomainClient {
             payload: decoded.parsedPayload,
           };
 
-          Promise.resolve(subscription.handler(notification)).catch(
-            () => undefined,
-          );
+          this.connection.dispatchAsyncHandler(async () => {
+            await subscription.handler(notification);
+          });
         } catch {
           // Best-effort notification dispatch.
         }

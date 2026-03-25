@@ -132,9 +132,9 @@ export class ScheduleClient extends DomainClient {
             const notification: ScheduleNotification = {
               payload: decoded.payload,
             };
-            Promise.resolve(subscription.handler(notification)).catch(
-              () => undefined,
-            );
+            this.connection.dispatchAsyncHandler(async () => {
+              await subscription.handler(notification);
+            });
             return;
           }
 
@@ -147,9 +147,9 @@ export class ScheduleClient extends DomainClient {
             payload: decoded.payload,
           };
           for (const subscription of subscriptions) {
-            Promise.resolve(subscription.handler(notification)).catch(
-              () => undefined,
-            );
+            this.connection.dispatchAsyncHandler(async () => {
+              await subscription.handler(notification);
+            });
           }
         } catch {
           // Best-effort notification dispatch.

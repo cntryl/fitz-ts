@@ -46,6 +46,14 @@ class FakeRpcConnection {
     return () => undefined;
   }
 
+  onDisconnect(): () => void {
+    return () => undefined;
+  }
+
+  dispatchAsyncHandler(task: () => void | Promise<void>): void {
+    void Promise.resolve().then(task);
+  }
+
   getState(): ConnectionState {
     return this.state;
   }
