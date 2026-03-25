@@ -4,7 +4,7 @@ This document tracks the benchmark evidence used to grade fitz-ts performance-re
 
 ## Scope
 
-Current benchmark coverage is implemented in `tests/bench/hotpath.bench.ts` and focuses on hot-path client-side costs that can be measured without broker/network noise:
+Current benchmark coverage is implemented in `benches/hotpath.bench.ts` and focuses on hot-path client-side costs that can be measured without broker/network noise:
 
 - frame encode and decode
 - notice publish encoding
@@ -19,7 +19,7 @@ Current benchmark coverage is implemented in `tests/bench/hotpath.bench.ts` and 
 ## Run
 
 ```bash
-npm run bench -- --run tests/bench/hotpath.bench.ts
+npm run bench -- --run benches/hotpath.bench.ts
 ```
 
 ## Evidence Policy
@@ -32,14 +32,14 @@ npm run bench -- --run tests/bench/hotpath.bench.ts
 ## Status
 
 - Benchmark suite exists and covers the primary hot paths needed for initial evidence.
-- Fresh benchmark run captured on 2026-03-25 with `npm run bench -- --run tests/bench/hotpath.bench.ts`.
+- Fresh benchmark run captured on 2026-03-25 with `npm run bench -- --run benches/hotpath.bench.ts`.
 - Numeric targets are still not formalized, so the evidence supports `PARTIAL` grading rather than `PASS` for the stronger performance requirements.
 
 ## Latest Captured Results
 
 Environment:
 
-- Command: `npm run bench -- --run tests/bench/hotpath.bench.ts`
+- Command: `npm run bench -- --run benches/hotpath.bench.ts`
 - Date: 2026-03-25
 - Runner: Vitest bench
 

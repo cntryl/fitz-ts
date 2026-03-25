@@ -22,6 +22,7 @@ import {
 } from "../../frame/types";
 import { ConnectionError, RpcError, TransportError } from "../../core/errors";
 import { ConnectionState } from "../../core/types";
+import { utf8Encoder } from "../../core/buffer";
 
 /**
  * `ResponseWriter` implementation used by worker handlers.
@@ -442,7 +443,7 @@ export class RpcClient extends DomainClient {
           error instanceof Error ? error.message : "Handler error";
         try {
           await writer.send(
-            new TextEncoder().encode(`Handler error: ${message}`),
+            utf8Encoder.encode(`Handler error: ${message}`),
             true,
           );
         } catch {

@@ -118,7 +118,7 @@ npm run test:unit
 docker compose -f ../fitz-go/compose.yml up -d
 npm run test:integration
 npm run test:conformance
-npm run bench -- --run tests/bench/hotpath.bench.ts
+npm run bench -- --run benches/hotpath.bench.ts
 docker compose -f ../fitz-go/compose.yml down --volumes
 npm run pack:smoke
 ```

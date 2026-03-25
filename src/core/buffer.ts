@@ -2,6 +2,19 @@
  * Buffer utilities for big-endian encoding
  */
 
+export const utf8Encoder = new TextEncoder();
+export const utf8Decoder = new TextDecoder();
+
+let utf8Scratch = new Uint8Array(256);
+
+function ensureUtf8ScratchCapacity(minCapacity: number): Uint8Array {
+  if (utf8Scratch.length < minCapacity) {
+    utf8Scratch = new Uint8Array(Math.max(utf8Scratch.length * 2, minCapacity));
+  }
+
+  return utf8Scratch;
+}
+
 export class BufferWriter {
   private buffer: Uint8Array;
   private offset: number = 0;
@@ -60,10 +73,15 @@ export class BufferWriter {
   }
 
   writeString(str: string): void {
-    const encoder = new TextEncoder();
-    const encoded = encoder.encode(str);
-    this.writeU32BE(encoded.length);
-    this.writeBytes(encoded);
+    if (str.length === 0) {
+      this.writeU32BE(0);
+      return;
+    }
+
+    const scratch = ensureUtf8ScratchCapacity(str.length * 4);
+    const { written } = utf8Encoder.encodeInto(str, scratch);
+    this.writeU32BE(written);
+    this.writeBytes(scratch.subarray(0, written));
   }
 
   writeRoute(route: string): void {
@@ -194,9 +212,12 @@ export class BufferReader {
 
   readString(): string {
     const length = this.readU32BE();
+    if (length === 0) {
+      return "";
+    }
+
     const bytes = this.readBytes(length);
-    const decoder = new TextDecoder();
-    return decoder.decode(bytes);
+    return utf8Decoder.decode(bytes);
   }
 
   readRoute(): string {

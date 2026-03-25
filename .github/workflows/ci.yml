@@ -123,7 +123,7 @@ jobs:
         env:
           CONFORMANCE_TRANSPORT: ${{ matrix.transport }}
           CONFORMANCE_AUTH_MODE: anonymous
-        run: npx vitest run --config vitest.conformance.config.ts --reporter=verbose -t "CS-002 auth failure"
+        run: npm run test:spec -- -t "CS-002 auth failure"
 
       - name: Enforce full conformance
         run: |

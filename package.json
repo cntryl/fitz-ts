@@ -20,6 +20,7 @@
   ],
   "scripts": {
     "build": "vp pack",
+    "inventory": "node scripts/generate-inventory.js",
     "pack:smoke": "npm pack --pack-destination ./artifacts",
     "test": "vp test run --config vitest.unit.config.ts && vp test run --config vitest.integration.config.ts",
     "test:spec": "vp test run --config vitest.conformance.config.ts --reporter=verbose",
@@ -29,12 +30,11 @@
     "test:integration": "vp test run --config vitest.integration.config.ts",
     "test:conformance": "vp test run --config vitest.conformance.config.ts --reporter=verbose",
     "test:watch": "vp test watch --config vitest.unit.config.ts",
-    "bench": "vp test bench",
+    "bench": "vp test bench --run",
     "lint": "vp lint src tests --deny-warnings",
     "lint:fix": "vp lint src tests --fix",
     "fmt": "vp fmt .",
-    "fmt:check": "vp fmt . --check",
-    "prepare": "vp config"
+    "fmt:check": "vp fmt . --check"
   },
   "devDependencies": {
     "@types/node": "^25.5.0",

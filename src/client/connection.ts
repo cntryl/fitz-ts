@@ -14,6 +14,7 @@ import {
   FitzObservability,
   TokenProvider,
 } from "../core/types";
+import { utf8Encoder } from "../core/buffer";
 import { FrameCodec, FrameParser } from "../frame/codec";
 import { MSG_CONNECT } from "../frame/types";
 import {
@@ -374,7 +375,7 @@ export class Connection {
     const token = await this.tokenProvider();
     const frame = FrameCodec.encodeFrame(
       MSG_CONNECT,
-      new TextEncoder().encode(token),
+      utf8Encoder.encode(token),
     );
     await this.ensureTransport().send(frame);
   }

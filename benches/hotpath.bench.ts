@@ -1,11 +1,11 @@
 import { bench, describe } from "vite-plus/test";
 
-import { Multiplexer } from "../../src/client/multiplexer";
-import { FrameCodec } from "../../src/frame/codec";
-import { NoticeCodec } from "../../src/domains/notice/codec";
-import { KvCodec } from "../../src/domains/kv/codec";
-import { LeaseCodec } from "../../src/domains/lease/codec";
-import { RpcCodec } from "../../src/domains/rpc/codec";
+import { Multiplexer } from "../src/client/multiplexer";
+import { FrameCodec } from "../src/frame/codec";
+import { NoticeCodec } from "../src/domains/notice/codec";
+import { KvCodec } from "../src/domains/kv/codec";
+import { LeaseCodec } from "../src/domains/lease/codec";
+import { RpcCodec } from "../src/domains/rpc/codec";
 
 const encoder = new TextEncoder();
 const route = "kv://bench/area/resource";
