@@ -14,8 +14,9 @@ export class DomainClient {
   protected async requestFrame(
     messageType: number,
     payload: Uint8Array,
+    signal?: AbortSignal,
   ): Promise<Uint8Array> {
-    return this.connection.request(messageType, payload);
+    return this.connection.request(messageType, payload, signal);
   }
 
   protected async sendFrame(

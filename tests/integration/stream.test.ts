@@ -80,7 +80,11 @@ describe("Stream integration", () => {
 
       const record = await f.client().stream().peek(route);
       expect(record).not.toBeNull();
-      expect(Buffer.from(record!.body).toString()).toBe("last-one");
+      if (!record) {
+        throw new Error("Expected a stream record");
+      }
+
+      expect(Buffer.from(record.body).toString()).toBe("last-one");
     });
 
     it("should return metadata for an existing stream", async () => {

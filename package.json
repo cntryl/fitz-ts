@@ -23,29 +23,30 @@
     "pack:smoke": "npm pack --pack-destination ./artifacts",
     "test": "npm run test:unit && npm run test:integration",
     "test:spec": "npm run test:conformance",
-    "verify": "npm run lint && npm run build && npm run test:unit && npm run test:integration && npm run test:conformance",
+    "verify": "npm run typecheck && npm run lint && npm run fmt:check && npm run build && npm run test:unit && npm run test:integration && npm run test:conformance",
+    "typecheck": "tsc -p tsconfig.json",
     "test:unit": "vitest run --config vitest.unit.config.ts",
     "test:integration": "vitest run --config vitest.integration.config.ts",
     "test:conformance": "vitest run --config vitest.conformance.config.ts --reporter=verbose",
     "test:watch": "vitest --config vitest.unit.config.ts",
     "bench": "vitest bench",
-    "lint": "eslint src tests",
-    "fmt": "prettier --write ."
+    "lint": "oxlint src tests --deny-warnings",
+    "lint:fix": "oxlint src tests --fix",
+    "fmt": "oxfmt .",
+    "fmt:check": "oxfmt . --check"
   },
   "devDependencies": {
     "@types/node": "^25.5.0",
-    "@typescript-eslint/eslint-plugin": "^8.57.0",
-    "@typescript-eslint/parser": "^8.57.0",
-    "eslint": "^10.0.3",
-    "prettier": "^3.8.1",
-    "terser": "^5.46.0",
-    "typescript": "^5.9.3",
-    "vite": "^8.0.0",
-    "vitest": "^4.1.0",
-    "ws": "^8.19.0"
+    "oxfmt": "^0.42.0",
+    "oxlint": "^1.57.0",
+    "terser": "^5.46.1",
+    "typescript": "^6.0.2",
+    "vite": "^8.0.2",
+    "vitest": "^4.1.1",
+    "ws": "^8.20.0"
   },
   "engines": {
-    "node": ">=16.0.0"
+    "node": ">=20.19.0"
   },
   "repository": {
     "type": "git",

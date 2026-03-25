@@ -39,7 +39,7 @@ export type StreamCommitHandler = (
 
 export class StreamSubscription {
   constructor(
-    private readonly subId: bigint,
+    public readonly subId: bigint,
     private readonly pattern: string,
     private readonly unsubscribeFn: (pattern: string) => Promise<void>,
   ) {}
@@ -58,17 +58,17 @@ export interface StreamSession {
    * Append a record to the stream.
    * Returns the assigned offset
    */
-  append(body: Uint8Array): Promise<bigint>;
+  append(body: Uint8Array, signal?: AbortSignal): Promise<bigint>;
 
   /**
    * Commit the write session and make appended records durable.
    */
-  commit(): Promise<void>;
+  commit(signal?: AbortSignal): Promise<void>;
 
   /**
    * Roll back and discard uncommitted appends.
    */
-  rollback(): Promise<void>;
+  rollback(signal?: AbortSignal): Promise<void>;
 
   /**
    * Check if session is still open

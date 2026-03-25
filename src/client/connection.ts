@@ -19,6 +19,7 @@ import { MSG_CONNECT } from "../frame/types";
 import {
   AuthenticationError,
   ConnectionError,
+  FitzError,
   TransportError,
 } from "../core/errors";
 import { Multiplexer } from "./multiplexer";
@@ -203,10 +204,12 @@ export class Connection {
   async request(
     messageType: number,
     requestPayload: Uint8Array,
+    signal?: AbortSignal,
   ): Promise<Uint8Array> {
     this.ensureAuthenticated();
     const transport = this.ensureTransport();
     const frame = FrameCodec.encodeFrame(messageType, requestPayload);
+    const startedAt = Date.now();
 
     try {
       return await this.multiplexer.request(
@@ -214,10 +217,15 @@ export class Connection {
         frame,
         (data) => this.sendSerialized(transport, data),
         this.timeout,
+        signal,
       );
     } catch (error) {
       this.log("error", "fitz.connection.request_failed", {
+        operation: "request",
+        state: this.state,
         messageType,
+        latencyMs: Date.now() - startedAt,
+        ...this.describeErrorFields(error),
         error: this.describeError(error),
       });
       this.handlePossibleTransportFailure(error);
@@ -229,12 +237,17 @@ export class Connection {
     this.ensureAuthenticated();
     const transport = this.ensureTransport();
     const frame = FrameCodec.encodeFrame(messageType, requestPayload);
+    const startedAt = Date.now();
 
     try {
       await this.sendSerialized(transport, frame);
     } catch (error) {
       this.log("error", "fitz.connection.send_failed", {
+        operation: "send",
+        state: this.state,
         messageType,
+        latencyMs: Date.now() - startedAt,
+        ...this.describeErrorFields(error),
         error: this.describeError(error),
       });
       this.handlePossibleTransportFailure(error);
@@ -547,6 +560,30 @@ export class Connection {
       return error.message;
     }
     return String(error);
+  }
+
+  private describeErrorFields(error: unknown): Record<string, unknown> {
+    if (error instanceof FitzError) {
+      return {
+        errorName: error.name,
+        code: error.code,
+        domainCode: error.domainCode,
+      };
+    }
+
+    if (error instanceof Error) {
+      return {
+        errorName: error.name,
+        code: (error as Error & { code?: unknown }).code,
+        domainCode: (error as Error & { domainCode?: unknown }).domainCode,
+      };
+    }
+
+    return {
+      errorName: typeof error,
+      code: undefined,
+      domainCode: undefined,
+    };
   }
 
   private handlePossibleTransportFailure(error: unknown): void {

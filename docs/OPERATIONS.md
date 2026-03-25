@@ -144,7 +144,9 @@ Fast local checks:
 
 ```bash
 npm ci
+npm run typecheck
 npm run lint
+npm run fmt:check
 npm run build
 npm run test:unit
 ```
@@ -173,7 +175,9 @@ Release-oriented checklist:
 
 ```bash
 npm ci
+npm run typecheck
 npm run lint
+npm run fmt:check
 npm run build
 npm run test:unit
 docker compose -f ../fitz-go/compose.yml up -d

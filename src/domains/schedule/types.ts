@@ -39,9 +39,9 @@ export type ScheduleHandler = (
  */
 export class ScheduleSubscription {
   constructor(
-    private readonly subId: bigint,
-    private readonly pattern: string,
-    private readonly handler: ScheduleHandler,
+    public readonly subId: bigint,
+    public readonly pattern: string,
+    public readonly handler: ScheduleHandler,
     private unsubscribeFn: () => Promise<void>,
   ) {}
 

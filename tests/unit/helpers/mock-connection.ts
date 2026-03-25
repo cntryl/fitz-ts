@@ -37,7 +37,11 @@ export class MockConnection implements Connection {
   /**
    * Execute a request
    */
-  async request(msgType: number, payload: Uint8Array): Promise<Uint8Array> {
+  async request(
+    msgType: number,
+    payload: Uint8Array,
+    _signal?: AbortSignal,
+  ): Promise<Uint8Array> {
     const handler = this.handlers.get(msgType);
     if (!handler) {
       throw new Error(`No mock handler for message type ${msgType}`);

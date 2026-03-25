@@ -265,7 +265,11 @@ export class RpcClient extends DomainClient {
 
     try {
       const payload = RpcCodec.encodeRequest(correlationId, route, "", body);
-      const response = await this.requestFrame(MSG_RPC_REQUEST, payload);
+      const response = await this.requestFrame(
+        MSG_RPC_REQUEST,
+        payload,
+        options?.signal,
+      );
 
       const decoded = RpcCodec.decodeRequestResponse(response);
       if (decoded.status !== RpcStatus.Ok) {

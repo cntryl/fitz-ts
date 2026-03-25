@@ -22,8 +22,8 @@ export type ChangeHandler = (notif: ChangeNotification) => Promise<void>;
  */
 export class LeaseSubscription {
   constructor(
-    private readonly subId: bigint,
-    private readonly pattern: string,
+    public readonly subId: bigint,
+    public readonly pattern: string,
     private readonly unsubscribeFn: (subId: bigint) => Promise<void>,
   ) {}
 
@@ -55,7 +55,7 @@ export class Lease {
    * @param ttlSecs Lease duration in seconds
    * @returns New expiry timestamp (seconds since epoch)
    */
-  async extend(ttlSecs: number): Promise<bigint> {
+  async extend(ttlSecs: number, signal?: AbortSignal): Promise<bigint> {
     const requestPayload = LeaseCodec.encodeExtend(
       this.route,
       this.token,
@@ -64,6 +64,7 @@ export class Lease {
     const response = await this.connection.request(
       MSG_LEASE_RENEW,
       requestPayload,
+      signal,
     );
     const data = assertSuccess(response, "EXTEND");
 
@@ -82,9 +83,13 @@ export class Lease {
   /**
    * Release the lease
    */
-  async release(): Promise<void> {
+  async release(signal?: AbortSignal): Promise<void> {
     const payload = LeaseCodec.encodeRelease(this.route, this.token);
-    const response = await this.connection.request(MSG_LEASE_RELEASE, payload);
+    const response = await this.connection.request(
+      MSG_LEASE_RELEASE,
+      payload,
+      signal,
+    );
     assertSuccess(response, "RELEASE");
   }
 
@@ -99,11 +104,13 @@ export class Lease {
   async testOnlyExtendWithToken(
     token: bigint,
     ttlSecs: number,
+    signal?: AbortSignal,
   ): Promise<bigint> {
     const requestPayload = LeaseCodec.encodeExtend(this.route, token, ttlSecs);
     const response = await this.connection.request(
       MSG_LEASE_RENEW,
       requestPayload,
+      signal,
     );
     const data = assertSuccess(response, "EXTEND");
 
@@ -118,9 +125,16 @@ export class Lease {
     return newExpiry;
   }
 
-  async testOnlyReleaseWithToken(token: bigint): Promise<void> {
+  async testOnlyReleaseWithToken(
+    token: bigint,
+    signal?: AbortSignal,
+  ): Promise<void> {
     const payload = LeaseCodec.encodeRelease(this.route, token);
-    const response = await this.connection.request(MSG_LEASE_RELEASE, payload);
+    const response = await this.connection.request(
+      MSG_LEASE_RELEASE,
+      payload,
+      signal,
+    );
     assertSuccess(response, "RELEASE");
   }
 }

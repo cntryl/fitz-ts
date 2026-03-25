@@ -31,11 +31,15 @@ export class StreamSessionImpl implements StreamSession {
    * Append a record to the stream.
    * Returns the assigned offset
    */
-  async append(body: Uint8Array): Promise<bigint> {
+  async append(body: Uint8Array, signal?: AbortSignal): Promise<bigint> {
     this.ensureOpen();
 
     const payload = StreamCodec.encodeAppend(this.sessionId, body);
-    const response = await this.connection.request(MSG_STREAM_APPEND, payload);
+    const response = await this.connection.request(
+      MSG_STREAM_APPEND,
+      payload,
+      signal,
+    );
     const decoded = StreamCodec.decodeAppendResponse(response);
 
     this.checkStatus(decoded.status, "APPEND");
@@ -46,13 +50,17 @@ export class StreamSessionImpl implements StreamSession {
   /**
    * Commit the write session and make appends durable.
    */
-  async commit(): Promise<void> {
+  async commit(signal?: AbortSignal): Promise<void> {
     this.ensureOpen();
     this.closed = true;
     this.unsubscribeDisconnect();
 
     const payload = StreamCodec.encodeCommit(this.sessionId);
-    const response = await this.connection.request(MSG_STREAM_COMMIT, payload);
+    const response = await this.connection.request(
+      MSG_STREAM_COMMIT,
+      payload,
+      signal,
+    );
     const decoded = StreamCodec.decodeCommitResponse(response);
 
     this.checkStatus(decoded.status, "COMMIT");
@@ -61,7 +69,7 @@ export class StreamSessionImpl implements StreamSession {
   /**
    * Roll back and discard uncommitted appends.
    */
-  async rollback(): Promise<void> {
+  async rollback(signal?: AbortSignal): Promise<void> {
     if (this.closed) {
       return;
     }
@@ -73,6 +81,7 @@ export class StreamSessionImpl implements StreamSession {
       const response = await this.connection.request(
         MSG_STREAM_ROLLBACK,
         payload,
+        signal,
       );
       const decoded = StreamCodec.decodeRollbackResponse(response);
       this.checkStatus(decoded.status, "ROLLBACK");

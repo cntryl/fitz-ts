@@ -300,8 +300,9 @@ describe("KvCodec", () => {
       // Assert
       expect(decoded.status).toBe(0);
       expect(decoded.keys).toHaveLength(2);
-      expect(decoded.keys![0]).toEqual(testData("key1"));
-      expect(decoded.keys![1]).toEqual(testData("key2"));
+      const keys = decoded.keys ?? [];
+      expect(keys[0]).toEqual(testData("key1"));
+      expect(keys[1]).toEqual(testData("key2"));
     });
 
     it("should_decode_scan_response_with_empty_result", () => {

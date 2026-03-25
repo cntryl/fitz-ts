@@ -41,6 +41,7 @@ export class Client {
       transport: "auto",
       maxFrameSize: 65535,
       authSettleDelayMs: 100,
+      observability: config.observability ?? {},
       reconnect: {
         enabled: false,
         maxAttempts: Infinity,

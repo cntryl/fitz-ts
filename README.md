@@ -4,6 +4,8 @@ TypeScript client SDK for [Fitz](https://github.com/cntryl/fitz).
 
 ## Install
 
+Requires Node.js 20.19 or later.
+
 ```bash
 npm install @cntryl/fitz
 ```
@@ -79,7 +81,9 @@ Fast local checks:
 
 ```bash
 npm ci
+npm run typecheck
 npm run lint
+npm run fmt:check
 npm run build
 npm run test:unit
 npm run verify
@@ -106,7 +110,9 @@ Suggested release checklist:
 
 ```bash
 npm ci
+npm run typecheck
 npm run lint
+npm run fmt:check
 npm run build
 npm run test:unit
 docker compose -f ../fitz-go/compose.yml up -d

@@ -38,14 +38,18 @@ export class QueueItem {
    * Extend the lease on this queue item.
    * @param leaseSecs Lease duration in seconds
    */
-  async extend(leaseSecs: number): Promise<void> {
+  async extend(leaseSecs: number, signal?: AbortSignal): Promise<void> {
     const payload = QueueCodec.encodeExtend(
       this.route,
       this.id,
       this.token,
       leaseSecs,
     );
-    const response = await this.connection.request(MSG_QUEUE_EXTEND, payload);
+    const response = await this.connection.request(
+      MSG_QUEUE_EXTEND,
+      payload,
+      signal,
+    );
     const decoded = QueueCodec.decodeExtendResponse(response);
 
     if (decoded.status !== QueueStatus.Ok) {
@@ -62,7 +66,7 @@ export class QueueItem {
   /**
    * Complete processing of this queue item and remove it from the queue.
    */
-  async complete(): Promise<void> {
+  async complete(signal?: AbortSignal): Promise<void> {
     const requestPayload = QueueCodec.encodeComplete(
       this.route,
       this.id,
@@ -71,6 +75,7 @@ export class QueueItem {
     const response = await this.connection.request(
       MSG_QUEUE_COMPLETE,
       requestPayload,
+      signal,
     );
     const decoded = QueueCodec.decodeCompleteResponse(response);
 
@@ -89,7 +94,10 @@ export class QueueItem {
     return this.token + 1n;
   }
 
-  async testOnlyCompleteWithToken(token: bigint): Promise<void> {
+  async testOnlyCompleteWithToken(
+    token: bigint,
+    signal?: AbortSignal,
+  ): Promise<void> {
     const requestPayload = QueueCodec.encodeComplete(
       this.route,
       this.id,
@@ -98,6 +106,7 @@ export class QueueItem {
     const response = await this.connection.request(
       MSG_QUEUE_COMPLETE,
       requestPayload,
+      signal,
     );
     const decoded = QueueCodec.decodeCompleteResponse(response);
 
@@ -131,8 +140,8 @@ export type AvailabilityHandler = (
  * Queue availability subscription.
  */
 export class QueueSubscription {
-  private readonly subId: bigint;
-  private readonly pattern: string;
+  public readonly subId: bigint;
+  public readonly pattern: string;
   private readonly unsubscribeFn: (subId: bigint) => Promise<void>;
 
   constructor(

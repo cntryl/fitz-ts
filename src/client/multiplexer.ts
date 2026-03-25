@@ -130,6 +130,7 @@ export class Multiplexer {
     frameData: Uint8Array,
     send: (data: Uint8Array) => Promise<void>,
     timeoutMs: number,
+    signal?: AbortSignal,
   ): Promise<Uint8Array> {
     const attributes = { messageType };
     const span = this.observability.tracer?.startSpan(
@@ -137,20 +138,57 @@ export class Multiplexer {
       attributes,
     );
     let spanEnded = false;
-    const deferred = new Deferred<Uint8Array>();
 
-    const timeout = setTimeout(() => {
-      this.unregisterRequest(messageType, deferred);
-      this.observability.meter?.counter("fitz.request.timeout", 1, attributes);
-      span?.recordException(
-        new TimeoutError(
-          `Request timeout for message type ${messageType} after ${timeoutMs}ms`,
-          { messageType, timeoutMs },
-        ),
-      );
+    if (signal?.aborted) {
+      const error = abortError();
+      span?.recordException(error);
       span?.end();
-      spanEnded = true;
-      deferred.reject(
+      this.observability.meter?.counter("fitz.request.failed", 1, {
+        ...attributes,
+        error: error.name,
+      });
+      throw error;
+    }
+
+    const deferred = new Deferred<Uint8Array>();
+    let settled = false;
+    let timeout: ReturnType<typeof setTimeout>;
+    let onAbort: (() => void) | undefined;
+
+    const finalize = (): boolean => {
+      if (settled) {
+        return false;
+      }
+
+      settled = true;
+      clearTimeout(timeout);
+      if (signal && onAbort) {
+        signal.removeEventListener("abort", onAbort);
+      }
+      return true;
+    };
+
+    const failRequest = (error: Error): void => {
+      if (!finalize()) {
+        return;
+      }
+
+      this.unregisterRequest(messageType, deferred);
+      this.observability.meter?.counter("fitz.request.failed", 1, {
+        ...attributes,
+        error: error.name,
+      });
+      span?.recordException(error);
+      if (!spanEnded) {
+        span?.end();
+        spanEnded = true;
+      }
+      deferred.reject(error);
+    };
+
+    timeout = setTimeout(() => {
+      this.observability.meter?.counter("fitz.request.timeout", 1, attributes);
+      failRequest(
         new TimeoutError(
           `Request timeout for message type ${messageType} after ${timeoutMs}ms`,
           { messageType, timeoutMs },
@@ -158,13 +196,19 @@ export class Multiplexer {
       );
     }, timeoutMs);
 
+    if (signal) {
+      onAbort = () => {
+        failRequest(abortError());
+      };
+      signal.addEventListener("abort", onAbort, { once: true });
+    }
+
     const request: PendingRequest = {
       deferred,
       timeout,
       sentAt: new Date(),
     };
 
-    // Add to FIFO queue for this MessageType
     this.getOrCreatePendingQueue(messageType).push(request);
 
     this.requestsInFlight++;
@@ -178,21 +222,15 @@ export class Multiplexer {
 
     try {
       await send(frameData);
-      const payload = await deferred.promise;
-      const durationMs = Date.now() - request.sentAt.getTime();
-      span?.setAttribute("fitz.request.duration_ms", durationMs);
-      this.observability.meter?.histogram(
-        "fitz.request.duration",
-        durationMs,
-        attributes,
-      );
-      if (!spanEnded) {
-        span?.end();
-        spanEnded = true;
-      }
-      return payload;
     } catch (err) {
-      clearTimeout(timeout);
+      const alreadySettled = !finalize();
+      if (alreadySettled) {
+        if (signal?.aborted) {
+          throw abortError();
+        }
+        throw err;
+      }
+
       this.unregisterRequest(messageType, deferred);
       this.observability.meter?.counter("fitz.request.failed", 1, {
         ...attributes,
@@ -203,8 +241,26 @@ export class Multiplexer {
         span?.end();
         spanEnded = true;
       }
+      if (signal?.aborted) {
+        throw abortError();
+      }
       throw err;
     }
+
+    const payload = await deferred.promise;
+    finalize();
+    const durationMs = Date.now() - request.sentAt.getTime();
+    span?.setAttribute("fitz.request.duration_ms", durationMs);
+    this.observability.meter?.histogram(
+      "fitz.request.duration",
+      durationMs,
+      attributes,
+    );
+    if (!spanEnded) {
+      span?.end();
+      spanEnded = true;
+    }
+    return payload;
   }
 
   /**
@@ -360,4 +416,10 @@ export class Multiplexer {
   getState(): ConnectionState {
     return this.state;
   }
+}
+
+function abortError(): Error {
+  const error = new Error("The operation was aborted");
+  error.name = "AbortError";
+  return error;
 }

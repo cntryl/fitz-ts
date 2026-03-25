@@ -1,5 +1,5 @@
 import { defineConfig } from "vite";
-import path from "path";
+import path from "node:path";
 
 export default defineConfig({
   build: {
@@ -12,10 +12,5 @@ export default defineConfig({
     target: "ES2020",
     minify: "terser",
     sourcemap: true,
-  },
-  resolve: {
-    alias: {
-      "@": path.resolve(__dirname, "./src"),
-    },
   },
 });

@@ -88,6 +88,21 @@ class FakeTransport implements Transport {
   }
 }
 
+class FailingSendTransport extends FakeTransport {
+  private sendCount = 0;
+  constructor(private readonly failure: Error) {
+    super();
+  }
+
+  async send(data: Uint8Array): Promise<void> {
+    this.sendCount += 1;
+    this.sent.push(data);
+    if (this.sendCount > 1) {
+      throw this.failure;
+    }
+  }
+}
+
 class FakeSpan implements FitzSpan {
   public attributes: Record<string, unknown> = {};
   public exceptions: unknown[] = [];
@@ -434,6 +449,68 @@ describe("Connection", () => {
     await connection.close();
   });
 
+  it("logs structured fields for request and send failures", async () => {
+    const failure = new Error("write failed") as Error & {
+      code?: string;
+      domainCode?: number;
+    };
+    failure.code = "WRITE_FAILED";
+    failure.domainCode = 9;
+
+    const transport = new FailingSendTransport(failure);
+    const logger: FitzLogger = { log: vi.fn() };
+    const connection = new Connection(
+      () => transport,
+      () => "",
+      {
+        authSettleDelayMs: 0,
+        observability: {
+          logger,
+        },
+      },
+    );
+
+    await connection.connect();
+
+    await expect(connection.request(93, new Uint8Array([1]))).rejects.toThrow(
+      "write failed",
+    );
+    await expect(connection.send(94, new Uint8Array([2]))).rejects.toThrow(
+      "write failed",
+    );
+
+    expect(logger.log).toHaveBeenCalledWith(
+      "error",
+      "fitz.connection.request_failed",
+      expect.objectContaining({
+        operation: "request",
+        state: "AUTHENTICATED",
+        messageType: 93,
+        latencyMs: expect.any(Number),
+        error: "write failed",
+        errorName: "Error",
+        code: "WRITE_FAILED",
+        domainCode: 9,
+      }),
+    );
+    expect(logger.log).toHaveBeenCalledWith(
+      "error",
+      "fitz.connection.send_failed",
+      expect.objectContaining({
+        operation: "send",
+        state: "AUTHENTICATED",
+        messageType: 94,
+        latencyMs: expect.any(Number),
+        error: "write failed",
+        errorName: "Error",
+        code: "WRITE_FAILED",
+        domainCode: 9,
+      }),
+    );
+
+    await connection.close();
+  });
+
   it("serializes outbound writes through the connection", async () => {
     let releaseSend: (() => void) | null = null;
     const sendGate = new Promise<void>((resolve) => {
@@ -460,6 +537,33 @@ describe("Connection", () => {
 
     releaseSend?.();
     await Promise.all([first, second]);
+    await connection.close();
+  });
+
+  it("rejects an in-flight request when the caller aborts", async () => {
+    const transport = new FakeTransport();
+    const connection = new Connection(
+      () => transport,
+      () => "",
+      {
+        authSettleDelayMs: 0,
+      },
+    );
+    const controller = new AbortController();
+
+    await connection.connect();
+
+    const pending = connection.request(
+      92,
+      new Uint8Array([1, 2, 3]),
+      controller.signal,
+    );
+    await Promise.resolve();
+    controller.abort();
+
+    await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+    expect(connection.getMultiplexer().getInFlightCount()).toBe(0);
+
     await connection.close();
   });
 

@@ -32,24 +32,36 @@ export class KvTransaction {
     });
   }
 
-  async put(key: Uint8Array, value: Uint8Array): Promise<void> {
+  async put(
+    key: Uint8Array,
+    value: Uint8Array,
+    signal?: AbortSignal,
+  ): Promise<void> {
     this.ensureOpen();
     const payload = KvCodec.encodePut(this.txId, this.route, key, value);
-    const response = await this.connection.request(MSG_KV_PUT, payload);
+    const response = await this.connection.request(MSG_KV_PUT, payload, signal);
     this.checkStatus(KvCodec.decodeStatusResponse(response).status, "PUT");
   }
 
-  async insert(key: Uint8Array, value: Uint8Array): Promise<void> {
+  async insert(
+    key: Uint8Array,
+    value: Uint8Array,
+    signal?: AbortSignal,
+  ): Promise<void> {
     this.ensureOpen();
     const payload = KvCodec.encodeInsert(this.txId, this.route, key, value);
-    const response = await this.connection.request(MSG_KV_INSERT, payload);
+    const response = await this.connection.request(
+      MSG_KV_INSERT,
+      payload,
+      signal,
+    );
     this.checkStatus(KvCodec.decodeStatusResponse(response).status, "INSERT");
   }
 
-  async get(key: Uint8Array): Promise<KvGetResult> {
+  async get(key: Uint8Array, signal?: AbortSignal): Promise<KvGetResult> {
     this.ensureOpen();
     const payload = KvCodec.encodeGet(this.txId, this.route, key);
-    const response = await this.connection.request(MSG_KV_GET, payload);
+    const response = await this.connection.request(MSG_KV_GET, payload, signal);
     const decoded = KvCodec.decodeGetResponse(response);
     this.checkStatus(decoded.status, "GET");
     if (!decoded.found || !decoded.value) {
@@ -58,14 +70,22 @@ export class KvTransaction {
     return { type: "found", value: decoded.value };
   }
 
-  async delete(key: Uint8Array): Promise<void> {
+  async delete(key: Uint8Array, signal?: AbortSignal): Promise<void> {
     this.ensureOpen();
     const payload = KvCodec.encodeDelete(this.txId, this.route, key);
-    const response = await this.connection.request(MSG_KV_DELETE, payload);
+    const response = await this.connection.request(
+      MSG_KV_DELETE,
+      payload,
+      signal,
+    );
     this.checkStatus(KvCodec.decodeStatusResponse(response).status, "DELETE");
   }
 
-  async deleteRange(startKey: Uint8Array, endKey: Uint8Array): Promise<void> {
+  async deleteRange(
+    startKey: Uint8Array,
+    endKey: Uint8Array,
+    signal?: AbortSignal,
+  ): Promise<void> {
     this.ensureOpen();
     const payload = KvCodec.encodeDeleteRange(
       this.txId,
@@ -76,6 +96,7 @@ export class KvTransaction {
     const response = await this.connection.request(
       MSG_KV_DELETE_RANGE,
       payload,
+      signal,
     );
     this.checkStatus(
       KvCodec.decodeStatusResponse(response).status,
@@ -83,25 +104,36 @@ export class KvTransaction {
     );
   }
 
-  async scan(options: KvScanOptions = {}): Promise<AsyncIterable<Uint8Array>> {
+  async scan(
+    options: KvScanOptions = {},
+    signal?: AbortSignal,
+  ): Promise<AsyncIterable<Uint8Array>> {
     this.ensureOpen();
     const payload = KvCodec.encodeScan(this.txId, this.route, options);
-    const response = await this.connection.request(MSG_KV_SCAN, payload);
+    const response = await this.connection.request(
+      MSG_KV_SCAN,
+      payload,
+      signal,
+    );
     const decoded = KvCodec.decodeScanResponse(response);
     this.checkStatus(decoded.status, "SCAN");
     return new AsyncIterableIterator(new SliceIterator(decoded.keys));
   }
 
-  async commit(): Promise<void> {
+  async commit(signal?: AbortSignal): Promise<void> {
     this.ensureOpen();
     this.closed = true;
     this.unsubscribeDisconnect();
     const payload = KvCodec.encodeCommit(this.txId, this.route);
-    const response = await this.connection.request(MSG_KV_COMMIT, payload);
+    const response = await this.connection.request(
+      MSG_KV_COMMIT,
+      payload,
+      signal,
+    );
     this.checkStatus(KvCodec.decodeStatusResponse(response).status, "COMMIT");
   }
 
-  async rollback(): Promise<void> {
+  async rollback(signal?: AbortSignal): Promise<void> {
     if (this.closed) {
       return;
     }
@@ -110,7 +142,11 @@ export class KvTransaction {
     this.unsubscribeDisconnect();
     const payload = KvCodec.encodeRollback(this.txId, this.route);
     try {
-      const response = await this.connection.request(MSG_KV_ROLLBACK, payload);
+      const response = await this.connection.request(
+        MSG_KV_ROLLBACK,
+        payload,
+        signal,
+      );
       this.checkStatus(
         KvCodec.decodeStatusResponse(response).status,
         "ROLLBACK",

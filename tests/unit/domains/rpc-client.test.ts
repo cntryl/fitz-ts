@@ -13,9 +13,21 @@ class FakeRpcConnection {
     (payload: Uint8Array) => void
   >();
   public sendCalls: Array<{ messageType: number; payload: Uint8Array }> = [];
+  public lastSignal: AbortSignal | undefined;
   private state = ConnectionState.Authenticated;
 
-  async request(messageType: number): Promise<Uint8Array> {
+  async request(
+    messageType: number,
+    _payload: Uint8Array,
+    signal?: AbortSignal,
+  ): Promise<Uint8Array> {
+    this.lastSignal = signal;
+    if (signal?.aborted) {
+      const error = new Error("The operation was aborted");
+      error.name = "AbortError";
+      throw error;
+    }
+
     if (messageType === 300 || messageType === 301 || messageType === 302) {
       return new Uint8Array([0]);
     }
@@ -78,7 +90,11 @@ describe("RpcClient", () => {
     const handler = connection.notificationHandlers.get(MSG_RPC_REQUEST);
     expect(handler).toBeTypeOf("function");
 
-    handler!(
+    if (!handler) {
+      throw new Error("Expected RPC request handler to be registered");
+    }
+
+    handler(
       RpcCodec.encodeRequest(
         new Uint8Array(16),
         route,
@@ -92,5 +108,19 @@ describe("RpcClient", () => {
 
     expect(connection.sendCalls).toHaveLength(1);
     expect(connection.sendCalls[0].messageType).toBe(303);
+  });
+
+  it("forwards request cancellation to the connection layer", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const connection = new FakeRpcConnection();
+    const client = new RpcClient(connection as unknown as Connection);
+
+    await expect(
+      client.call("rpc://realm/area/method", new Uint8Array([1]), {
+        signal: controller.signal,
+      }),
+    ).rejects.toMatchObject({ name: "AbortError" });
+    expect(connection.lastSignal).toBe(controller.signal);
   });
 });
