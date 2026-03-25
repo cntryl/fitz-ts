@@ -203,7 +203,7 @@ export class KvCodec {
       case "Sync":
         return 1;
       default:
-        throw new CodecError(`Unknown durability mode: ${durability}`);
+        throw new CodecError("Unknown durability mode");
     }
   }
 }

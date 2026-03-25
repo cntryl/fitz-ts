@@ -1,4 +1,4 @@
-import { defineConfig } from "vitest/config";
+import { defineConfig } from "vite-plus/test/config";
 
 export default defineConfig({
   test: {
@@ -10,6 +10,5 @@ export default defineConfig({
     hookTimeout: 60000,
     fileParallelism: false,
     maxWorkers: 1,
-    minWorkers: 1,
   },
 });

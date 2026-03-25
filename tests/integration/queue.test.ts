@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
 
 import { sleep } from "./helpers";
 import { TestFixture } from "./fixture/fixture";

@@ -1,4 +1,4 @@
-import { defineConfig } from "vitest/config";
+import { defineConfig } from "vite-plus/test/config";
 
 export default defineConfig({
   test: {
@@ -10,7 +10,6 @@ export default defineConfig({
     hookTimeout: 60000,
     fileParallelism: false,
     maxWorkers: 1,
-    minWorkers: 1,
     // Vitest JSON reporter supplements the per-scenario JSON written by the harness.
     // Run with: vitest run --reporter=verbose --config vitest.conformance.config.ts
   },

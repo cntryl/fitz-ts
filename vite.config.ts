@@ -1,16 +1,11 @@
-import { defineConfig } from "vite";
-import path from "node:path";
+import { defineConfig } from "vite-plus";
 
 export default defineConfig({
-  build: {
-    lib: {
-      entry: path.resolve(__dirname, "src/index.ts"),
-      name: "Fitz",
-      formats: ["es", "cjs"],
-      fileName: (format) => `index.${format === "es" ? "mjs" : "js"}`,
-    },
-    target: "ES2020",
-    minify: "terser",
-    sourcemap: true,
+  fmt: {
+    printWidth: 80,
+    sortPackageJson: false,
+  },
+  pack: {
+    entry: ["src/index.ts"],
   },
 });

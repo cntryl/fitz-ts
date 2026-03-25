@@ -16,7 +16,7 @@
  *   npm run test:conformance
  *   CONFORMANCE_TRANSPORT=tcp CONFORMANCE_AUTH_MODE=valid_jwt npm run test:conformance
  */
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vite-plus/test";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 
@@ -1017,7 +1017,7 @@ describe(`Fitz conformance — fitz-ts [transport=${TRANSPORT}, auth=${AUTH_MODE
           `P1: ${Math.round(aggregate.p1_pass_rate * 100)}%`,
       );
     } catch (err) {
-      console.error(`Failed to write conformance results: ${err}`);
+      console.error("Failed to write conformance results:", err);
     }
   });
 });

@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vite-plus/test";
 
 import { Connection } from "../../../src/client/connection";
 import type {
@@ -331,7 +331,8 @@ describe("Connection", () => {
   it("emits lifecycle events and logs for connect and close", async () => {
     const transport = new FakeTransport();
     const events: FitzLifecycleEvent[] = [];
-    const logger: FitzLogger = { log: vi.fn() };
+    const log = vi.fn();
+    const logger: FitzLogger = { log };
 
     const connection = new Connection(
       () => transport,
@@ -356,7 +357,7 @@ describe("Connection", () => {
       "connect_succeeded",
       "closed",
     ]);
-    expect(logger.log).toHaveBeenCalledWith(
+    expect(log).toHaveBeenCalledWith(
       "info",
       "fitz.connection.connect_succeeded",
       expect.objectContaining({ event: "connect_succeeded" }),
@@ -458,7 +459,8 @@ describe("Connection", () => {
     failure.domainCode = 9;
 
     const transport = new FailingSendTransport(failure);
-    const logger: FitzLogger = { log: vi.fn() };
+    const log = vi.fn();
+    const logger: FitzLogger = { log };
     const connection = new Connection(
       () => transport,
       () => "",
@@ -479,7 +481,7 @@ describe("Connection", () => {
       "write failed",
     );
 
-    expect(logger.log).toHaveBeenCalledWith(
+    expect(log).toHaveBeenCalledWith(
       "error",
       "fitz.connection.request_failed",
       expect.objectContaining({
@@ -493,7 +495,7 @@ describe("Connection", () => {
         domainCode: 9,
       }),
     );
-    expect(logger.log).toHaveBeenCalledWith(
+    expect(log).toHaveBeenCalledWith(
       "error",
       "fitz.connection.send_failed",
       expect.objectContaining({
@@ -512,9 +514,9 @@ describe("Connection", () => {
   });
 
   it("serializes outbound writes through the connection", async () => {
-    let releaseSend: (() => void) | null = null;
+    let releaseSend: () => void = () => undefined;
     const sendGate = new Promise<void>((resolve) => {
-      releaseSend = resolve;
+      releaseSend = () => resolve();
     });
     const transport = new FakeTransport();
     const connection = new Connection(
@@ -535,7 +537,7 @@ describe("Connection", () => {
 
     expect(transport.maxConcurrentSends).toBe(1);
 
-    releaseSend?.();
+    releaseSend();
     await Promise.all([first, second]);
     await connection.close();
   });
@@ -570,7 +572,8 @@ describe("Connection", () => {
   it("bounds async handler concurrency", async () => {
     vi.useFakeTimers();
     const transport = new FakeTransport();
-    const logger: FitzLogger = { log: vi.fn() };
+    const log = vi.fn();
+    const logger: FitzLogger = { log };
     const connection = new Connection(
       () => transport,
       () => "",
@@ -588,9 +591,9 @@ describe("Connection", () => {
 
     let active = 0;
     let maxActive = 0;
-    let releaseFirst: (() => void) | null = null;
+    let releaseFirst: () => void = () => undefined;
     const firstGate = new Promise<void>((resolve) => {
-      releaseFirst = resolve;
+      releaseFirst = () => resolve();
     });
 
     connection.dispatchAsyncHandler(async () => {
@@ -608,7 +611,7 @@ describe("Connection", () => {
     await Promise.resolve();
     expect(maxActive).toBe(1);
 
-    releaseFirst?.();
+    releaseFirst();
     await vi.runAllTimersAsync();
     await Promise.resolve();
     expect(maxActive).toBe(1);

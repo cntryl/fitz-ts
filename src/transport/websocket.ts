@@ -118,7 +118,7 @@ export class WebSocketTransport implements Transport {
           } else {
             // Browser might send Blob
             if (event.data instanceof Blob) {
-              event.data.arrayBuffer().then((ab: ArrayBuffer) => {
+              void event.data.arrayBuffer().then((ab: ArrayBuffer) => {
                 this.enqueueMessage(new Uint8Array(ab));
               });
               return;

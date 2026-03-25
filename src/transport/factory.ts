@@ -70,5 +70,5 @@ export function createTransport(
     return new TcpTransport(url, options);
   }
 
-  throw new TransportError(`Unknown transport type: ${transportType}`);
+  throw new TransportError("Unknown transport type");
 }

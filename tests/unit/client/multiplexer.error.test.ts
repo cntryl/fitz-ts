@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
 
 import { Multiplexer } from "../../../src/client/multiplexer";
 import { ConnectionError } from "../../../src/core/errors";

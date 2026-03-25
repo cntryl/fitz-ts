@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vite-plus/test";
 
 import { FrameCodec } from "../../src/frame/codec";
 import { AuthenticationError, ConnectionError } from "../../src/core/errors";

@@ -2,7 +2,6 @@
  * Mock connection for testing domain clients
  */
 
-import { Connection } from "../../../src/client/connection";
 import { NotificationHandler } from "../../../src/client/multiplexer";
 
 type RequestHandler = (msgType: number, payload: Uint8Array) => Uint8Array;
@@ -11,7 +10,7 @@ type RequestHandler = (msgType: number, payload: Uint8Array) => Uint8Array;
  * Mock implementation of Connection for unit tests
  * Allows mocking request/response pairs and notification handlers
  */
-export class MockConnection implements Connection {
+export class MockConnection {
   private handlers = new Map<number, RequestHandler>();
   private notificationHandlers = new Map<number, NotificationHandler>();
 

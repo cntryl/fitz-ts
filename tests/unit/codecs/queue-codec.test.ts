@@ -2,7 +2,7 @@
  * Queue Codec unit tests
  */
 
-import { describe, it, expect } from "vitest";
+import { describe, it, expect } from "vite-plus/test";
 import { QueueCodec } from "../../../src/domains/queue/codec";
 import { BufferWriter } from "../../../src/core/buffer";
 import { testData } from "../helpers/test-utils";
@@ -82,9 +82,13 @@ describe("QueueCodec", () => {
 
       // Assert
       expect(decoded.status).toBe(0);
-      expect(decoded.items).toHaveLength(1);
-      expect(decoded.items[0].id).toBe(100n);
-      expect(decoded.items[0].token).toBe(777n);
+      const items = decoded.items;
+      if (!items) {
+        throw new Error("Expected reserve items");
+      }
+      expect(items).toHaveLength(1);
+      expect(items[0].id).toBe(100n);
+      expect(items[0].token).toBe(777n);
     });
 
     it("should_decode_reserve_response_no_item", () => {

@@ -2,7 +2,7 @@
  * RPC Codec unit tests
  */
 
-import { describe, it, expect, vi, afterEach } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vite-plus/test";
 import { RpcCodec } from "../../../src/domains/rpc/codec";
 import { BufferWriter } from "../../../src/core/buffer";
 import { ProtocolError } from "../../../src/core/errors";

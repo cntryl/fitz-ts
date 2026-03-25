@@ -1,4 +1,4 @@
-import { expect, onTestFinished } from "vitest";
+import { expect, onTestFinished } from "vite-plus/test";
 
 import { Client } from "../../../src/client/client";
 import type { ClientConfig } from "../../../src/core/types";
@@ -70,7 +70,7 @@ export function brokerAddrFor(
         "ws://localhost:4090/ws",
       );
     default:
-      throw new Error(`unsupported auth mode: ${authMode satisfies never}`);
+      throw new Error("unsupported auth mode");
   }
 }
 
@@ -90,7 +90,7 @@ function tokenProviderForMode(
     case "invalid_signature":
       return () => generateInvalidSignatureTestJwt(secret, audience);
     default:
-      throw new Error(`unsupported auth mode: ${authMode satisfies never}`);
+      throw new Error("unsupported auth mode");
   }
 }
 

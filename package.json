@@ -19,31 +19,28 @@
     "dist"
   ],
   "scripts": {
-    "build": "vite build",
+    "build": "vp pack",
     "pack:smoke": "npm pack --pack-destination ./artifacts",
-    "test": "npm run test:unit && npm run test:integration",
-    "test:spec": "npm run test:conformance",
-    "verify": "npm run typecheck && npm run lint && npm run fmt:check && npm run build && npm run test:unit && npm run test:integration && npm run test:conformance",
-    "typecheck": "tsc -p tsconfig.json",
-    "test:unit": "vitest run --config vitest.unit.config.ts",
-    "test:integration": "vitest run --config vitest.integration.config.ts",
-    "test:conformance": "vitest run --config vitest.conformance.config.ts --reporter=verbose",
-    "test:watch": "vitest --config vitest.unit.config.ts",
-    "bench": "vitest bench",
-    "lint": "oxlint src tests --deny-warnings",
-    "lint:fix": "oxlint src tests --fix",
-    "fmt": "oxfmt .",
-    "fmt:check": "oxfmt . --check"
+    "test": "vp test run --config vitest.unit.config.ts && vp test run --config vitest.integration.config.ts",
+    "test:spec": "vp test run --config vitest.conformance.config.ts --reporter=verbose",
+    "verify": "vp check && vp pack && vp test run --config vitest.unit.config.ts && vp test run --config vitest.integration.config.ts && vp test run --config vitest.conformance.config.ts --reporter=verbose",
+    "typecheck": "vp check --no-fmt --no-lint",
+    "test:unit": "vp test run --config vitest.unit.config.ts",
+    "test:integration": "vp test run --config vitest.integration.config.ts",
+    "test:conformance": "vp test run --config vitest.conformance.config.ts --reporter=verbose",
+    "test:watch": "vp test watch --config vitest.unit.config.ts",
+    "bench": "vp test bench",
+    "lint": "vp lint src tests --deny-warnings",
+    "lint:fix": "vp lint src tests --fix",
+    "fmt": "vp fmt .",
+    "fmt:check": "vp fmt . --check",
+    "prepare": "vp config"
   },
   "devDependencies": {
     "@types/node": "^25.5.0",
-    "oxfmt": "^0.42.0",
-    "oxlint": "^1.57.0",
-    "terser": "^5.46.1",
     "typescript": "^6.0.2",
-    "vite": "^8.0.2",
-    "vitest": "^4.1.1",
-    "ws": "^8.20.0"
+    "ws": "^8.20.0",
+    "vite-plus": "0.1.14"
   },
   "engines": {
     "node": ">=20.19.0"
@@ -67,5 +64,6 @@
   ],
   "publishConfig": {
     "access": "public"
-  }
+  },
+  "packageManager": "npm@11.12.0"
 }
