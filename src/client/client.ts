@@ -47,12 +47,12 @@ export class Client {
         maxAttempts: Infinity,
         backoffMs: 250,
         maxBackoffMs: 5000,
-        ...(config.reconnect ?? {}),
+        ...config.reconnect,
       },
       asyncHandlers: {
         maxConcurrency: Infinity,
         timeoutMs: 30000,
-        ...(config.asyncHandlers ?? {}),
+        ...config.asyncHandlers,
       },
       ...config,
     };
