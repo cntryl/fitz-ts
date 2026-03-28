@@ -148,6 +148,16 @@ export class FrameParser {
   }
 
   private appendData(data: Uint8Array): void {
+    if (data.length === 0) {
+      return;
+    }
+
+    if (this.buffer.length === 0) {
+      this.buffer = data;
+      this.offset = 0;
+      return;
+    }
+
     const newBuffer = new Uint8Array(this.buffer.length + data.length);
     newBuffer.set(this.buffer);
     newBuffer.set(data, this.buffer.length);
@@ -189,7 +199,7 @@ export class FrameParser {
   }
 
   private tryReadPayload(frames: Frame[]): boolean {
-    if (!this.messageType || this.payloadLength === null) return false;
+    if (this.messageType === null || this.payloadLength === null) return false;
 
     if (this.offset + this.payloadLength > this.buffer.length) return false;
 

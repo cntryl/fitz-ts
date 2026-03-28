@@ -100,6 +100,28 @@ describe("protocol primitives", () => {
     ]);
   });
 
+  it("parses frames with message type 0", () => {
+    const parser = new FrameParser();
+    const encoded = FrameCodec.encodeFrame(0, new Uint8Array([7, 8, 9]));
+    const parsed = parser.parseFrames(encoded);
+
+    expect(parsed).toEqual([{ messageType: 0, payload: new Uint8Array([7, 8, 9]) }]);
+  });
+
+  it("parses escaped message type when header arrives one byte at a time", () => {
+    const parser = new FrameParser();
+    const payload = new Uint8Array([4, 5, 6]);
+    const encoded = FrameCodec.encodeFrame(MSG_SCHEDULE_NOTIFY, payload);
+
+    for (let index = 0; index < encoded.length - 1; index += 1) {
+      expect(parser.parseFrames(encoded.slice(index, index + 1))).toEqual([]);
+    }
+
+    expect(parser.parseFrames(encoded.slice(encoded.length - 1))).toEqual([
+      { messageType: MSG_SCHEDULE_NOTIFY, payload },
+    ]);
+  });
+
   it("round-trips primitive buffer types and optionals", () => {
     const writer = new BufferWriter();
     writer.writeU8(7);

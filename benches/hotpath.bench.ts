@@ -1,7 +1,7 @@
 import { bench, describe } from "vitest";
 
 import { Multiplexer } from "../src/client/multiplexer";
-import { FrameCodec } from "../src/frame/codec";
+import { FrameCodec, FrameParser } from "../src/frame/codec";
 import { NoticeCodec } from "../src/domains/notice/codec";
 import { KvCodec } from "../src/domains/kv/codec";
 import { LeaseCodec } from "../src/domains/lease/codec";
@@ -73,6 +73,20 @@ describe("fitz-ts hotpath benchmarks", () => {
     }
 
     await Promise.all(pending);
+  });
+
+  bench("frame parser fragmented stream", () => {
+    const frameA = FrameCodec.encodeFrame(302, buildResponseFrame(1));
+    const frameB = FrameCodec.encodeFrame(303, buildResponseFrame(2));
+    const combined = new Uint8Array(frameA.length + frameB.length);
+    combined.set(frameA);
+    combined.set(frameB, frameA.length);
+
+    const parser = new FrameParser();
+
+    for (let index = 0; index < combined.length; index += 3) {
+      parser.parseFrames(combined.subarray(index, Math.min(combined.length, index + 3)));
+    }
   });
 
   bench("notice publish frame encode throughput", () => {
