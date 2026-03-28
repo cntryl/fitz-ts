@@ -1,4 +1,4 @@
-import { describe } from "vite-plus/test";
+import { describe } from "vitest";
 
 import type { AuthMode } from "./fixture";
 
@@ -21,9 +21,7 @@ export function runWithBothTransports(
   }
 }
 
-export function runWithTransportsOnly(
-  register: (ctx: { transport: TransportType }) => void,
-): void {
+export function runWithTransportsOnly(register: (ctx: { transport: TransportType }) => void): void {
   for (const transport of BOTH_TRANSPORTS) {
     describe(transport, () => {
       register({ transport });

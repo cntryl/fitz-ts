@@ -36,11 +36,7 @@ export class MockConnection {
   /**
    * Execute a request
    */
-  async request(
-    msgType: number,
-    payload: Uint8Array,
-    _signal?: AbortSignal,
-  ): Promise<Uint8Array> {
+  async request(msgType: number, payload: Uint8Array, _signal?: AbortSignal): Promise<Uint8Array> {
     const handler = this.handlers.get(msgType);
     if (!handler) {
       throw new Error(`No mock handler for message type ${msgType}`);
@@ -51,10 +47,7 @@ export class MockConnection {
   /**
    * Send fire-and-forget message (no response)
    */
-  async sendFireAndForget(
-    _msgType: number,
-    _payload: Uint8Array,
-  ): Promise<void> {
+  async sendFireAndForget(_msgType: number, _payload: Uint8Array): Promise<void> {
     // No-op for testing
     return Promise.resolve();
   }
@@ -62,10 +55,7 @@ export class MockConnection {
   /**
    * Register a notification handler
    */
-  registerNotificationHandler(
-    msgType: number,
-    handler: NotificationHandler,
-  ): void {
+  registerNotificationHandler(msgType: number, handler: NotificationHandler): void {
     this.notificationHandlers.set(msgType, handler);
   }
 
@@ -117,9 +107,7 @@ export class MockConnection {
 /**
  * Create a success response (status = 0)
  */
-export function createSuccessResponse(
-  data: Uint8Array = new Uint8Array(0),
-): Uint8Array {
+export function createSuccessResponse(data: Uint8Array = new Uint8Array(0)): Uint8Array {
   const response = new Uint8Array(1 + data.length);
   response[0] = 0; // success status
   response.set(data, 1);
@@ -129,10 +117,7 @@ export function createSuccessResponse(
 /**
  * Create an error response
  */
-export function createErrorResponse(
-  status: number = 1,
-  errorMsg?: string,
-): Uint8Array {
+export function createErrorResponse(status: number = 1, errorMsg?: string): Uint8Array {
   if (!errorMsg) {
     return new Uint8Array([status]);
   }

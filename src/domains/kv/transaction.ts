@@ -32,29 +32,17 @@ export class KvTransaction {
     });
   }
 
-  async put(
-    key: Uint8Array,
-    value: Uint8Array,
-    signal?: AbortSignal,
-  ): Promise<void> {
+  async put(key: Uint8Array, value: Uint8Array, signal?: AbortSignal): Promise<void> {
     this.ensureOpen();
     const payload = KvCodec.encodePut(this.txId, this.route, key, value);
     const response = await this.connection.request(MSG_KV_PUT, payload, signal);
     this.checkStatus(KvCodec.decodeStatusResponse(response).status, "PUT");
   }
 
-  async insert(
-    key: Uint8Array,
-    value: Uint8Array,
-    signal?: AbortSignal,
-  ): Promise<void> {
+  async insert(key: Uint8Array, value: Uint8Array, signal?: AbortSignal): Promise<void> {
     this.ensureOpen();
     const payload = KvCodec.encodeInsert(this.txId, this.route, key, value);
-    const response = await this.connection.request(
-      MSG_KV_INSERT,
-      payload,
-      signal,
-    );
+    const response = await this.connection.request(MSG_KV_INSERT, payload, signal);
     this.checkStatus(KvCodec.decodeStatusResponse(response).status, "INSERT");
   }
 
@@ -73,35 +61,15 @@ export class KvTransaction {
   async delete(key: Uint8Array, signal?: AbortSignal): Promise<void> {
     this.ensureOpen();
     const payload = KvCodec.encodeDelete(this.txId, this.route, key);
-    const response = await this.connection.request(
-      MSG_KV_DELETE,
-      payload,
-      signal,
-    );
+    const response = await this.connection.request(MSG_KV_DELETE, payload, signal);
     this.checkStatus(KvCodec.decodeStatusResponse(response).status, "DELETE");
   }
 
-  async deleteRange(
-    startKey: Uint8Array,
-    endKey: Uint8Array,
-    signal?: AbortSignal,
-  ): Promise<void> {
+  async deleteRange(startKey: Uint8Array, endKey: Uint8Array, signal?: AbortSignal): Promise<void> {
     this.ensureOpen();
-    const payload = KvCodec.encodeDeleteRange(
-      this.txId,
-      this.route,
-      startKey,
-      endKey,
-    );
-    const response = await this.connection.request(
-      MSG_KV_DELETE_RANGE,
-      payload,
-      signal,
-    );
-    this.checkStatus(
-      KvCodec.decodeStatusResponse(response).status,
-      "DELETE_RANGE",
-    );
+    const payload = KvCodec.encodeDeleteRange(this.txId, this.route, startKey, endKey);
+    const response = await this.connection.request(MSG_KV_DELETE_RANGE, payload, signal);
+    this.checkStatus(KvCodec.decodeStatusResponse(response).status, "DELETE_RANGE");
   }
 
   async scan(
@@ -110,11 +78,7 @@ export class KvTransaction {
   ): Promise<AsyncIterable<Uint8Array>> {
     this.ensureOpen();
     const payload = KvCodec.encodeScan(this.txId, this.route, options);
-    const response = await this.connection.request(
-      MSG_KV_SCAN,
-      payload,
-      signal,
-    );
+    const response = await this.connection.request(MSG_KV_SCAN, payload, signal);
     const decoded = KvCodec.decodeScanResponse(response);
     this.checkStatus(decoded.status, "SCAN");
     return new AsyncIterableIterator(new SliceIterator(decoded.keys));
@@ -125,11 +89,7 @@ export class KvTransaction {
     this.closed = true;
     this.unsubscribeDisconnect();
     const payload = KvCodec.encodeCommit(this.txId, this.route);
-    const response = await this.connection.request(
-      MSG_KV_COMMIT,
-      payload,
-      signal,
-    );
+    const response = await this.connection.request(MSG_KV_COMMIT, payload, signal);
     this.checkStatus(KvCodec.decodeStatusResponse(response).status, "COMMIT");
   }
 
@@ -142,15 +102,8 @@ export class KvTransaction {
     this.unsubscribeDisconnect();
     const payload = KvCodec.encodeRollback(this.txId, this.route);
     try {
-      const response = await this.connection.request(
-        MSG_KV_ROLLBACK,
-        payload,
-        signal,
-      );
-      this.checkStatus(
-        KvCodec.decodeStatusResponse(response).status,
-        "ROLLBACK",
-      );
+      const response = await this.connection.request(MSG_KV_ROLLBACK, payload, signal);
+      this.checkStatus(KvCodec.decodeStatusResponse(response).status, "ROLLBACK");
     } catch {
       // Best-effort cleanup.
     }

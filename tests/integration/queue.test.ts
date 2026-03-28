@@ -1,6 +1,6 @@
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it } from "vitest";
 
-import { sleep } from "./helpers";
+import { sleep, waitFor } from "./helpers";
 import { TestFixture } from "./fixture/fixture";
 import { runWithBothTransports } from "./fixture/transport";
 
@@ -13,10 +13,7 @@ describe("Queue integration", () => {
       await f.connectOrFail();
 
       const route = f.uniqueRoute("queue");
-      const messageId = await f
-        .client()
-        .queue()
-        .enqueue(route, b("task-payload"));
+      const messageId = await f.client().queue().enqueue(route, b("task-payload"));
       expect(messageId).toBeGreaterThan(0n);
 
       const items = await f.client().queue().reserve(route, 30, 1);
@@ -33,14 +30,23 @@ describe("Queue integration", () => {
       const route = f.uniqueRoute("queue");
       await f.client().queue().enqueue(route, b("expire-me"));
 
-      const firstReserve = await f.client().queue().reserve(route, 2, 1);
+      const firstReserve = await f.client().queue().reserve(route, 1, 1);
       expect(firstReserve).toHaveLength(1);
 
-      await sleep(4000);
-
-      const secondReserve = await f.client().queue().reserve(route, 30, 1);
-      expect(secondReserve.length).toBeGreaterThanOrEqual(1);
-      expect(Buffer.from(secondReserve[0].body).toString()).toBe("expire-me");
+      await waitFor(
+        async () => {
+          const secondReserve = await f.client().queue().reserve(route, 30, 1);
+          if (secondReserve.length === 0) {
+            return false;
+          }
+          return Buffer.from(secondReserve[0].body).toString() === "expire-me";
+        },
+        {
+          timeoutMs: 3000,
+          intervalMs: 100,
+          timeoutMessage: "message did not return to queue after lease expiry",
+        },
+      );
     });
 
     it("should extend lease with a valid token", async () => {
@@ -142,21 +148,38 @@ describe("Queue integration", () => {
 
       const route = f.uniqueRoute("queue");
       await f.client().queue().enqueue(route, b("expire-then-complete"));
-      const items = await f.client().queue().reserve(route, 2, 1);
+      const staleLeaseItems = await f.client().queue().reserve(route, 1, 1);
 
-      expect(items).toHaveLength(1);
-      await sleep(4000);
-      await expect(items[0].complete()).rejects.toBeTruthy();
+      expect(staleLeaseItems).toHaveLength(1);
+      let refreshedLeaseItem: (typeof staleLeaseItems)[number] | null = null;
+      await waitFor(
+        async () => {
+          const items = await f.client().queue().reserve(route, 30, 1);
+          if (items.length === 0) {
+            return false;
+          }
+
+          refreshedLeaseItem = items[0];
+          return Buffer.from(items[0].body).toString() === "expire-then-complete";
+        },
+        {
+          timeoutMs: 3000,
+          intervalMs: 100,
+          timeoutMessage: "message was not re-reserved after lease expiry",
+        },
+      );
+
+      await expect(staleLeaseItems[0].complete()).rejects.toBeTruthy();
+      if (refreshedLeaseItem) {
+        await refreshedLeaseItem.complete().catch(() => undefined);
+      }
     });
 
     it("should return empty array for an empty queue", async () => {
       const f = new TestFixture(transport, authMode);
       await f.connectOrFail();
 
-      const items = await f
-        .client()
-        .queue()
-        .reserve(f.uniqueRoute("queue"), 30, 1);
+      const items = await f.client().queue().reserve(f.uniqueRoute("queue"), 30, 1);
       expect(items).toEqual([]);
     });
 

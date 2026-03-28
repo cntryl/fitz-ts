@@ -17,12 +17,7 @@ import {
 import { utf8Encoder } from "../core/buffer";
 import { FrameCodec, FrameParser } from "../frame/codec";
 import { MSG_CONNECT } from "../frame/types";
-import {
-  AuthenticationError,
-  ConnectionError,
-  FitzError,
-  TransportError,
-} from "../core/errors";
+import { AuthenticationError, ConnectionError, FitzError, TransportError } from "../core/errors";
 import { Multiplexer } from "./multiplexer";
 
 export interface ConnectionOptions {
@@ -46,8 +41,7 @@ type TransportFactory = () => Transport;
 type ReconnectListener = () => void | Promise<void>;
 type DisconnectListener = () => void;
 
-const sleep = (ms: number) =>
-  new Promise<void>((resolve) => setTimeout(resolve, ms));
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 class AsyncHandlerDispatcher {
   private activeCount = 0;
@@ -109,6 +103,10 @@ function throwIfAborted(signal?: AbortSignal): void {
   if (signal?.aborted) {
     throw abortError();
   }
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof Error && error.name === "AbortError";
 }
 
 export class Connection {
@@ -180,9 +178,7 @@ export class Connection {
     this.closeRequested = true;
     this.receiveLoopAbort = true;
     this.setState(ConnectionState.Closed);
-    this.authOutcome?.reject(
-      new ConnectionError("Connection closed", { state: this.state }),
-    );
+    this.authOutcome?.reject(new ConnectionError("Connection closed", { state: this.state }));
     this.authOutcome = null;
     this.multiplexer.setDisconnected();
     this.emitDisconnect();
@@ -256,17 +252,11 @@ export class Connection {
     }
   }
 
-  async sendFireAndForget(
-    messageType: number,
-    requestPayload: Uint8Array,
-  ): Promise<void> {
+  async sendFireAndForget(messageType: number, requestPayload: Uint8Array): Promise<void> {
     await this.send(messageType, requestPayload);
   }
 
-  registerNotificationHandler(
-    messageType: number,
-    handler: (payload: Uint8Array) => void,
-  ): void {
+  registerNotificationHandler(messageType: number, handler: (payload: Uint8Array) => void): void {
     this.multiplexer.registerNotificationHandler(messageType, handler);
   }
 
@@ -308,17 +298,12 @@ export class Connection {
     return this.ensureTransport().getUrl();
   }
 
-  private async openAndAuthenticate(
-    isReconnect: boolean,
-    signal?: AbortSignal,
-  ): Promise<void> {
+  private async openAndAuthenticate(isReconnect: boolean, signal?: AbortSignal): Promise<void> {
     throwIfAborted(signal);
     this.receiveLoopAbort = false;
     this.frameParser.parseFrames(new Uint8Array(0));
     this.transport = this.transportFactory();
-    this.setState(
-      isReconnect ? ConnectionState.Reconnecting : ConnectionState.Connecting,
-    );
+    this.setState(isReconnect ? ConnectionState.Reconnecting : ConnectionState.Connecting);
     this.emitLifecycleEvent(isReconnect ? "reconnect_start" : "connect_start");
 
     await this.transport.connect();
@@ -333,10 +318,7 @@ export class Connection {
     try {
       await this.sendConnect();
       throwIfAborted(signal);
-      await Promise.race([
-        this.authOutcome.promise,
-        sleep(this.authSettleDelayMs),
-      ]);
+      await Promise.race([this.authOutcome.promise, sleep(this.authSettleDelayMs)]);
       throwIfAborted(signal);
       this.authOutcome?.resolve();
       this.authOutcome = null;
@@ -345,9 +327,7 @@ export class Connection {
       }
       this.setState(ConnectionState.Authenticated);
       this.multiplexer.setConnected();
-      this.emitLifecycleEvent(
-        isReconnect ? "reconnect_succeeded" : "connect_succeeded",
-      );
+      this.emitLifecycleEvent(isReconnect ? "reconnect_succeeded" : "connect_succeeded");
     } catch (error) {
       this.authOutcome = null;
       this.multiplexer.setDisconnected();
@@ -356,27 +336,20 @@ export class Connection {
         await this.transport.close().catch(() => undefined);
         this.transport = null;
       }
-      const rejectedAuth =
-        error instanceof AuthenticationError ||
-        (this.state === ConnectionState.Authenticating && !isReconnect);
+      const rejectedAuth = error instanceof AuthenticationError;
       this.authRejected = rejectedAuth;
-      this.setState(
-        rejectedAuth ? ConnectionState.Closed : ConnectionState.Disconnected,
-      );
-      this.emitLifecycleEvent(
-        isReconnect ? "reconnect_failed" : "connect_failed",
-        error,
-      );
+      this.setState(rejectedAuth ? ConnectionState.Closed : ConnectionState.Disconnected);
+      this.emitLifecycleEvent(isReconnect ? "reconnect_failed" : "connect_failed", error);
+      if (isAbortError(error)) {
+        throw abortError();
+      }
       throw error;
     }
   }
 
   private async sendConnect(): Promise<void> {
     const token = await this.tokenProvider();
-    const frame = FrameCodec.encodeFrame(
-      MSG_CONNECT,
-      utf8Encoder.encode(token),
-    );
+    const frame = FrameCodec.encodeFrame(MSG_CONNECT, utf8Encoder.encode(token));
     await this.ensureTransport().send(frame);
   }
 
@@ -487,10 +460,9 @@ export class Connection {
 
   private ensureAuthenticated(): void {
     if (this.closeRequested || this.state !== ConnectionState.Authenticated) {
-      throw new ConnectionError(
-        `Cannot use connection while state is ${this.state}`,
-        { state: this.state },
-      );
+      throw new ConnectionError(`Cannot use connection while state is ${this.state}`, {
+        state: this.state,
+      });
     }
   }
 
@@ -498,10 +470,7 @@ export class Connection {
     this.state = newState;
   }
 
-  private async sendSerialized(
-    transport: Transport,
-    data: Uint8Array,
-  ): Promise<void> {
+  private async sendSerialized(transport: Transport, data: Uint8Array): Promise<void> {
     const prior = this.writeChain;
     let release!: () => void;
     this.writeChain = new Promise<void>((resolve) => {
@@ -516,11 +485,7 @@ export class Connection {
     }
   }
 
-  private emitLifecycleEvent(
-    event: string,
-    error?: unknown,
-    attempt?: number,
-  ): void {
+  private emitLifecycleEvent(event: string, error?: unknown, attempt?: number): void {
     const payload = {
       event,
       state: this.state,

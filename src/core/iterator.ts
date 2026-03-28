@@ -120,10 +120,7 @@ export class AsyncIterableIterator<T> implements AsyncIterable<T> {
  * });
  * ```
  */
-export async function forEach<T>(
-  it: Iterator<T>,
-  fn: (item: T) => Promise<void>,
-): Promise<void> {
+export async function forEach<T>(it: Iterator<T>, fn: (item: T) => Promise<void>): Promise<void> {
   try {
     while (it.next()) {
       await fn(it.value());

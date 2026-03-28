@@ -2,7 +2,7 @@
  * Notice Codec unit tests
  */
 
-import { describe, it, expect } from "vite-plus/test";
+import { describe, it, expect } from "vitest";
 import { NoticeCodec } from "../../../src/domains/notice/codec";
 import { BufferWriter } from "../../../src/core/buffer";
 import { testData } from "../helpers/test-utils";
@@ -24,10 +24,7 @@ describe("NoticeCodec", () => {
 
     it("should_encode_publish_with_empty_body", () => {
       // Arrange/Act
-      const encoded = NoticeCodec.encodePublish(
-        "notice://test/events",
-        new Uint8Array(0),
-      );
+      const encoded = NoticeCodec.encodePublish("notice://test/events", new Uint8Array(0));
 
       // Assert
       expect(encoded).toBeInstanceOf(Uint8Array);
@@ -48,9 +45,7 @@ describe("NoticeCodec", () => {
 
     it("should_encode_subscribe_with_exact_route", () => {
       // Arrange/Act
-      const encoded = NoticeCodec.encodeSubscribe(
-        "notice://acme/alerts/critical",
-      );
+      const encoded = NoticeCodec.encodeSubscribe("notice://acme/alerts/critical");
 
       // Assert
       expect(encoded).toBeInstanceOf(Uint8Array);

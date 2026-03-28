@@ -1,4 +1,4 @@
-import { expect, onTestFinished } from "vite-plus/test";
+import { expect, onTestFinished } from "vitest";
 
 import { Client } from "../../../src/client/client";
 import type { ClientConfig } from "../../../src/core/types";
@@ -9,11 +9,7 @@ import {
 } from "./jwt";
 import type { TransportType } from "./transport";
 
-export type AuthMode =
-  | "anonymous"
-  | "valid_jwt"
-  | "expired_jwt"
-  | "invalid_signature";
+export type AuthMode = "anonymous" | "valid_jwt" | "expired_jwt" | "invalid_signature";
 
 export const EnvBrokerTCPAddr = "FITZ_BROKER_TCP_ADDR";
 export const EnvBrokerWSAddr = "FITZ_BROKER_WS_ADDR";
@@ -46,10 +42,7 @@ function brokerAddrFromEnv(
   return env(wsEnv) ?? env(EnvBrokerWSAddr) ?? wsDefault;
 }
 
-export function brokerAddrFor(
-  transport: TransportType,
-  authMode: AuthMode,
-): string {
+export function brokerAddrFor(transport: TransportType, authMode: AuthMode): string {
   switch (authMode) {
     case "anonymous":
       return brokerAddrFromEnv(
@@ -74,9 +67,7 @@ export function brokerAddrFor(
   }
 }
 
-function tokenProviderForMode(
-  authMode: AuthMode,
-): () => string | Promise<string> {
+function tokenProviderForMode(authMode: AuthMode): () => string | Promise<string> {
   const secret = env(EnvBrokerJWTHMACSecret) ?? DEFAULT_SECRET;
   const audience = env(EnvBrokerJWTAudience) ?? DEFAULT_AUDIENCE;
 
@@ -134,8 +125,7 @@ export class TestFixture {
     this.clientInstance = new Client({
       url: this.brokerAddr,
       transport: this.transport,
-      tokenProvider:
-        this.tokenProviderOverride ?? tokenProviderForMode(this.authMode),
+      tokenProvider: this.tokenProviderOverride ?? tokenProviderForMode(this.authMode),
       timeout: 30000,
       ...overrides,
     });

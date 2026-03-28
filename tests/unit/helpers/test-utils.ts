@@ -62,10 +62,7 @@ export function expectSuccess(response: Uint8Array): Uint8Array {
 /**
  * Encode a message frame: [msgType u16][length u16][payload]
  */
-export function encodeMessageFrame(
-  msgType: number,
-  payload: Uint8Array,
-): Uint8Array {
+export function encodeMessageFrame(msgType: number, payload: Uint8Array): Uint8Array {
   const writer = new BufferWriter(4 + payload.length);
   writer.writeU16BE(msgType);
   writer.writeU16BE(payload.length);
@@ -82,9 +79,7 @@ export function decodeMessageFrame(frame: Uint8Array): [number, Uint8Array] {
   const msgType = reader.readU16BE();
   const length = reader.readU16BE();
   if (4 + length !== frame.length) {
-    throw new Error(
-      `Frame length mismatch: expected ${4 + length}, got ${frame.length}`,
-    );
+    throw new Error(`Frame length mismatch: expected ${4 + length}, got ${frame.length}`);
   }
   const payload = reader.readBytes(length);
   return [msgType, payload];

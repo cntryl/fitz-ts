@@ -18,19 +18,13 @@ export class QueueCodec {
    * Encode ENQUEUE request.
    * Payload: [route: string][body_len: u32][body: bytes][has_delay: u8][delay_seconds: u64 if has_delay]
    */
-  static encodeEnqueue(
-    route: string,
-    body: Uint8Array,
-    options?: EnqueueOptions,
-  ): Uint8Array {
+  static encodeEnqueue(route: string, body: Uint8Array, options?: EnqueueOptions): Uint8Array {
     const writer = new BufferWriter(512);
     writer.writeRoute(route);
     writer.writeU32BE(body.length);
     writer.writeBytes(body);
 
-    const delaySeconds = options?.delayMs
-      ? Math.floor(options.delayMs / 1000)
-      : 0;
+    const delaySeconds = options?.delayMs ? Math.floor(options.delayMs / 1000) : 0;
     const hasDelay = delaySeconds > 0 ? 1 : 0;
     writer.writeU8(hasDelay);
     if (hasDelay) {
@@ -114,11 +108,7 @@ export class QueueCodec {
    * Encode COMPLETE request.
    * Payload: [route: string][message_id: u64][lease_token: u64]
    */
-  static encodeComplete(
-    route: string,
-    messageId: bigint,
-    leaseToken: bigint,
-  ): Uint8Array {
+  static encodeComplete(route: string, messageId: bigint, leaseToken: bigint): Uint8Array {
     const writer = new BufferWriter(128);
     writer.writeRoute(route);
     writer.writeU64BE(messageId);
@@ -207,9 +197,7 @@ export class QueueCodec {
    * Decode UNSUBSCRIBE response.
    * Payload: [status: u8]
    */
-  static decodeUnsubscribeResponse(
-    payload: Uint8Array,
-  ): QueueUnsubscribeResponse {
+  static decodeUnsubscribeResponse(payload: Uint8Array): QueueUnsubscribeResponse {
     const reader = new BufferReader(payload);
     const status = reader.readU8();
     return { status };

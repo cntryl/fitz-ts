@@ -50,9 +50,7 @@ export interface StreamCommitNotification {
   payload: StreamCommitPayload;
 }
 
-export type StreamCommitHandler = (
-  notification: StreamCommitNotification,
-) => void | Promise<void>;
+export type StreamCommitHandler = (notification: StreamCommitNotification) => void | Promise<void>;
 
 export class StreamSubscription {
   constructor(

@@ -36,12 +36,7 @@ class RpcResponseWriter implements ResponseWriter {
   ) {}
 
   async send(body: Uint8Array, isEnd: boolean): Promise<void> {
-    const payload = RpcCodec.encodeResponse(
-      this.correlationId,
-      this.sequence++,
-      body,
-      isEnd,
-    );
+    const payload = RpcCodec.encodeResponse(this.correlationId, this.sequence++, body, isEnd);
 
     try {
       await this.connection.send(MSG_RPC_RESPONSE, payload);
@@ -225,6 +220,14 @@ export class RpcClient extends DomainClient {
 
   constructor(connection: import("../../client/connection").Connection) {
     super(connection);
+    this.connection.onDisconnect(() => {
+      const pending = Array.from(this.pendingRpcs.values());
+      this.pendingRpcs.clear();
+      for (const iterator of pending) {
+        iterator.fail(new ConnectionError("Connection closed while RPC response was pending"));
+      }
+    });
+
     this.connection.onReconnect(async () => {
       if (this.workers.size === 0) {
         return;
@@ -256,21 +259,12 @@ export class RpcClient extends DomainClient {
     const correlationId = RpcCodec.generateCorrelationId();
     const correlationKey = this.correlationIdToKey(correlationId);
 
-    const iterator = new RpcIterator(
-      correlationId,
-      this,
-      timeoutMs,
-      options?.signal,
-    );
+    const iterator = new RpcIterator(correlationId, this, timeoutMs, options?.signal);
     this.pendingRpcs.set(correlationKey, iterator);
 
     try {
       const payload = RpcCodec.encodeRequest(correlationId, route, "", body);
-      const response = await this.requestFrame(
-        MSG_RPC_REQUEST,
-        payload,
-        options?.signal,
-      );
+      const response = await this.requestFrame(MSG_RPC_REQUEST, payload, options?.signal);
 
       const decoded = RpcCodec.decodeRequestResponse(response);
       if (decoded.status !== RpcStatus.Ok) {
@@ -295,10 +289,7 @@ export class RpcClient extends DomainClient {
    * @param handler Handler function to process requests
    * @returns Worker registration with `unsubscribe()`.
    */
-  async registerWorker(
-    route: string,
-    handler: RpcHandler,
-  ): Promise<RpcSubscription> {
+  async registerWorker(route: string, handler: RpcHandler): Promise<RpcSubscription> {
     this.initRpcHandler();
 
     const payload = RpcCodec.encodeSubscribeWorker(route);
@@ -330,10 +321,7 @@ export class RpcClient extends DomainClient {
 
     try {
       const payload = RpcCodec.encodeUnsubscribeWorker(route);
-      const response = await this.requestFrame(
-        MSG_RPC_UNSUBSCRIBE_WORKER,
-        payload,
-      );
+      const response = await this.requestFrame(MSG_RPC_UNSUBSCRIBE_WORKER, payload);
       const decoded = RpcCodec.decodeUnsubscribeWorkerResponse(response);
 
       if (decoded.status !== RpcStatus.Ok) {
@@ -361,35 +349,28 @@ export class RpcClient extends DomainClient {
     }
     this.initialized = true;
 
-    this.connection.registerNotificationHandler(
-      MSG_RPC_RESPONSE,
-      (payload: Uint8Array) => {
-        try {
-          const { correlationId, sequence, body, streamEnd } =
-            RpcCodec.decodeResponse(payload);
-          this.handleRpcResponse(correlationId, sequence, body, streamEnd);
-        } catch {
-          // Best-effort decode for background frames.
-        }
-      },
-    );
+    this.connection.registerNotificationHandler(MSG_RPC_RESPONSE, (payload: Uint8Array) => {
+      try {
+        const { correlationId, sequence, body, streamEnd } = RpcCodec.decodeResponse(payload);
+        this.handleRpcResponse(correlationId, sequence, body, streamEnd);
+      } catch {
+        // Best-effort decode for background frames.
+      }
+    });
 
     this.connection.registerNotificationHandler(MSG_RPC_ACK, () => {
       // Worker ACK frames are broker-internal flow control signals. The current
       // public RPC API does not surface them.
     });
 
-    this.connection.registerNotificationHandler(
-      MSG_RPC_REQUEST,
-      (payload: Uint8Array) => {
-        try {
-          const request = RpcCodec.decodeInboundRequest(payload);
-          this.handleRpcRequest(request);
-        } catch {
-          // Best-effort decode for background frames.
-        }
-      },
-    );
+    this.connection.registerNotificationHandler(MSG_RPC_REQUEST, (payload: Uint8Array) => {
+      try {
+        const request = RpcCodec.decodeInboundRequest(payload);
+        this.handleRpcRequest(request);
+      } catch {
+        // Best-effort decode for background frames.
+      }
+    });
   }
 
   /**
@@ -439,13 +420,9 @@ export class RpcClient extends DomainClient {
           return;
         }
 
-        const message =
-          error instanceof Error ? error.message : "Handler error";
+        const message = error instanceof Error ? error.message : "Handler error";
         try {
-          await writer.send(
-            utf8Encoder.encode(`Handler error: ${message}`),
-            true,
-          );
+          await writer.send(utf8Encoder.encode(`Handler error: ${message}`), true);
         } catch {
           // Best-effort error response.
         }

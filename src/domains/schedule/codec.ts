@@ -19,11 +19,7 @@ export class ScheduleCodec {
    * Encode CREATE request
    * Payload: [route: string][cron: string][payload: bytes]
    */
-  static encodeCreate(
-    route: string,
-    cronExpr: string,
-    payload: Uint8Array,
-  ): Uint8Array {
+  static encodeCreate(route: string, cronExpr: string, payload: Uint8Array): Uint8Array {
     const writer = new BufferWriter(512);
     writer.writeRoute(route);
     writer.writeString(cronExpr);
@@ -153,9 +149,7 @@ export class ScheduleCodec {
    * Decode UNSUBSCRIBE response
    * Success payload: empty
    */
-  static decodeUnsubscribeResponse(
-    _data: Uint8Array,
-  ): ScheduleUnsubscribeResponse {
+  static decodeUnsubscribeResponse(_data: Uint8Array): ScheduleUnsubscribeResponse {
     return {};
   }
 

@@ -1,14 +1,11 @@
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it } from "vitest";
 
 import type { Connection } from "../../../src/client/connection";
 import { ScheduleClient } from "../../../src/domains/schedule/client";
 
 class FakeScheduleConnection {
   readonly requestCalls: number[] = [];
-  readonly notificationHandlers = new Map<
-    number,
-    (payload: Uint8Array) => void
-  >();
+  readonly notificationHandlers = new Map<number, (payload: Uint8Array) => void>();
   readonly reconnectListeners = new Set<() => void | Promise<void>>();
 
   async request(messageType: number): Promise<Uint8Array> {
@@ -16,10 +13,7 @@ class FakeScheduleConnection {
     return new Uint8Array([0]);
   }
 
-  registerNotificationHandler(
-    messageType: number,
-    handler: (payload: Uint8Array) => void,
-  ): void {
+  registerNotificationHandler(messageType: number, handler: (payload: Uint8Array) => void): void {
     this.notificationHandlers.set(messageType, handler);
   }
 
@@ -52,9 +46,7 @@ describe("ScheduleClient route validation", () => {
     const connection = new FakeScheduleConnection();
     const client = new ScheduleClient(connection as unknown as Connection);
 
-    await expect(
-      client.cancel("schedule://realm/area/resource/*"),
-    ).rejects.toMatchObject({
+    await expect(client.cancel("schedule://realm/area/resource/*")).rejects.toMatchObject({
       code: "INVALID_ROUTE",
     });
     expect(connection.requestCalls).toHaveLength(0);

@@ -12,11 +12,7 @@ type NodeLikeProcess = {
 };
 
 type NetModule = {
-  createConnection(options: {
-    host: string;
-    port: number;
-    timeout: number;
-  }): TcpSocket;
+  createConnection(options: { host: string; port: number; timeout: number }): TcpSocket;
 };
 
 type TcpSocket = {
@@ -99,9 +95,7 @@ export class TcpTransport implements Transport {
 
         const connectTimeout = setTimeout(() => {
           this.socket?.destroy();
-          reject(
-            new TimeoutError(`TCP connection timeout after ${this.timeout}ms`),
-          );
+          reject(new TimeoutError(`TCP connection timeout after ${this.timeout}ms`));
         }, this.timeout);
 
         const socket = this.socket;
@@ -115,17 +109,13 @@ export class TcpTransport implements Transport {
         });
 
         socket.on("data", (chunk: Uint8Array | Buffer) => {
-          this.handleData(
-            chunk instanceof Uint8Array ? chunk : new Uint8Array(chunk),
-          );
+          this.handleData(chunk instanceof Uint8Array ? chunk : new Uint8Array(chunk));
         });
 
         socket.on("error", (err: Error) => {
           clearTimeout(connectTimeout);
           this.connected = false;
-          const error = new TransportError(
-            `TCP error: ${err.message || "unknown error"}`,
-          );
+          const error = new TransportError(`TCP error: ${err.message || "unknown error"}`);
           if (this.receiverResolve) {
             this.receiverResolve(new Uint8Array(0)); // Signal error
           }
@@ -163,10 +153,7 @@ export class TcpTransport implements Transport {
         const available = chunk.length - offset;
         const toCopy = Math.min(needed, available);
 
-        this.lengthBuffer.set(
-          chunk.slice(offset, offset + toCopy),
-          this.lengthOffset,
-        );
+        this.lengthBuffer.set(chunk.slice(offset, offset + toCopy), this.lengthOffset);
         this.lengthOffset += toCopy;
         offset += toCopy;
 
@@ -195,10 +182,7 @@ export class TcpTransport implements Transport {
         const available = chunk.length - offset;
         const toCopy = Math.min(needed, available);
 
-        this.messageBuffer.set(
-          chunk.slice(offset, offset + toCopy),
-          this.messageOffset,
-        );
+        this.messageBuffer.set(chunk.slice(offset, offset + toCopy), this.messageOffset);
         this.messageOffset += toCopy;
         offset += toCopy;
 

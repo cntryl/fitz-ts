@@ -25,10 +25,7 @@ export class BufferWriter {
 
   private ensureCapacity(needed: number) {
     if (this.offset + needed > this.buffer.length) {
-      const newCapacity = Math.max(
-        this.buffer.length * 2,
-        this.offset + needed,
-      );
+      const newCapacity = Math.max(this.buffer.length * 2, this.offset + needed);
       const newBuffer = new Uint8Array(newCapacity);
       newBuffer.set(this.buffer);
       this.buffer = newBuffer;
@@ -160,8 +157,7 @@ export class BufferReader {
     if (this.offset + 2 > this.buffer.length) {
       throw new Error("Buffer overflow: cannot read U16BE");
     }
-    const value =
-      (this.buffer[this.offset] << 8) | this.buffer[this.offset + 1];
+    const value = (this.buffer[this.offset] << 8) | this.buffer[this.offset + 1];
     this.offset += 2;
     return value;
   }

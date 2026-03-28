@@ -28,10 +28,7 @@ type QueueSubscriptionState = {
 };
 
 export class QueueClient extends DomainClient {
-  private readonly subscriptionsByPattern = new Map<
-    string,
-    QueueSubscriptionState
-  >();
+  private readonly subscriptionsByPattern = new Map<string, QueueSubscriptionState>();
   private readonly patternsBySubId = new Map<bigint, string>();
   private notificationHandlerRegistered = false;
   private nextHandlerId = 1;
@@ -64,21 +61,14 @@ export class QueueClient extends DomainClient {
     });
   }
 
-  async enqueue(
-    route: string,
-    body: Uint8Array,
-    options?: EnqueueOptions,
-  ): Promise<bigint> {
+  async enqueue(route: string, body: Uint8Array, options?: EnqueueOptions): Promise<bigint> {
     const payload = QueueCodec.encodeEnqueue(route, body, options);
     const response = await this.requestFrame(MSG_QUEUE_ENQUEUE, payload);
     const decoded = QueueCodec.decodeEnqueueResponse(response);
     this.checkStatus(decoded.status, "ENQUEUE");
 
     if (decoded.messageId === undefined) {
-      throw new QueueError(
-        "ENQUEUE response missing messageId",
-        "MISSING_MESSAGE_ID",
-      );
+      throw new QueueError("ENQUEUE response missing messageId", "MISSING_MESSAGE_ID");
     }
 
     return decoded.messageId;
@@ -155,26 +145,17 @@ export class QueueClient extends DomainClient {
     batchSize: number,
     waitSeconds: number,
   ): Promise<QueueItem[]> {
-    const payload = QueueCodec.encodeReserve(
-      route,
-      leaseSeconds,
-      batchSize,
-      waitSeconds,
-    );
+    const payload = QueueCodec.encodeReserve(route, leaseSeconds, batchSize, waitSeconds);
     const response = await this.requestFrame(MSG_QUEUE_RESERVE, payload);
     const decoded = QueueCodec.decodeReserveResponse(response);
     this.checkStatus(decoded.status, "RESERVE");
 
     return (decoded.items ?? []).map(
-      (item) =>
-        new QueueItem(item.id, item.token, item.body, route, this.connection),
+      (item) => new QueueItem(item.id, item.token, item.body, route, this.connection),
     );
   }
 
-  async subscribe(
-    pattern: string,
-    handler: AvailabilityHandler,
-  ): Promise<QueueSubscription> {
+  async subscribe(pattern: string, handler: AvailabilityHandler): Promise<QueueSubscription> {
     this.initNotificationHandler();
     const existing = this.subscriptionsByPattern.get(pattern);
     if (existing) {
@@ -192,10 +173,7 @@ export class QueueClient extends DomainClient {
     this.checkStatus(decoded.status, "SUBSCRIBE");
 
     if (decoded.subId === undefined) {
-      throw new QueueError(
-        "SUBSCRIBE response missing subId",
-        "MISSING_SUB_ID",
-      );
+      throw new QueueError("SUBSCRIBE response missing subId", "MISSING_SUB_ID");
     }
 
     return decoded.subId;

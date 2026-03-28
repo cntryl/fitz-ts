@@ -28,10 +28,7 @@ const client = new Client({
 await client.connect();
 
 const tx = await client.kv().begin("kv://realm/area/users", "ReadWrite");
-await tx.put(
-  new TextEncoder().encode("user-1"),
-  new TextEncoder().encode('{"name":"Alice"}'),
-);
+await tx.put(new TextEncoder().encode("user-1"), new TextEncoder().encode('{"name":"Alice"}'));
 await tx.commit();
 
 await client.close();
@@ -81,22 +78,14 @@ Fast local checks:
 
 ```bash
 npm ci
-npm run typecheck
-npm run lint
-npm run fmt:check
-npm run build
-npm run test:unit
-npm run verify
+npm run verify:fast
 ```
 
 Broker-backed verification:
 
 ```bash
 docker compose -f ../fitz-go/compose.yml up -d
-npm run test:integration
-CONFORMANCE_TRANSPORT=ws CONFORMANCE_AUTH_MODE=anonymous \
-CONFORMANCE_OUTPUT=artifacts/conformance-results.json \
-npm run test:spec
+npm run verify
 docker compose -f ../fitz-go/compose.yml down --volumes
 ```
 
@@ -110,20 +99,29 @@ Suggested release checklist:
 
 ```bash
 npm ci
-npm run typecheck
-npm run lint
-npm run fmt:check
-npm run build
-npm run test:unit
+npm run verify:fast
 docker compose -f ../fitz-go/compose.yml up -d
-npm run test:integration
-npm run test:conformance
+npm run verify
 npm run bench -- --run benches/hotpath.bench.ts
 docker compose -f ../fitz-go/compose.yml down --volumes
-npm run pack:smoke
 ```
 
 The conformance harness writes JSON results to `artifacts/conformance-results.json` by default.
+
+The repo keeps one custom verification script:
+[`scripts/pack-smoke.js`](/D:/repos/cntryl/fitz-workspace/fitz-ts/scripts/pack-smoke.js)
+for tarball consumer verification.
+
+Tooling is otherwise direct:
+
+- `oxlint` for linting
+- `oxfmt` for formatting
+- `vitest` for unit, integration, and conformance tests
+- `rolldown` for JS bundle output
+- `tsc` for typechecking and declaration emit
+
+Published artifacts are smoke-tested from the packed tarball in both ESM and
+CommonJS consumer fixtures before release.
 
 ## Repository Layout
 
@@ -147,4 +145,5 @@ Broker-backed connection hardening coverage now includes automatic reconnect sub
 ## Additional Documentation
 
 - [`docs/OPERATIONS.md`](docs/OPERATIONS.md)
+- [`docs/PUBLIC_CONTRACT.md`](docs/PUBLIC_CONTRACT.md)
 - [`CHANGELOG.md`](CHANGELOG.md)

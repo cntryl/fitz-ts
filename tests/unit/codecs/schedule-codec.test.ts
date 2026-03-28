@@ -2,7 +2,7 @@
  * Schedule Codec unit tests
  */
 
-import { describe, it, expect } from "vite-plus/test";
+import { describe, it, expect } from "vitest";
 import { ScheduleCodec } from "../../../src/domains/schedule/codec";
 import { BufferWriter } from "../../../src/core/buffer";
 import { testData } from "../helpers/test-utils";
@@ -166,9 +166,9 @@ describe("ScheduleCodec", () => {
     });
 
     it("should_reject_subscribe_response_without_sub_id", () => {
-      expect(() =>
-        ScheduleCodec.decodeSubscribeResponse(new Uint8Array([0])),
-      ).toThrow("missing subscription_id");
+      expect(() => ScheduleCodec.decodeSubscribeResponse(new Uint8Array([0]))).toThrow(
+        "missing subscription_id",
+      );
     });
   });
 
@@ -194,9 +194,9 @@ describe("ScheduleCodec", () => {
       writer.writeU32BE(testData('{"execution_id": "exec_456"}').length);
       writer.writeBytes(testData('{"execution_id": "exec_456"}'));
 
-      expect(() =>
-        ScheduleCodec.decodeNotification(writer.getBuffer()),
-      ).toThrow("payload truncated");
+      expect(() => ScheduleCodec.decodeNotification(writer.getBuffer())).toThrow(
+        "payload truncated",
+      );
     });
   });
 

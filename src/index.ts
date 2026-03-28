@@ -105,11 +105,7 @@ export type {
   LeaseSubscription,
 } from "./domains/lease/types";
 export { NoticeClient } from "./domains/notice/client";
-export type {
-  NoticeMsg,
-  NoticeHandler,
-  NoticeSubscription,
-} from "./domains/notice/types";
+export type { NoticeMsg, NoticeHandler, NoticeSubscription } from "./domains/notice/types";
 export { StreamClient } from "./domains/stream/client";
 export type {
   StreamRecord,

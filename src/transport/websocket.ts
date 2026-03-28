@@ -26,7 +26,7 @@ type WebSocketLike = {
   terminate?(): void;
 };
 
-let WS: WebSocketConstructor;
+let cachedWebSocketConstructor: WebSocketConstructor | null = null;
 
 const isNodeEnv = (): boolean => {
   try {
@@ -42,23 +42,28 @@ const isNodeEnv = (): boolean => {
   }
 };
 
-if (isNodeEnv()) {
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    WS = require("ws") as WebSocketConstructor;
-  } catch {
-    throw new Error(
-      "ws package is required for Node.js. Install with: npm install ws",
-    );
+function getWebSocketConstructor(): WebSocketConstructor {
+  if (cachedWebSocketConstructor) {
+    return cachedWebSocketConstructor;
   }
-} else {
-  const browserWebSocket = globalThis.WebSocket as unknown as
-    | WebSocketConstructor
-    | undefined;
+
+  if (isNodeEnv()) {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      cachedWebSocketConstructor = require("ws") as WebSocketConstructor;
+      return cachedWebSocketConstructor;
+    } catch {
+      throw new TransportError("ws package is required for Node.js. Install with: npm install ws");
+    }
+  }
+
+  const browserWebSocket = globalThis.WebSocket as unknown as WebSocketConstructor | undefined;
   if (!browserWebSocket) {
-    throw new Error("WebSocket is not available in this environment");
+    throw new TransportError("WebSocket is not available in this environment");
   }
-  WS = browserWebSocket;
+
+  cachedWebSocketConstructor = browserWebSocket;
+  return cachedWebSocketConstructor;
 }
 
 export class WebSocketTransport implements Transport {
@@ -91,16 +96,12 @@ export class WebSocketTransport implements Transport {
           }
         }
 
-        this.ws = new WS(wsUrl);
+        this.ws = new (getWebSocketConstructor())(wsUrl);
         this.ws.binaryType = "arraybuffer";
 
         const connectTimeout = setTimeout(() => {
           this.ws?.close?.();
-          reject(
-            new TimeoutError(
-              `WebSocket connection timeout after ${this.timeout}ms`,
-            ),
-          );
+          reject(new TimeoutError(`WebSocket connection timeout after ${this.timeout}ms`));
         }, this.timeout);
 
         this.ws.onopen = () => {
@@ -134,9 +135,7 @@ export class WebSocketTransport implements Transport {
 
         this.ws.onerror = (event: { message?: string }) => {
           clearTimeout(connectTimeout);
-          const error = new TransportError(
-            `WebSocket error: ${event.message || "unknown error"}`,
-          );
+          const error = new TransportError(`WebSocket error: ${event.message || "unknown error"}`);
           reject(error);
         };
 
@@ -173,9 +172,7 @@ export class WebSocketTransport implements Transport {
     return new Promise((resolve, reject) => {
       try {
         const timeout = setTimeout(() => {
-          reject(
-            new TimeoutError(`WebSocket send timeout after ${this.timeout}ms`),
-          );
+          reject(new TimeoutError(`WebSocket send timeout after ${this.timeout}ms`));
         }, this.timeout);
 
         this.ws?.send(data, (err?: Error) => {
@@ -201,9 +198,7 @@ export class WebSocketTransport implements Transport {
     if (this.receiveQueue.length > 0) {
       const message = this.receiveQueue.shift();
       if (!message) {
-        throw new TransportError(
-          "WebSocket receive queue was unexpectedly empty",
-        );
+        throw new TransportError("WebSocket receive queue was unexpectedly empty");
       }
       return message;
     }
@@ -216,9 +211,7 @@ export class WebSocketTransport implements Transport {
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
         this.receiverResolve = null;
-        reject(
-          new TimeoutError(`WebSocket receive timeout after ${this.timeout}ms`),
-        );
+        reject(new TimeoutError(`WebSocket receive timeout after ${this.timeout}ms`));
       }, this.timeout);
 
       this.receiverResolve = (data: Uint8Array | null) => {

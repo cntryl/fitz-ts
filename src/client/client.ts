@@ -2,12 +2,7 @@
  * Main Fitz client facade.
  */
 
-import {
-  ClientConfig,
-  ConnectionState,
-  FitzObservability,
-  TokenProvider,
-} from "../core/types";
+import { ClientConfig, ConnectionState, FitzObservability, TokenProvider } from "../core/types";
 import { Connection } from "./connection";
 import { createTransport } from "../transport/factory";
 import { ConnectionError } from "../core/errors";
@@ -180,10 +175,9 @@ export class Client {
 
   private ensureConnection(): Connection {
     if (!this.connection) {
-      throw new ConnectionError(
-        "Not connected to Fitz server. Call connect() first.",
-        { state: this.getState() },
-      );
+      throw new ConnectionError("Not connected to Fitz server. Call connect() first.", {
+        state: this.getState(),
+      });
     }
 
     return this.connection;

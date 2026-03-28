@@ -20,13 +20,7 @@ export class QueueItem {
   private readonly route: string;
   private readonly connection: Connection;
 
-  constructor(
-    id: bigint,
-    token: bigint,
-    body: Uint8Array,
-    route: string,
-    connection: Connection,
-  ) {
+  constructor(id: bigint, token: bigint, body: Uint8Array, route: string, connection: Connection) {
     this.id = id;
     this.token = token;
     this.body = body;
@@ -39,27 +33,13 @@ export class QueueItem {
    * @param leaseSecs Lease duration in seconds
    */
   async extend(leaseSecs: number, signal?: AbortSignal): Promise<void> {
-    const payload = QueueCodec.encodeExtend(
-      this.route,
-      this.id,
-      this.token,
-      leaseSecs,
-    );
-    const response = await this.connection.request(
-      MSG_QUEUE_EXTEND,
-      payload,
-      signal,
-    );
+    const payload = QueueCodec.encodeExtend(this.route, this.id, this.token, leaseSecs);
+    const response = await this.connection.request(MSG_QUEUE_EXTEND, payload, signal);
     const decoded = QueueCodec.decodeExtendResponse(response);
 
     if (decoded.status !== QueueStatus.Ok) {
-      const statusName =
-        QueueStatus[decoded.status] || `Unknown(${decoded.status})`;
-      throw new QueueError(
-        `EXTEND failed: ${statusName}`,
-        statusName,
-        decoded.status,
-      );
+      const statusName = QueueStatus[decoded.status] || `Unknown(${decoded.status})`;
+      throw new QueueError(`EXTEND failed: ${statusName}`, statusName, decoded.status);
     }
   }
 
@@ -67,26 +47,13 @@ export class QueueItem {
    * Complete processing of this queue item and remove it from the queue.
    */
   async complete(signal?: AbortSignal): Promise<void> {
-    const requestPayload = QueueCodec.encodeComplete(
-      this.route,
-      this.id,
-      this.token,
-    );
-    const response = await this.connection.request(
-      MSG_QUEUE_COMPLETE,
-      requestPayload,
-      signal,
-    );
+    const requestPayload = QueueCodec.encodeComplete(this.route, this.id, this.token);
+    const response = await this.connection.request(MSG_QUEUE_COMPLETE, requestPayload, signal);
     const decoded = QueueCodec.decodeCompleteResponse(response);
 
     if (decoded.status !== QueueStatus.Ok) {
-      const statusName =
-        QueueStatus[decoded.status] || `Unknown(${decoded.status})`;
-      throw new QueueError(
-        `COMPLETE failed: ${statusName}`,
-        statusName,
-        decoded.status,
-      );
+      const statusName = QueueStatus[decoded.status] || `Unknown(${decoded.status})`;
+      throw new QueueError(`COMPLETE failed: ${statusName}`, statusName, decoded.status);
     }
   }
 
@@ -94,30 +61,14 @@ export class QueueItem {
     return this.token + 1n;
   }
 
-  async testOnlyCompleteWithToken(
-    token: bigint,
-    signal?: AbortSignal,
-  ): Promise<void> {
-    const requestPayload = QueueCodec.encodeComplete(
-      this.route,
-      this.id,
-      token,
-    );
-    const response = await this.connection.request(
-      MSG_QUEUE_COMPLETE,
-      requestPayload,
-      signal,
-    );
+  async testOnlyCompleteWithToken(token: bigint, signal?: AbortSignal): Promise<void> {
+    const requestPayload = QueueCodec.encodeComplete(this.route, this.id, token);
+    const response = await this.connection.request(MSG_QUEUE_COMPLETE, requestPayload, signal);
     const decoded = QueueCodec.decodeCompleteResponse(response);
 
     if (decoded.status !== QueueStatus.Ok) {
-      const statusName =
-        QueueStatus[decoded.status] || `Unknown(${decoded.status})`;
-      throw new QueueError(
-        `COMPLETE failed: ${statusName}`,
-        statusName,
-        decoded.status,
-      );
+      const statusName = QueueStatus[decoded.status] || `Unknown(${decoded.status})`;
+      throw new QueueError(`COMPLETE failed: ${statusName}`, statusName, decoded.status);
     }
   }
 }
@@ -132,9 +83,7 @@ export interface AvailabilityNotification {
 /**
  * Handler for availability notifications.
  */
-export type AvailabilityHandler = (
-  notification: AvailabilityNotification,
-) => void | Promise<void>;
+export type AvailabilityHandler = (notification: AvailabilityNotification) => void | Promise<void>;
 
 /**
  * Queue availability subscription.
@@ -144,11 +93,7 @@ export class QueueSubscription {
   public readonly pattern: string;
   private readonly unsubscribeFn: (subId: bigint) => Promise<void>;
 
-  constructor(
-    subId: bigint,
-    pattern: string,
-    unsubscribeFn: (subId: bigint) => Promise<void>,
-  ) {
+  constructor(subId: bigint, pattern: string, unsubscribeFn: (subId: bigint) => Promise<void>) {
     this.subId = subId;
     this.pattern = pattern;
     this.unsubscribeFn = unsubscribeFn;

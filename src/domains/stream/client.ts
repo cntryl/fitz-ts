@@ -49,13 +49,10 @@ export class StreamClient extends DomainClient {
         return;
       }
 
-      const snapshot = Array.from(
-        this.subscriptionsByPattern.entries(),
-        ([pattern, state]) => ({
-          pattern,
-          handlers: Array.from(state.handlers.entries()),
-        }),
-      );
+      const snapshot = Array.from(this.subscriptionsByPattern.entries(), ([pattern, state]) => ({
+        pattern,
+        handlers: Array.from(state.handlers.entries()),
+      }));
       this.subscriptionsByPattern.clear();
       this.patternsBySubId.clear();
 
@@ -84,10 +81,7 @@ export class StreamClient extends DomainClient {
     this.checkStatus(decoded.status, "BEGIN");
 
     if (decoded.sessionId === undefined) {
-      throw new StreamError(
-        "BEGIN response missing sessionId",
-        "MISSING_SESSION_ID",
-      );
+      throw new StreamError("BEGIN response missing sessionId", "MISSING_SESSION_ID");
     }
 
     return new StreamSessionImpl(this.connection, route, decoded.sessionId);
@@ -100,11 +94,7 @@ export class StreamClient extends DomainClient {
    * @param limit Maximum number of records to read (default: 100)
    * @returns Array of stream records
    */
-  async read(
-    route: string,
-    startOffset: bigint,
-    limit: number = 100,
-  ): Promise<StreamRecord[]> {
+  async read(route: string, startOffset: bigint, limit: number = 100): Promise<StreamRecord[]> {
     const payload = StreamCodec.encodeRead(route, startOffset, limit);
     const response = await this.requestFrame(MSG_STREAM_READ, payload);
     const decoded = StreamCodec.decodeReadResponse(response);
@@ -167,10 +157,7 @@ export class StreamClient extends DomainClient {
     );
   }
 
-  async subscribe(
-    pattern: string,
-    handler: StreamCommitHandler,
-  ): Promise<StreamSubscription> {
+  async subscribe(pattern: string, handler: StreamCommitHandler): Promise<StreamSubscription> {
     this.initNotifyHandler();
     const existing = this.subscriptionsByPattern.get(pattern);
     if (existing) {
@@ -188,10 +175,7 @@ export class StreamClient extends DomainClient {
     this.checkStatus(decoded.status, "SUBSCRIBE");
 
     if (decoded.subId === undefined) {
-      throw new StreamError(
-        "SUBSCRIBE response missing subId",
-        "MISSING_SUB_ID",
-      );
+      throw new StreamError("SUBSCRIBE response missing subId", "MISSING_SUB_ID");
     }
 
     return decoded.subId;
@@ -241,64 +225,61 @@ export class StreamClient extends DomainClient {
     }
 
     this.initialized = true;
-    this.connection.registerNotificationHandler(
-      MSG_STREAM_NOTIFY,
-      (payload) => {
-        try {
-          const decoded = StreamCodec.decodeNotification(payload);
-          const pattern = this.patternsBySubId.get(decoded.subId);
-          if (!pattern) {
-            return;
-          }
-
-          const subscription = this.subscriptionsByPattern.get(pattern);
-          if (!subscription) {
-            return;
-          }
-
-          const parsedPayload = decoded.parsedPayload;
-
-          const notification: StreamCommitNotification = {
-            route: decoded.route,
-            event: parsedPayload?.event,
-            firstResourceOffset:
-              parsedPayload?.first_resource_offset !== undefined
-                ? BigInt(parsedPayload.first_resource_offset)
-                : undefined,
-            lastResourceOffset:
-              parsedPayload?.last_resource_offset !== undefined
-                ? BigInt(parsedPayload.last_resource_offset)
-                : undefined,
-            firstAreaOffset:
-              parsedPayload?.first_area_offset !== undefined
-                ? BigInt(parsedPayload.first_area_offset)
-                : undefined,
-            lastAreaOffset:
-              parsedPayload?.last_area_offset !== undefined
-                ? BigInt(parsedPayload.last_area_offset)
-                : undefined,
-            firstRealmOffset:
-              parsedPayload?.first_realm_offset !== undefined
-                ? BigInt(parsedPayload.first_realm_offset)
-                : undefined,
-            lastRealmOffset:
-              parsedPayload?.last_realm_offset !== undefined
-                ? BigInt(parsedPayload.last_realm_offset)
-                : undefined,
-            batchSize: parsedPayload?.batch_size,
-            payload: parsedPayload,
-          };
-
-          for (const handler of subscription.handlers.values()) {
-            this.connection.dispatchAsyncHandler(async () => {
-              await handler(notification);
-            });
-          }
-        } catch {
-          // Best-effort notification dispatch.
+    this.connection.registerNotificationHandler(MSG_STREAM_NOTIFY, (payload) => {
+      try {
+        const decoded = StreamCodec.decodeNotification(payload);
+        const pattern = this.patternsBySubId.get(decoded.subId);
+        if (!pattern) {
+          return;
         }
-      },
-    );
+
+        const subscription = this.subscriptionsByPattern.get(pattern);
+        if (!subscription) {
+          return;
+        }
+
+        const parsedPayload = decoded.parsedPayload;
+
+        const notification: StreamCommitNotification = {
+          route: decoded.route,
+          event: parsedPayload?.event,
+          firstResourceOffset:
+            parsedPayload?.first_resource_offset !== undefined
+              ? BigInt(parsedPayload.first_resource_offset)
+              : undefined,
+          lastResourceOffset:
+            parsedPayload?.last_resource_offset !== undefined
+              ? BigInt(parsedPayload.last_resource_offset)
+              : undefined,
+          firstAreaOffset:
+            parsedPayload?.first_area_offset !== undefined
+              ? BigInt(parsedPayload.first_area_offset)
+              : undefined,
+          lastAreaOffset:
+            parsedPayload?.last_area_offset !== undefined
+              ? BigInt(parsedPayload.last_area_offset)
+              : undefined,
+          firstRealmOffset:
+            parsedPayload?.first_realm_offset !== undefined
+              ? BigInt(parsedPayload.first_realm_offset)
+              : undefined,
+          lastRealmOffset:
+            parsedPayload?.last_realm_offset !== undefined
+              ? BigInt(parsedPayload.last_realm_offset)
+              : undefined,
+          batchSize: parsedPayload?.batch_size,
+          payload: parsedPayload,
+        };
+
+        for (const handler of subscription.handlers.values()) {
+          this.connection.dispatchAsyncHandler(async () => {
+            await handler(notification);
+          });
+        }
+      } catch {
+        // Best-effort notification dispatch.
+      }
+    });
   }
 
   /**
@@ -320,10 +301,6 @@ export class StreamClient extends DomainClient {
     };
 
     const statusName = statusNames[status] || `Unknown(${status})`;
-    throw new StreamError(
-      `${operation} failed: ${statusName}`,
-      statusName,
-      status,
-    );
+    throw new StreamError(`${operation} failed: ${statusName}`, statusName, status);
   }
 }

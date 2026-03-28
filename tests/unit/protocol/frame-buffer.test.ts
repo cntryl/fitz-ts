@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it } from "vitest";
 
 import { BufferReader, BufferWriter } from "../../../src/core/buffer";
 import { CodecError } from "../../../src/core/errors";
@@ -85,10 +85,7 @@ describe("protocol primitives", () => {
   it("parses streamed frames across chunk boundaries", () => {
     const parser = new FrameParser();
     const first = FrameCodec.encodeFrame(MSG_KV_BEGIN, new Uint8Array([1, 2]));
-    const second = FrameCodec.encodeFrame(
-      MSG_QUEUE_NOTIFY,
-      new Uint8Array([3, 4, 5]),
-    );
+    const second = FrameCodec.encodeFrame(MSG_QUEUE_NOTIFY, new Uint8Array([3, 4, 5]));
     const combined = new Uint8Array(first.length + second.length);
     combined.set(first);
     combined.set(second, first.length);

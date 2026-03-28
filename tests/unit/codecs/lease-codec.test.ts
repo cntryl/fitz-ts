@@ -2,7 +2,7 @@
  * Lease Codec unit tests
  */
 
-import { describe, it, expect } from "vite-plus/test";
+import { describe, it, expect } from "vitest";
 import { LeaseCodec } from "../../../src/domains/lease/codec";
 import { BufferWriter } from "../../../src/core/buffer";
 import { ProtocolError } from "../../../src/core/errors";
@@ -50,9 +50,9 @@ describe("LeaseCodec", () => {
     });
 
     it("throws ProtocolError for short acquire responses", () => {
-      expect(() =>
-        LeaseCodec.decodeAcquireResponse(new Uint8Array([0, 0])),
-      ).toThrowError(ProtocolError);
+      expect(() => LeaseCodec.decodeAcquireResponse(new Uint8Array([0, 0]))).toThrowError(
+        ProtocolError,
+      );
     });
   });
 
@@ -115,9 +115,9 @@ describe("LeaseCodec", () => {
     });
 
     it("throws ProtocolError for short subscribe responses", () => {
-      expect(() =>
-        LeaseCodec.decodeSubscribeResponse(new Uint8Array([0])),
-      ).toThrowError(ProtocolError);
+      expect(() => LeaseCodec.decodeSubscribeResponse(new Uint8Array([0]))).toThrowError(
+        ProtocolError,
+      );
     });
   });
 

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it } from "vitest";
 
 import {
   ErrKvKeyNotFound,
@@ -35,18 +35,12 @@ describe("core errors", () => {
     expect(isRetryable(new QueueError("full", "QUEUE_FULL", 4))).toBe(true);
     expect(isRetryable(new LeaseError("held", "LEASE_HELD", 1))).toBe(true);
     expect(isRetryable(new RpcError("timeout", "TIMEOUT", 1))).toBe(true);
-    expect(isRetryable(new StreamError("missing", "STREAM_NOT_FOUND", 1))).toBe(
-      true,
-    );
+    expect(isRetryable(new StreamError("missing", "STREAM_NOT_FOUND", 1))).toBe(true);
   });
 
   it("does not classify non-retryable domain errors as retryable", () => {
-    expect(
-      isRetryable(new QueueError("invalid token", "INVALID_TOKEN", 3)),
-    ).toBe(false);
-    expect(
-      isRetryable(new RpcError("handler missing", "HANDLER_NOT_FOUND", 2)),
-    ).toBe(false);
+    expect(isRetryable(new QueueError("invalid token", "INVALID_TOKEN", 3))).toBe(false);
+    expect(isRetryable(new RpcError("handler missing", "HANDLER_NOT_FOUND", 2))).toBe(false);
     expect(isRetryable(new Error("plain error"))).toBe(false);
   });
 });

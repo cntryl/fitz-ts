@@ -1,4 +1,4 @@
-﻿import { describe, expect, it, vi } from "vite-plus/test";
+import { describe, expect, it, vi } from "vitest";
 
 import { FrameCodec } from "../../src/frame/codec";
 import { AuthenticationError, ConnectionError } from "../../src/core/errors";
@@ -114,12 +114,8 @@ describe("Transport integration", () => {
 
       const route = subscriber.uniqueRoute("notice");
       const received: string[] = [];
-      const warn = vi
-        .spyOn(console, "warn")
-        .mockImplementation(() => undefined);
-      const error = vi
-        .spyOn(console, "error")
-        .mockImplementation(() => undefined);
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+      const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
 
       try {
         await subscriber
@@ -130,10 +126,7 @@ describe("Transport integration", () => {
           });
         await sleep(150);
 
-        await publisher
-          .client()
-          .notice()
-          .publish(route, Buffer.from("before-disconnect"));
+        await publisher.client().notice().publish(route, Buffer.from("before-disconnect"));
         await sleep(500);
         expect(received).toEqual(["before-disconnect"]);
 
@@ -142,10 +135,7 @@ describe("Transport integration", () => {
         const reconnected = new TestFixture(transport, authMode);
         await reconnected.connectOrFail();
 
-        await publisher
-          .client()
-          .notice()
-          .publish(route, Buffer.from("after-disconnect"));
+        await publisher.client().notice().publish(route, Buffer.from("after-disconnect"));
         await sleep(750);
 
         expect(received).toEqual(["before-disconnect"]);
@@ -164,9 +154,7 @@ describe("Transport integration", () => {
 
       await rawTransport.connect();
       try {
-        await rawTransport.send(
-          FrameCodec.encodeFrame(MSG_KV_BEGIN, new Uint8Array()),
-        );
+        await rawTransport.send(FrameCodec.encodeFrame(MSG_KV_BEGIN, new Uint8Array()));
         await expect(rawTransport.receive()).rejects.toBeTruthy();
       } finally {
         await rawTransport.close().catch(() => undefined);
@@ -175,9 +163,7 @@ describe("Transport integration", () => {
 
     it("should fail connect to an invalid address", async () => {
       const f = new TestFixture(transport, authMode);
-      f.setBrokerAddr(
-        transport === "tcp" ? "localhost:39999" : "ws://localhost:39998/ws",
-      );
+      f.setBrokerAddr(transport === "tcp" ? "localhost:39999" : "ws://localhost:39998/ws");
 
       await expect(f.connect({ timeout: 1000 })).rejects.toBeTruthy();
     });
@@ -187,16 +173,15 @@ describe("Transport integration", () => {
       const controller = new AbortController();
       controller.abort();
 
-      await expect(
-        f.connect({}, { signal: controller.signal }),
-      ).rejects.toHaveProperty("name", "AbortError");
+      await expect(f.connect({}, { signal: controller.signal })).rejects.toHaveProperty(
+        "name",
+        "AbortError",
+      );
     });
 
     it("should fail quickly when timeout is too short for an unreachable address", async () => {
       const f = new TestFixture(transport, authMode);
-      f.setBrokerAddr(
-        transport === "tcp" ? "localhost:39999" : "ws://localhost:39998/ws",
-      );
+      f.setBrokerAddr(transport === "tcp" ? "localhost:39999" : "ws://localhost:39998/ws");
 
       await expect(f.connect({ timeout: 10 })).rejects.toBeTruthy();
     });
@@ -217,9 +202,7 @@ describe("Transport integration", () => {
       await f.client().close();
 
       await expect(
-        Promise.resolve().then(() =>
-          f.client().kv().begin(route, { durability: "Sync" }),
-        ),
+        Promise.resolve().then(() => f.client().kv().begin(route, { durability: "Sync" })),
       ).rejects.toBeInstanceOf(ConnectionError);
     });
 
@@ -234,32 +217,25 @@ describe("Transport integration", () => {
         .client()
         .rpc()
         .registerWorker(route, async (_req, writer) => {
-          await sleep(1000);
+          await sleep(250);
           await writer.send(Buffer.from("late"), true);
         });
-      const warn = vi
-        .spyOn(console, "warn")
-        .mockImplementation(() => undefined);
-      const error = vi
-        .spyOn(console, "error")
-        .mockImplementation(() => undefined);
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+      const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
 
       try {
         const controller = new AbortController();
-        const iterator = await caller
-          .client()
-          .rpc()
-          .call(route, Buffer.from("block"), {
-            timeoutMs: 10000,
-            signal: controller.signal,
-          });
+        const iterator = await caller.client().rpc().call(route, Buffer.from("block"), {
+          timeoutMs: 10000,
+          signal: controller.signal,
+        });
         const nextPromise = iterator.next();
 
         await sleep(100);
         controller.abort();
 
         await expect(nextPromise).rejects.toHaveProperty("name", "AbortError");
-        await sleep(1200);
+        await sleep(300);
         await sub.unsubscribe();
         expect(warn).not.toHaveBeenCalled();
         expect(error).not.toHaveBeenCalled();
@@ -280,25 +256,18 @@ describe("Transport integration", () => {
         .client()
         .rpc()
         .registerWorker(route, async (_req, writer) => {
-          await sleep(750);
+          await sleep(200);
           await writer.send(Buffer.from("too-late"), true);
         });
-      const warn = vi
-        .spyOn(console, "warn")
-        .mockImplementation(() => undefined);
-      const error = vi
-        .spyOn(console, "error")
-        .mockImplementation(() => undefined);
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+      const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
 
       try {
         const controller = new AbortController();
-        const iterator = await caller
-          .client()
-          .rpc()
-          .call(route, Buffer.from("block"), {
-            timeoutMs: 10000,
-            signal: controller.signal,
-          });
+        const iterator = await caller.client().rpc().call(route, Buffer.from("block"), {
+          timeoutMs: 10000,
+          signal: controller.signal,
+        });
         const nextPromise = iterator.next();
 
         await sleep(100);
@@ -306,7 +275,7 @@ describe("Transport integration", () => {
         controller.abort();
 
         await expect(nextPromise).rejects.toHaveProperty("name", "AbortError");
-        await sleep(900);
+        await sleep(300);
         expect(warn).not.toHaveBeenCalled();
         expect(error).not.toHaveBeenCalled();
       } finally {

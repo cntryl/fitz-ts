@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vite-plus/test";
+import { describe, expect, it, vi } from "vitest";
 
 import { sleep } from "./helpers";
 import { TestFixture } from "./fixture/fixture";
@@ -15,12 +15,10 @@ describe("Notice integration", () => {
       const route = f.uniqueRoute("notice");
       let resolveReceived!: (value: { route: string; body: string }) => void;
       let rejectReceived!: (reason?: unknown) => void;
-      const received = new Promise<{ route: string; body: string }>(
-        (resolve, reject) => {
-          resolveReceived = resolve;
-          rejectReceived = reject;
-        },
-      );
+      const received = new Promise<{ route: string; body: string }>((resolve, reject) => {
+        resolveReceived = resolve;
+        rejectReceived = reject;
+      });
       const timer = setTimeout(() => {
         rejectReceived(new Error("timed out waiting for notice"));
       }, 5000);
@@ -83,12 +81,8 @@ describe("Notice integration", () => {
       const f = new TestFixture(transport, authMode);
       await f.connectOrFail();
 
-      const warn = vi
-        .spyOn(console, "warn")
-        .mockImplementation(() => undefined);
-      const error = vi
-        .spyOn(console, "error")
-        .mockImplementation(() => undefined);
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+      const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
 
       try {
         await expect(
@@ -139,12 +133,10 @@ describe("Notice integration", () => {
 
       let resolveReceived!: (value: { route: string; body: string }) => void;
       let rejectReceived!: (reason?: unknown) => void;
-      const received = new Promise<{ route: string; body: string }>(
-        (resolve, reject) => {
-          resolveReceived = resolve;
-          rejectReceived = reject;
-        },
-      );
+      const received = new Promise<{ route: string; body: string }>((resolve, reject) => {
+        resolveReceived = resolve;
+        rejectReceived = reject;
+      });
       const timer = setTimeout(() => {
         rejectReceived(new Error("timed out waiting for wildcard notice"));
       }, 5000);

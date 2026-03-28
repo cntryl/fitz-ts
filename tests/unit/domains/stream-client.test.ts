@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it } from "vitest";
 
 import { ConnectionError } from "../../../src/core/errors";
 import { MSG_STREAM_APPEND, MSG_STREAM_BEGIN } from "../../../src/frame/types";

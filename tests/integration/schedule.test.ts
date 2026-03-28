@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it } from "vitest";
 
 import { TestFixture } from "./fixture/fixture";
 import { runWithBothTransports } from "./fixture/transport";
@@ -24,10 +24,7 @@ describe("Schedule integration", () => {
       await f.connectOrFail();
 
       await expect(
-        f
-          .client()
-          .schedule()
-          .create(f.uniqueRoute("schedule"), "not a cron", b("payload")),
+        f.client().schedule().create(f.uniqueRoute("schedule"), "not a cron", b("payload")),
       ).rejects.toBeTruthy();
     });
 
@@ -36,11 +33,8 @@ describe("Schedule integration", () => {
       await f.connectOrFail();
 
       const route = f.uniqueRoute("schedule");
-      const id = await f
-        .client()
-        .schedule()
-        .create(route, "0 9 * * 1", b("weekly"));
-      await expect(f.client().schedule().cancel(id)).resolves.toBeUndefined();
+      await f.client().schedule().create(route, "0 9 * * 1", b("weekly"));
+      await expect(f.client().schedule().cancel(route)).resolves.toBeUndefined();
     });
 
     it("should list schedules without error", async () => {

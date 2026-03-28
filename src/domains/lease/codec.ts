@@ -5,12 +5,7 @@
 
 import { BufferWriter, BufferReader } from "../../core/buffer";
 import { ProtocolError } from "../../core/errors";
-import {
-  AcquireResponse,
-  QueryResponse,
-  SubscribeResponse,
-  UnsubscribeResponse,
-} from "./types";
+import { AcquireResponse, QueryResponse, SubscribeResponse, UnsubscribeResponse } from "./types";
 
 export class LeaseCodec {
   /**
@@ -59,11 +54,7 @@ export class LeaseCodec {
    * Encode EXTEND request
    * Payload: [string route][string client_id (empty)][u64 fencing_token][u64 ttl_seconds]
    */
-  static encodeExtend(
-    route: string,
-    token: bigint,
-    ttlSecs: number,
-  ): Uint8Array {
+  static encodeExtend(route: string, token: bigint, ttlSecs: number): Uint8Array {
     const writer = new BufferWriter(128);
     writer.writeRoute(route);
     writer.writeRoute(""); // client_id (empty = use existing)
@@ -72,11 +63,7 @@ export class LeaseCodec {
     return writer.getBuffer();
   }
 
-  static encodeRenew(
-    route: string,
-    token: bigint,
-    ttlSecs: number,
-  ): Uint8Array {
+  static encodeRenew(route: string, token: bigint, ttlSecs: number): Uint8Array {
     return this.encodeExtend(route, token, ttlSecs);
   }
 

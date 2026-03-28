@@ -30,9 +30,7 @@ export interface DecodedScheduleNotification {
  * ScheduleHandler is called when a schedule fires for a subscribed pattern
  * It is fire-and-forget; the return value is not used
  */
-export type ScheduleHandler = (
-  notification: ScheduleNotification,
-) => void | Promise<void>;
+export type ScheduleHandler = (notification: ScheduleNotification) => void | Promise<void>;
 
 /**
  * ScheduleSubscription represents an active subscription to schedule fire notifications

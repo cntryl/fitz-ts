@@ -56,16 +56,8 @@ export class Lease {
    * @returns New expiry timestamp (seconds since epoch)
    */
   async extend(ttlSecs: number, signal?: AbortSignal): Promise<bigint> {
-    const requestPayload = LeaseCodec.encodeExtend(
-      this.route,
-      this.token,
-      ttlSecs,
-    );
-    const response = await this.connection.request(
-      MSG_LEASE_RENEW,
-      requestPayload,
-      signal,
-    );
+    const requestPayload = LeaseCodec.encodeExtend(this.route, this.token, ttlSecs);
+    const response = await this.connection.request(MSG_LEASE_RENEW, requestPayload, signal);
     const data = assertSuccess(response, "EXTEND");
 
     // Parse new fencing token: [u64 BE new_fencing_token]
@@ -85,11 +77,7 @@ export class Lease {
    */
   async release(signal?: AbortSignal): Promise<void> {
     const payload = LeaseCodec.encodeRelease(this.route, this.token);
-    const response = await this.connection.request(
-      MSG_LEASE_RELEASE,
-      payload,
-      signal,
-    );
+    const response = await this.connection.request(MSG_LEASE_RELEASE, payload, signal);
     assertSuccess(response, "RELEASE");
   }
 
@@ -107,11 +95,7 @@ export class Lease {
     signal?: AbortSignal,
   ): Promise<bigint> {
     const requestPayload = LeaseCodec.encodeExtend(this.route, token, ttlSecs);
-    const response = await this.connection.request(
-      MSG_LEASE_RENEW,
-      requestPayload,
-      signal,
-    );
+    const response = await this.connection.request(MSG_LEASE_RENEW, requestPayload, signal);
     const data = assertSuccess(response, "EXTEND");
 
     if (data && data.length >= 8) {
@@ -125,16 +109,9 @@ export class Lease {
     return newExpiry;
   }
 
-  async testOnlyReleaseWithToken(
-    token: bigint,
-    signal?: AbortSignal,
-  ): Promise<void> {
+  async testOnlyReleaseWithToken(token: bigint, signal?: AbortSignal): Promise<void> {
     const payload = LeaseCodec.encodeRelease(this.route, token);
-    const response = await this.connection.request(
-      MSG_LEASE_RELEASE,
-      payload,
-      signal,
-    );
+    const response = await this.connection.request(MSG_LEASE_RELEASE, payload, signal);
     assertSuccess(response, "RELEASE");
   }
 }

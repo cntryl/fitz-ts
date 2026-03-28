@@ -63,9 +63,7 @@ export function createTransport(
 
   if (transportType === "tcp") {
     if (!isNode()) {
-      throw new TransportError(
-        "TCP transport requires Node.js. Use WebSocket (ws://) for browser",
-      );
+      throw new TransportError("TCP transport requires Node.js. Use WebSocket (ws://) for browser");
     }
     return new TcpTransport(url, options);
   }

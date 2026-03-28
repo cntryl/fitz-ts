@@ -9,11 +9,7 @@ export type TokenProvider = () => string | Promise<string>;
 export type FitzLogLevel = "debug" | "info" | "warn" | "error";
 
 export interface FitzLogger {
-  log(
-    level: FitzLogLevel,
-    event: string,
-    fields?: Record<string, unknown>,
-  ): void;
+  log(level: FitzLogLevel, event: string, fields?: Record<string, unknown>): void;
 }
 
 export interface FitzTracer {
@@ -27,21 +23,9 @@ export interface FitzSpan {
 }
 
 export interface FitzMeter {
-  counter(
-    name: string,
-    value: number,
-    attributes?: Record<string, unknown>,
-  ): void;
-  histogram(
-    name: string,
-    value: number,
-    attributes?: Record<string, unknown>,
-  ): void;
-  gauge?(
-    name: string,
-    value: number,
-    attributes?: Record<string, unknown>,
-  ): void;
+  counter(name: string, value: number, attributes?: Record<string, unknown>): void;
+  histogram(name: string, value: number, attributes?: Record<string, unknown>): void;
+  gauge?(name: string, value: number, attributes?: Record<string, unknown>): void;
 }
 
 export interface FitzLifecycleEvent {

@@ -18,11 +18,7 @@ function sign(input: string, secret: string): string {
   return createHmac("sha256", secret).update(input).digest("base64url");
 }
 
-function generateTestJwt(
-  secret: string,
-  audience: string,
-  expiresAtSeconds: number,
-): string {
+function generateTestJwt(secret: string, audience: string, expiresAtSeconds: number): string {
   const now = Math.floor(Date.now() / 1000);
   const header = encodeBase64Url(
     JSON.stringify({
@@ -48,31 +44,13 @@ function generateTestJwt(
 }
 
 export function generateValidTestJwt(secret: string, audience: string): string {
-  return generateTestJwt(
-    secret,
-    audience,
-    Math.floor(Date.now() / 1000) + 3600,
-  );
+  return generateTestJwt(secret, audience, Math.floor(Date.now() / 1000) + 3600);
 }
 
-export function generateExpiredTestJwt(
-  secret: string,
-  audience: string,
-): string {
-  return generateTestJwt(
-    secret,
-    audience,
-    Math.floor(Date.now() / 1000) - 3600,
-  );
+export function generateExpiredTestJwt(secret: string, audience: string): string {
+  return generateTestJwt(secret, audience, Math.floor(Date.now() / 1000) - 3600);
 }
 
-export function generateInvalidSignatureTestJwt(
-  secret: string,
-  audience: string,
-): string {
-  return generateTestJwt(
-    `${secret}-invalid`,
-    audience,
-    Math.floor(Date.now() / 1000) + 3600,
-  );
+export function generateInvalidSignatureTestJwt(secret: string, audience: string): string {
+  return generateTestJwt(`${secret}-invalid`, audience, Math.floor(Date.now() / 1000) + 3600);
 }

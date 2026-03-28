@@ -1,6 +1,6 @@
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it } from "vitest";
 
-import { sleep } from "./helpers";
+import { waitFor } from "./helpers";
 import { TestFixture } from "./fixture/fixture";
 import { runWithBothTransports } from "./fixture/transport";
 
@@ -10,14 +10,9 @@ describe("Lease integration", () => {
       const f = new TestFixture(transport, authMode);
       await f.connectOrFail();
 
-      const lease = await f
-        .client()
-        .lease()
-        .acquire(f.uniqueRoute("lease"), 30);
+      const lease = await f.client().lease().acquire(f.uniqueRoute("lease"), 30);
       expect(lease).toBeTruthy();
-      expect(lease.getExpiry()).toBeGreaterThan(
-        BigInt(Math.floor(Date.now() / 1000)),
-      );
+      expect(lease.getExpiry()).toBeGreaterThan(BigInt(Math.floor(Date.now() / 1000)));
     });
 
     it("should reject acquire when lease is already held", async () => {
@@ -28,9 +23,7 @@ describe("Lease integration", () => {
 
       const route = f1.uniqueRoute("lease");
       const lease = await f1.client().lease().acquire(route, 30);
-      expect(lease.getExpiry()).toBeGreaterThan(
-        BigInt(Math.floor(Date.now() / 1000)),
-      );
+      expect(lease.getExpiry()).toBeGreaterThan(BigInt(Math.floor(Date.now() / 1000)));
 
       await expect(f2.client().lease().acquire(route, 30)).rejects.toBeTruthy();
     });
@@ -39,10 +32,7 @@ describe("Lease integration", () => {
       const f = new TestFixture(transport, authMode);
       await f.connectOrFail();
 
-      const lease = await f
-        .client()
-        .lease()
-        .acquire(f.uniqueRoute("lease"), 10);
+      const lease = await f.client().lease().acquire(f.uniqueRoute("lease"), 10);
       const originalExpiry = lease.getExpiry();
       const newExpiry = await lease.extend(60);
 
@@ -54,10 +44,7 @@ describe("Lease integration", () => {
       const f = new TestFixture(transport, authMode);
       await f.connectOrFail();
 
-      const lease = await f
-        .client()
-        .lease()
-        .acquire(f.uniqueRoute("lease"), 30);
+      const lease = await f.client().lease().acquire(f.uniqueRoute("lease"), 30);
       await expect(
         lease.testOnlyExtendWithToken(lease.testOnlyInvalidToken(), 60),
       ).rejects.toBeTruthy();
@@ -72,19 +59,14 @@ describe("Lease integration", () => {
       await lease.release();
 
       const reacquired = await f.client().lease().acquire(route, 30);
-      expect(reacquired.getExpiry()).toBeGreaterThan(
-        BigInt(Math.floor(Date.now() / 1000)),
-      );
+      expect(reacquired.getExpiry()).toBeGreaterThan(BigInt(Math.floor(Date.now() / 1000)));
     });
 
     it("should reject release when token does not match", async () => {
       const f = new TestFixture(transport, authMode);
       await f.connectOrFail();
 
-      const lease = await f
-        .client()
-        .lease()
-        .acquire(f.uniqueRoute("lease"), 30);
+      const lease = await f.client().lease().acquire(f.uniqueRoute("lease"), 30);
       await expect(
         lease.testOnlyReleaseWithToken(lease.testOnlyInvalidToken()),
       ).rejects.toBeTruthy();
@@ -95,17 +77,30 @@ describe("Lease integration", () => {
       await f.connectOrFail();
 
       const route = f.uniqueRoute("lease");
-      const lease = await f.client().lease().acquire(route, 2);
-      expect(lease.getExpiry()).toBeGreaterThan(
-        BigInt(Math.floor(Date.now() / 1000)),
+      const lease = await f.client().lease().acquire(route, 1);
+      expect(lease.getExpiry()).toBeGreaterThan(BigInt(Math.floor(Date.now() / 1000)));
+
+      let reacquired: { getExpiry(): bigint } | null = null;
+      await waitFor(
+        async () => {
+          try {
+            reacquired = await f.client().lease().acquire(route, 30);
+            return true;
+          } catch {
+            return false;
+          }
+        },
+        {
+          timeoutMs: 3000,
+          intervalMs: 100,
+          timeoutMessage: "lease was not reacquired after ttl expiry",
+        },
       );
 
-      await sleep(3000);
-
-      const reacquired = await f.client().lease().acquire(route, 30);
-      expect(reacquired.getExpiry()).toBeGreaterThan(
-        BigInt(Math.floor(Date.now() / 1000)),
-      );
+      if (!reacquired) {
+        throw new Error("lease was not reacquired after ttl expiry");
+      }
+      expect(reacquired.getExpiry()).toBeGreaterThan(BigInt(Math.floor(Date.now() / 1000)));
     });
 
     it("should query lease status for an existing lease", async () => {
@@ -118,9 +113,7 @@ describe("Lease integration", () => {
       const info = await f.client().lease().query(route);
       expect(info.isHeld).toBe(true);
       expect(
-        info.owner !== undefined ||
-          info.expiresAt !== undefined ||
-          info.token !== undefined,
+        info.owner !== undefined || info.expiresAt !== undefined || info.token !== undefined,
       ).toBe(true);
     });
 

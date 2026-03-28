@@ -17,9 +17,7 @@ export interface KvScanOptions {
   reverse?: boolean;
 }
 
-export type KvGetResult =
-  | { type: "found"; value: Uint8Array }
-  | { type: "not-found" };
+export type KvGetResult = { type: "found"; value: Uint8Array } | { type: "not-found" };
 
 export interface KvBeginResponse {
   status: number;

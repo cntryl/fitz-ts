@@ -7,11 +7,7 @@ import { Connection } from "../../client/connection";
 import { StreamCodec } from "./codec";
 import { StreamCommitMode, StreamSession, StreamStatus } from "./types";
 import { StreamError } from "../../core/errors";
-import {
-  MSG_STREAM_APPEND,
-  MSG_STREAM_COMMIT,
-  MSG_STREAM_ROLLBACK,
-} from "../../frame/types";
+import { MSG_STREAM_APPEND, MSG_STREAM_COMMIT, MSG_STREAM_ROLLBACK } from "../../frame/types";
 
 export class StreamSessionImpl implements StreamSession {
   private readonly connection: Connection;
@@ -35,11 +31,7 @@ export class StreamSessionImpl implements StreamSession {
     this.ensureOpen();
 
     const payload = StreamCodec.encodeAppend(this.sessionId, body);
-    const response = await this.connection.request(
-      MSG_STREAM_APPEND,
-      payload,
-      signal,
-    );
+    const response = await this.connection.request(MSG_STREAM_APPEND, payload, signal);
     const decoded = StreamCodec.decodeAppendResponse(response);
 
     this.checkStatus(decoded.status, "APPEND");
@@ -56,11 +48,7 @@ export class StreamSessionImpl implements StreamSession {
     this.unsubscribeDisconnect();
 
     const payload = StreamCodec.encodeCommit(this.sessionId, mode);
-    const response = await this.connection.request(
-      MSG_STREAM_COMMIT,
-      payload,
-      signal,
-    );
+    const response = await this.connection.request(MSG_STREAM_COMMIT, payload, signal);
     const decoded = StreamCodec.decodeCommitResponse(response);
 
     this.checkStatus(decoded.status, "COMMIT");
@@ -78,11 +66,7 @@ export class StreamSessionImpl implements StreamSession {
 
     const payload = StreamCodec.encodeRollback(this.sessionId);
     try {
-      const response = await this.connection.request(
-        MSG_STREAM_ROLLBACK,
-        payload,
-        signal,
-      );
+      const response = await this.connection.request(MSG_STREAM_ROLLBACK, payload, signal);
       const decoded = StreamCodec.decodeRollbackResponse(response);
       this.checkStatus(decoded.status, "ROLLBACK");
     } catch {
@@ -119,10 +103,6 @@ export class StreamSessionImpl implements StreamSession {
     };
 
     const statusName = statusNames[status] || `Unknown(${status})`;
-    throw new StreamError(
-      `${operation} failed: ${statusName}`,
-      statusName,
-      status,
-    );
+    throw new StreamError(`${operation} failed: ${statusName}`, statusName, status);
   }
 }

@@ -129,11 +129,7 @@ export class TimeoutError extends FitzError {
 }
 
 export class ProtocolError extends FitzError {
-  constructor(
-    message: string,
-    domainCode?: number,
-    context?: Record<string, unknown>,
-  ) {
+  constructor(message: string, domainCode?: number, context?: Record<string, unknown>) {
     super(message, "PROTOCOL_ERROR", domainCode, context);
     this.name = "ProtocolError";
     Object.setPrototypeOf(this, ProtocolError.prototype);

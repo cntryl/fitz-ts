@@ -1,10 +1,7 @@
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it } from "vitest";
 
 import { ProtocolError } from "../../../src/core/errors";
-import {
-  assertSuccess,
-  parseStandardResponse,
-} from "../../../src/protocol/response";
+import { assertSuccess, parseStandardResponse } from "../../../src/protocol/response";
 
 describe("response helpers", () => {
   it("returns success payloads", () => {
@@ -19,15 +16,11 @@ describe("response helpers", () => {
   });
 
   it("throws ProtocolError for empty payloads", () => {
-    expect(() => parseStandardResponse(new Uint8Array())).toThrowError(
-      ProtocolError,
-    );
+    expect(() => parseStandardResponse(new Uint8Array())).toThrowError(ProtocolError);
   });
 
   it("throws ProtocolError for unknown status bytes", () => {
-    expect(() => parseStandardResponse(new Uint8Array([2]))).toThrowError(
-      ProtocolError,
-    );
+    expect(() => parseStandardResponse(new Uint8Array([2]))).toThrowError(ProtocolError);
   });
 
   it("throws ProtocolError with operation context for error responses", () => {

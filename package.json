@@ -2,68 +2,60 @@
   "name": "@cntryl/fitz",
   "version": "0.1.0",
   "description": "TypeScript client library for Fitz distributed system",
-  "license": "Apache-2.0",
-  "type": "module",
-  "main": "./dist/index.js",
-  "module": "./dist/index.mjs",
-  "types": "./dist/index.d.ts",
-  "exports": {
-    ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.mjs",
-      "require": "./dist/index.js"
-    }
-  },
-  "sideEffects": false,
-  "files": [
-    "dist"
+  "keywords": [
+    "distributed-systems",
+    "fitz",
+    "queue",
+    "rpc",
+    "stream",
+    "tcp",
+    "websocket"
   ],
-  "scripts": {
-    "build": "vp pack",
-    "inventory": "node scripts/generate-inventory.js",
-    "pack:smoke": "npm pack --pack-destination ./artifacts",
-    "test": "vp test run --config vitest.unit.config.ts && vp test run --config vitest.integration.config.ts",
-    "test:spec": "vp test run --config vitest.conformance.config.ts --reporter=verbose",
-    "verify": "vp check && vp pack && vp test run --config vitest.unit.config.ts && vp test run --config vitest.integration.config.ts && vp test run --config vitest.conformance.config.ts --reporter=verbose",
-    "typecheck": "tsc --noEmit -p tsconfig.json",
-    "test:unit": "vp test run --config vitest.unit.config.ts",
-    "test:integration": "vp test run --config vitest.integration.config.ts",
-    "test:conformance": "vp test run --config vitest.conformance.config.ts --reporter=verbose",
-    "test:watch": "vp test watch --config vitest.unit.config.ts",
-    "bench": "vp test bench --run",
-    "lint": "vp lint src tests --deny-warnings",
-    "lint:fix": "vp lint src tests --fix",
-    "fmt": "vp fmt .",
-    "fmt:check": "vp fmt . --check"
-  },
-  "devDependencies": {
-    "@types/node": "^25.5.0",
-    "typescript": "^6.0.2",
-    "ws": "^8.20.0",
-    "vite-plus": "0.1.14"
-  },
-  "engines": {
-    "node": ">=20.19.0"
-  },
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/cntryl/fitz-ts.git"
-  },
   "homepage": "https://github.com/cntryl/fitz-ts#readme",
   "bugs": {
     "url": "https://github.com/cntryl/fitz-ts/issues"
   },
-  "keywords": [
-    "fitz",
-    "distributed-systems",
-    "websocket",
-    "tcp",
-    "rpc",
-    "queue",
-    "stream"
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/cntryl/fitz-ts.git"
+  },
+  "files": [
+    "dist"
   ],
+  "type": "module",
+  "sideEffects": false,
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.mjs",
+  "types": "./dist/types/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/types/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.cjs"
+    }
+  },
   "publishConfig": {
     "access": "public"
   },
-  "packageManager": "npm@11.12.0"
+  "scripts": {
+    "build": "rolldown src/index.ts --file dist/index.mjs --format esm --platform node --sourcemap --external ws --clean-dir --tsconfig tsconfig.json && rolldown src/index.ts --file dist/index.cjs --format cjs --platform node --sourcemap --external ws --tsconfig tsconfig.json && tsc -p tsconfig.build.json && node ./scripts/fix-dts-imports.js",
+    "test": "vitest run --config vitest.unit.config.ts && vitest run --config vitest.integration.config.ts && vitest run --config vitest.conformance.config.ts --reporter=verbose",
+    "bench": "vitest bench --run",
+    "lint": "oxlint . --deny-warnings",
+    "fmt": "oxfmt ."
+  },
+  "devDependencies": {
+    "@types/node": "^25.5.0",
+    "oxfmt": "^0.42.0",
+    "oxlint": "^1.57.0",
+    "rolldown": "^1.0.0-rc.12",
+    "typescript": "^6.0.2",
+    "vitest": "^4.1.2",
+    "ws": "^8.20.0"
+  },
+  "engines": {
+    "node": ">=20.19.0"
+  },
+  "packageManager": "npm@11.12.1"
 }

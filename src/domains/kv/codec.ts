@@ -15,11 +15,7 @@ import {
 } from "./types";
 
 export class KvCodec {
-  static encodeBegin(
-    route: string,
-    mode: TxMode,
-    durability: DurabilityMode,
-  ): Uint8Array {
+  static encodeBegin(route: string, mode: TxMode, durability: DurabilityMode): Uint8Array {
     const writer = new BufferWriter(256);
     writer.writeRoute(route);
     writer.writeU8(mode === "ReadWrite" ? 1 : 0);
@@ -34,12 +30,7 @@ export class KvCodec {
     return { status, txId };
   }
 
-  static encodePut(
-    txId: bigint,
-    route: string,
-    key: Uint8Array,
-    value: Uint8Array,
-  ): Uint8Array {
+  static encodePut(txId: bigint, route: string, key: Uint8Array, value: Uint8Array): Uint8Array {
     const writer = new BufferWriter(512);
     writer.writeU64BE(txId);
     writer.writeRoute(route);
@@ -50,12 +41,7 @@ export class KvCodec {
     return writer.getBuffer();
   }
 
-  static encodeInsert(
-    txId: bigint,
-    route: string,
-    key: Uint8Array,
-    value: Uint8Array,
-  ): Uint8Array {
+  static encodeInsert(txId: bigint, route: string, key: Uint8Array, value: Uint8Array): Uint8Array {
     return this.encodePut(txId, route, key, value);
   }
 
@@ -95,11 +81,7 @@ export class KvCodec {
     };
   }
 
-  static encodeDelete(
-    txId: bigint,
-    route: string,
-    key: Uint8Array,
-  ): Uint8Array {
+  static encodeDelete(txId: bigint, route: string, key: Uint8Array): Uint8Array {
     const writer = new BufferWriter(256);
     writer.writeU64BE(txId);
     writer.writeRoute(route);
@@ -135,11 +117,7 @@ export class KvCodec {
     return this.encodeCommit(txId, route);
   }
 
-  static encodeScan(
-    txId: bigint,
-    route: string,
-    options: KvScanOptions = {},
-  ): Uint8Array {
+  static encodeScan(txId: bigint, route: string, options: KvScanOptions = {}): Uint8Array {
     const writer = new BufferWriter(512);
     writer.writeU64BE(txId);
     writer.writeRoute(route);

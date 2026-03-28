@@ -1,12 +1,8 @@
-import { describe, expect, it, vi } from "vite-plus/test";
+import { describe, expect, it, vi } from "vitest";
 
 import type { FitzLifecycleEvent } from "../../src/core/types";
 import { generateValidTestJwt } from "./fixture/jwt";
-import {
-  EnvBrokerJWTAudience,
-  EnvBrokerJWTHMACSecret,
-  TestFixture,
-} from "./fixture/fixture";
+import { EnvBrokerJWTAudience, EnvBrokerJWTHMACSecret, TestFixture } from "./fixture/fixture";
 import { runWithBothTransports } from "./fixture/transport";
 import { sleep } from "./helpers";
 
@@ -85,9 +81,7 @@ describe("Connection hardening integration", () => {
       await sleep(500);
 
       expect(received).toContain("reconnected:after-reconnect");
-      expect(events.some((event) => event.event === "connect_succeeded")).toBe(
-        true,
-      );
+      expect(events.some((event) => event.event === "connect_succeeded")).toBe(true);
       expect(events.some((event) => event.event === "closed")).toBe(true);
     });
 
@@ -98,9 +92,7 @@ describe("Connection hardening integration", () => {
 
       const worker = new TestFixture(transport, authMode);
       const caller = new TestFixture(transport, authMode);
-      const tokenProvider = vi.fn(async () =>
-        generateValidTestJwt(testSecret(), testAudience()),
-      );
+      const tokenProvider = vi.fn(async () => generateValidTestJwt(testSecret(), testAudience()));
 
       caller.setTokenProvider(tokenProvider);
 
@@ -122,10 +114,7 @@ describe("Connection hardening integration", () => {
           await writer.send(b("ok"), true);
         });
 
-      const iterator = await caller
-        .client()
-        .rpc()
-        .call(route, b("before"), { timeoutMs: 5000 });
+      const iterator = await caller.client().rpc().call(route, b("before"), { timeoutMs: 5000 });
       const firstFrame = await iterator.next();
       expect(firstFrame.done).toBe(false);
       expect(Buffer.from(firstFrame.value.body).toString()).toBe("ok");
@@ -142,10 +131,7 @@ describe("Connection hardening integration", () => {
         },
       });
 
-      const nextIterator = await caller
-        .client()
-        .rpc()
-        .call(route, b("after"), { timeoutMs: 5000 });
+      const nextIterator = await caller.client().rpc().call(route, b("after"), { timeoutMs: 5000 });
       const secondFrame = await nextIterator.next();
       expect(secondFrame.done).toBe(false);
       expect(Buffer.from(secondFrame.value.body).toString()).toBe("ok");

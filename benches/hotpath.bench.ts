@@ -1,4 +1,4 @@
-import { bench, describe } from "vite-plus/test";
+import { bench, describe } from "vitest";
 
 import { Multiplexer } from "../src/client/multiplexer";
 import { FrameCodec } from "../src/frame/codec";
@@ -44,12 +44,7 @@ describe("fitz-ts hotpath benchmarks", () => {
   });
 
   bench("rpc call encode", () => {
-    RpcCodec.encodeRequest(
-      RpcCodec.generateCorrelationId(),
-      rpcRoute,
-      replyRoute,
-      body,
-    );
+    RpcCodec.encodeRequest(RpcCodec.generateCorrelationId(), rpcRoute, replyRoute, body);
   });
 
   bench("rpc correlation id generation", () => {
@@ -70,12 +65,7 @@ describe("fitz-ts hotpath benchmarks", () => {
     multiplexer.setConnected();
 
     const pending = Array.from({ length: 1000 }, (_, index) =>
-      multiplexer.request(
-        302,
-        buildResponseFrame(index),
-        async () => undefined,
-        5000,
-      ),
+      multiplexer.request(302, buildResponseFrame(index), async () => undefined, 5000),
     );
 
     for (let index = 0; index < 1000; index += 1) {

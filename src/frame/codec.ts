@@ -18,10 +18,7 @@ export class FrameCodec {
    * 0-254: single byte
    * 255+: 0xFF followed by u16 BE
    */
-  private static encodeMessageType(
-    messageType: number,
-    writer: BufferWriter,
-  ): void {
+  private static encodeMessageType(messageType: number, writer: BufferWriter): void {
     if (messageType < 0) {
       throw new CodecError(`Invalid message type: ${messageType}`);
     }
@@ -104,10 +101,7 @@ export class FrameCodec {
   /**
    * Calculate total frame size
    */
-  static calculateFrameSize(
-    messageType: number,
-    payloadLength: number,
-  ): number {
+  static calculateFrameSize(messageType: number, payloadLength: number): number {
     return this.getMessageTypeSize(messageType) + 2 + payloadLength; // +2 for length field
   }
 }
@@ -120,8 +114,7 @@ export class FrameParser {
   private offset: number = 0;
   private messageType: number | null = null;
   private payloadLength: number | null = null;
-  private state: "reading_type" | "reading_length" | "reading_payload" =
-    "reading_type";
+  private state: "reading_type" | "reading_length" | "reading_payload" = "reading_type";
 
   /**
    * Feed data into the parser and try to extract complete frames
@@ -200,10 +193,7 @@ export class FrameParser {
 
     if (this.offset + this.payloadLength > this.buffer.length) return false;
 
-    const payload = this.buffer.slice(
-      this.offset,
-      this.offset + this.payloadLength,
-    );
+    const payload = this.buffer.slice(this.offset, this.offset + this.payloadLength);
     this.offset += this.payloadLength;
 
     frames.push({

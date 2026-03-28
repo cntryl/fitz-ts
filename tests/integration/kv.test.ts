@@ -1,4 +1,4 @@
-﻿import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it } from "vitest";
 
 import { collectAsyncIterable } from "./helpers";
 import { TestFixture } from "./fixture/fixture";
@@ -17,10 +17,7 @@ describe("KV integration", () => {
       await tx.put(b("user:123"), b("Alice"));
       await tx.commit();
 
-      const rtx = await f
-        .client()
-        .kv()
-        .begin(route, { mode: "ReadOnly", durability: "Sync" });
+      const rtx = await f.client().kv().begin(route, { mode: "ReadOnly", durability: "Sync" });
       const result = await rtx.get(b("user:123"));
       expect(result.type).toBe("found");
       if (result.type === "found") {
@@ -37,10 +34,7 @@ describe("KV integration", () => {
       await tx.put(b("colour"), b("blue"));
       await tx.commit();
 
-      const rtx = await f
-        .client()
-        .kv()
-        .begin(route, { mode: "ReadOnly", durability: "Sync" });
+      const rtx = await f.client().kv().begin(route, { mode: "ReadOnly", durability: "Sync" });
       const result = await rtx.get(b("colour"));
       expect(result.type).toBe("found");
       if (result.type === "found") {
@@ -111,10 +105,7 @@ describe("KV integration", () => {
       await tx2.delete(b("to-delete"));
       await tx2.commit();
 
-      const rtx = await f
-        .client()
-        .kv()
-        .begin(route, { mode: "ReadOnly", durability: "Sync" });
+      const rtx = await f.client().kv().begin(route, { mode: "ReadOnly", durability: "Sync" });
       expect(await rtx.get(b("to-delete"))).toEqual({ type: "not-found" });
     });
 
@@ -129,18 +120,11 @@ describe("KV integration", () => {
       await tx.put(b("c"), b("3"));
       await tx.commit();
 
-      const rtx = await f
-        .client()
-        .kv()
-        .begin(route, { mode: "ReadOnly", durability: "Sync" });
+      const rtx = await f.client().kv().begin(route, { mode: "ReadOnly", durability: "Sync" });
       const keys = await collectAsyncIterable(
         await rtx.scan({ startKey: b("a"), endKey: b("d"), limit: 10 }),
       );
-      expect(keys.map((key) => Buffer.from(key).toString())).toEqual([
-        "a",
-        "b",
-        "c",
-      ]);
+      expect(keys.map((key) => Buffer.from(key).toString())).toEqual(["a", "b", "c"]);
     });
 
     it("should delete range", async () => {
@@ -159,17 +143,11 @@ describe("KV integration", () => {
       await tx2.deleteRange(b("b"), b("d"));
       await tx2.commit();
 
-      const rtx = await f
-        .client()
-        .kv()
-        .begin(route, { mode: "ReadOnly", durability: "Sync" });
+      const rtx = await f.client().kv().begin(route, { mode: "ReadOnly", durability: "Sync" });
       const keys = await collectAsyncIterable(
         await rtx.scan({ startKey: b("a"), endKey: b("z"), limit: 10 }),
       );
-      expect(keys.map((key) => Buffer.from(key).toString())).toEqual([
-        "a",
-        "d",
-      ]);
+      expect(keys.map((key) => Buffer.from(key).toString())).toEqual(["a", "d"]);
     });
 
     it("should respect scan limit", async () => {
@@ -183,10 +161,7 @@ describe("KV integration", () => {
       await tx.put(b("c"), b("3"));
       await tx.commit();
 
-      const rtx = await f
-        .client()
-        .kv()
-        .begin(route, { mode: "ReadOnly", durability: "Sync" });
+      const rtx = await f.client().kv().begin(route, { mode: "ReadOnly", durability: "Sync" });
       const keys = await collectAsyncIterable(
         await rtx.scan({ startKey: b("a"), endKey: b("z"), limit: 2 }),
       );
@@ -202,10 +177,7 @@ describe("KV integration", () => {
       await tx.put(b("ephemeral"), b("gone"));
       await tx.rollback();
 
-      const rtx = await f
-        .client()
-        .kv()
-        .begin(route, { mode: "ReadOnly", durability: "Sync" });
+      const rtx = await f.client().kv().begin(route, { mode: "ReadOnly", durability: "Sync" });
       expect(await rtx.get(b("ephemeral"))).toEqual({ type: "not-found" });
     });
 
@@ -217,9 +189,7 @@ describe("KV integration", () => {
       const route = f1.uniqueRoute("kv");
 
       const tx1 = await f1.client().kv().begin(route, { durability: "Sync" });
-      await expect(
-        f2.client().kv().begin(route, { durability: "Sync" }),
-      ).rejects.toBeTruthy();
+      await expect(f2.client().kv().begin(route, { durability: "Sync" })).rejects.toBeTruthy();
       await tx1.rollback();
     });
 
@@ -228,10 +198,7 @@ describe("KV integration", () => {
       await f.connectOrFail();
       const route = f.uniqueRoute("kv");
 
-      const tx = await f
-        .client()
-        .kv()
-        .begin(route, { mode: "ReadOnly", durability: "Sync" });
+      const tx = await f.client().kv().begin(route, { mode: "ReadOnly", durability: "Sync" });
       await expect(tx.put(b("k"), b("v"))).rejects.toBeTruthy();
       await tx.rollback();
     });
@@ -241,10 +208,7 @@ describe("KV integration", () => {
       await f.connectOrFail();
 
       await expect(
-        f
-          .client()
-          .kv()
-          .begin("invalid-route-not-kv-format", { durability: "Sync" }),
+        f.client().kv().begin("invalid-route-not-kv-format", { durability: "Sync" }),
       ).rejects.toBeTruthy();
     });
 

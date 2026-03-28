@@ -31,10 +31,7 @@ export interface ResponseWriter {
 /**
  * Handler for incoming RPC requests (worker mode)
  */
-export type RpcHandler = (
-  req: InboundRequest,
-  writer: ResponseWriter,
-) => Promise<void>;
+export type RpcHandler = (req: InboundRequest, writer: ResponseWriter) => Promise<void>;
 
 /**
  * Active worker registration

@@ -62,20 +62,13 @@ export function parseStandardResponse(payload: Uint8Array): ParsedResponse {
  * Check if response is success, throw error if not
  * Returns remaining data on success
  */
-export function assertSuccess(
-  payload: Uint8Array,
-  operation: string,
-): Uint8Array {
+export function assertSuccess(payload: Uint8Array, operation: string): Uint8Array {
   const result = parseStandardResponse(payload);
   if (!result.success) {
-    throw new ProtocolError(
-      `${operation} failed: ${result.error || "Unknown error"}`,
-      1,
-      {
-        operation,
-        error: result.error || "Unknown error",
-      },
-    );
+    throw new ProtocolError(`${operation} failed: ${result.error || "Unknown error"}`, 1, {
+      operation,
+      error: result.error || "Unknown error",
+    });
   }
   return result.data;
 }

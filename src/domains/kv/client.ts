@@ -20,17 +20,10 @@ export class KvClient extends DomainClient {
       throw new KvError(`Invalid route: ${route}`, "INVALID_ROUTE");
     }
     if (!options?.durability) {
-      throw new KvError(
-        "BEGIN requires explicit durability",
-        "MISSING_DURABILITY",
-      );
+      throw new KvError("BEGIN requires explicit durability", "MISSING_DURABILITY");
     }
 
-    const payload = KvCodec.encodeBegin(
-      route,
-      options.mode ?? "ReadWrite",
-      options.durability,
-    );
+    const payload = KvCodec.encodeBegin(route, options.mode ?? "ReadWrite", options.durability);
     const response = await this.requestFrame(MSG_KV_BEGIN, payload);
     const decoded = KvCodec.decodeBeginResponse(response);
 

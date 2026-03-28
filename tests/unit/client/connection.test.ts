@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vite-plus/test";
+import { describe, expect, it, vi } from "vitest";
 
 import { Connection } from "../../../src/client/connection";
 import type {
@@ -35,10 +35,7 @@ class FakeTransport implements Transport {
 
   async send(data: Uint8Array): Promise<void> {
     this.concurrentSends += 1;
-    this.maxConcurrentSends = Math.max(
-      this.maxConcurrentSends,
-      this.concurrentSends,
-    );
+    this.maxConcurrentSends = Math.max(this.maxConcurrentSends, this.concurrentSends);
     this.sent.push(data);
     if (this.sendGate && this.sent.length > this.gateAfterSends) {
       await this.sendGate;
@@ -148,27 +145,15 @@ class FakeMeter implements FitzMeter {
     attributes?: Record<string, unknown>;
   }> = [];
 
-  counter(
-    name: string,
-    value: number,
-    attributes?: Record<string, unknown>,
-  ): void {
+  counter(name: string, value: number, attributes?: Record<string, unknown>): void {
     this.counters.push({ name, value, attributes });
   }
 
-  histogram(
-    name: string,
-    value: number,
-    attributes?: Record<string, unknown>,
-  ): void {
+  histogram(name: string, value: number, attributes?: Record<string, unknown>): void {
     this.histograms.push({ name, value, attributes });
   }
 
-  gauge(
-    name: string,
-    value: number,
-    attributes?: Record<string, unknown>,
-  ): void {
+  gauge(name: string, value: number, attributes?: Record<string, unknown>): void {
     this.gauges.push({ name, value, attributes });
   }
 }
@@ -212,10 +197,7 @@ describe("Connection", () => {
   it("reconnects and replays reconnect listeners after transport loss", async () => {
     const first = new FakeTransport();
     const second = new FakeTransport();
-    const factory = vi
-      .fn<() => Transport>()
-      .mockReturnValueOnce(first)
-      .mockReturnValueOnce(second);
+    const factory = vi.fn<() => Transport>().mockReturnValueOnce(first).mockReturnValueOnce(second);
     const tokenProvider = vi.fn(async () => "jwt-token");
     const restore = vi.fn(async () => undefined);
 
@@ -271,10 +253,7 @@ describe("Connection", () => {
   it("waits for reconnect restoration before reporting authenticated state", async () => {
     const first = new FakeTransport();
     const second = new FakeTransport();
-    const factory = vi
-      .fn<() => Transport>()
-      .mockReturnValueOnce(first)
-      .mockReturnValueOnce(second);
+    const factory = vi.fn<() => Transport>().mockReturnValueOnce(first).mockReturnValueOnce(second);
     let restoreResolved = false;
     let stateDuringRestore: string | null = null;
 
@@ -307,9 +286,7 @@ describe("Connection", () => {
   });
 
   it("transitions to CLOSED and does not reconnect after auth rejection", async () => {
-    const transport = new FakeTransport([
-      new Error("connect failed: invalid jwt"),
-    ]);
+    const transport = new FakeTransport([new Error("connect failed: invalid jwt")]);
     const factory = vi.fn<() => Transport>().mockReturnValue(transport);
     const connection = new Connection(factory, async () => "bad-token", {
       authSettleDelayMs: 50,
@@ -321,9 +298,7 @@ describe("Connection", () => {
       },
     });
 
-    await expect(connection.connect()).rejects.toBeInstanceOf(
-      AuthenticationError,
-    );
+    await expect(connection.connect()).rejects.toBeInstanceOf(AuthenticationError);
     expect(connection.getState()).toBe("CLOSED");
     expect(factory).toHaveBeenCalledTimes(1);
   });
@@ -367,10 +342,7 @@ describe("Connection", () => {
   it("emits reconnect lifecycle signals and metrics after transport loss", async () => {
     const first = new FakeTransport();
     const second = new FakeTransport();
-    const factory = vi
-      .fn<() => Transport>()
-      .mockReturnValueOnce(first)
-      .mockReturnValueOnce(second);
+    const factory = vi.fn<() => Transport>().mockReturnValueOnce(first).mockReturnValueOnce(second);
     const meter = new FakeMeter();
     const events: FitzLifecycleEvent[] = [];
 
@@ -395,12 +367,8 @@ describe("Connection", () => {
 
     await vi.waitFor(() => {
       expect(connection.isConnected()).toBe(true);
-      expect(events.some((event) => event.event === "connection_lost")).toBe(
-        true,
-      );
-      expect(
-        events.some((event) => event.event === "reconnect_succeeded"),
-      ).toBe(true);
+      expect(events.some((event) => event.event === "connection_lost")).toBe(true);
+      expect(events.some((event) => event.event === "reconnect_succeeded")).toBe(true);
     });
 
     expect(
@@ -440,12 +408,8 @@ describe("Connection", () => {
     await expect(pending).resolves.toEqual(new Uint8Array([9]));
     expect(tracer.spans).toHaveLength(1);
     expect(tracer.spans[0].ended).toBe(true);
-    expect(
-      meter.counters.some((entry) => entry.name === "fitz.request.started"),
-    ).toBe(true);
-    expect(
-      meter.histograms.some((entry) => entry.name === "fitz.request.duration"),
-    ).toBe(true);
+    expect(meter.counters.some((entry) => entry.name === "fitz.request.started")).toBe(true);
+    expect(meter.histograms.some((entry) => entry.name === "fitz.request.duration")).toBe(true);
 
     await connection.close();
   });
@@ -474,12 +438,8 @@ describe("Connection", () => {
 
     await connection.connect();
 
-    await expect(connection.request(93, new Uint8Array([1]))).rejects.toThrow(
-      "write failed",
-    );
-    await expect(connection.send(94, new Uint8Array([2]))).rejects.toThrow(
-      "write failed",
-    );
+    await expect(connection.request(93, new Uint8Array([1]))).rejects.toThrow("write failed");
+    await expect(connection.send(94, new Uint8Array([2]))).rejects.toThrow("write failed");
 
     expect(log).toHaveBeenCalledWith(
       "error",
@@ -555,11 +515,7 @@ describe("Connection", () => {
 
     await connection.connect();
 
-    const pending = connection.request(
-      92,
-      new Uint8Array([1, 2, 3]),
-      controller.signal,
-    );
+    const pending = connection.request(92, new Uint8Array([1, 2, 3]), controller.signal);
     await Promise.resolve();
     controller.abort();
 
@@ -567,6 +523,26 @@ describe("Connection", () => {
     expect(connection.getMultiplexer().getInFlightCount()).toBe(0);
 
     await connection.close();
+  });
+
+  it("aborts connect when the signal is canceled during auth settle", async () => {
+    const transport = new FakeTransport();
+    const connection = new Connection(
+      () => transport,
+      () => "",
+      {
+        authSettleDelayMs: 5000,
+      },
+    );
+    const controller = new AbortController();
+
+    const pendingConnect = connection.connect({ signal: controller.signal });
+    await Promise.resolve();
+    controller.abort();
+
+    await expect(pendingConnect).rejects.toMatchObject({ name: "AbortError" });
+    expect(connection.isConnected()).toBe(false);
+    expect(connection.getState()).toBe("DISCONNECTED");
   });
 
   it("bounds async handler concurrency", async () => {

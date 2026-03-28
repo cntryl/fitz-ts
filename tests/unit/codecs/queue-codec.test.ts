@@ -2,7 +2,7 @@
  * Queue Codec unit tests
  */
 
-import { describe, it, expect } from "vite-plus/test";
+import { describe, it, expect } from "vitest";
 import { QueueCodec } from "../../../src/domains/queue/codec";
 import { BufferWriter } from "../../../src/core/buffer";
 import { testData } from "../helpers/test-utils";
@@ -24,10 +24,7 @@ describe("QueueCodec", () => {
 
     it("should_encode_enqueue_with_empty_body", () => {
       // Arrange/Act
-      const encoded = QueueCodec.encodeEnqueue(
-        "queue://test/tasks",
-        new Uint8Array(0),
-      );
+      const encoded = QueueCodec.encodeEnqueue("queue://test/tasks", new Uint8Array(0));
 
       // Assert
       expect(encoded).toBeInstanceOf(Uint8Array);

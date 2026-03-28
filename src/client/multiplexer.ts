@@ -8,12 +8,7 @@
  * - No correlation IDs for most operations (except RPC streaming)
  */
 
-import {
-  Deferred,
-  ConnectionState,
-  FitzMeter,
-  FitzTracer,
-} from "../core/types";
+import { Deferred, ConnectionState, FitzMeter, FitzTracer } from "../core/types";
 import { ConnectionError, TimeoutError } from "../core/errors";
 
 export interface MultiplexerObservability {
@@ -42,10 +37,7 @@ export type NotificationHandler = (payload: Uint8Array) => void;
  * @param correlationId 16-byte correlation ID
  * @param payload Response payload
  */
-export type RpcCorrelationHandler = (
-  correlationId: Uint8Array,
-  payload: Uint8Array,
-) => void;
+export type RpcCorrelationHandler = (correlationId: Uint8Array, payload: Uint8Array) => void;
 
 export class Multiplexer {
   // FIFO queue of pending requests per MessageType
@@ -94,10 +86,7 @@ export class Multiplexer {
    * Register a handler for pushed frames.
    * @param handler Handler function to call when notification arrives
    */
-  registerNotificationHandler(
-    messageType: number,
-    handler: NotificationHandler,
-  ): void {
+  registerNotificationHandler(messageType: number, handler: NotificationHandler): void {
     this.notificationHandlers.set(messageType, handler);
   }
 
@@ -133,10 +122,7 @@ export class Multiplexer {
     signal?: AbortSignal,
   ): Promise<Uint8Array> {
     const attributes = { messageType };
-    const span = this.observability.tracer?.startSpan(
-      "fitz.request",
-      attributes,
-    );
+    const span = this.observability.tracer?.startSpan("fitz.request", attributes);
     let spanEnded = false;
 
     if (signal?.aborted) {
@@ -189,10 +175,10 @@ export class Multiplexer {
     timeout = setTimeout(() => {
       this.observability.meter?.counter("fitz.request.timeout", 1, attributes);
       failRequest(
-        new TimeoutError(
-          `Request timeout for message type ${messageType} after ${timeoutMs}ms`,
-          { messageType, timeoutMs },
-        ),
+        new TimeoutError(`Request timeout for message type ${messageType} after ${timeoutMs}ms`, {
+          messageType,
+          timeoutMs,
+        }),
       );
     }, timeoutMs);
 
@@ -214,11 +200,7 @@ export class Multiplexer {
     this.requestsInFlight++;
     this.requestsTotal++;
     this.observability.meter?.counter("fitz.request.started", 1, attributes);
-    this.observability.meter?.gauge?.(
-      "fitz.requests.in_flight",
-      this.requestsInFlight,
-      attributes,
-    );
+    this.observability.meter?.gauge?.("fitz.requests.in_flight", this.requestsInFlight, attributes);
 
     try {
       await send(frameData);
@@ -251,11 +233,7 @@ export class Multiplexer {
     finalize();
     const durationMs = Date.now() - request.sentAt.getTime();
     span?.setAttribute("fitz.request.duration_ms", durationMs);
-    this.observability.meter?.histogram(
-      "fitz.request.duration",
-      durationMs,
-      attributes,
-    );
+    this.observability.meter?.histogram("fitz.request.duration", durationMs, attributes);
     if (!spanEnded) {
       span?.end();
       spanEnded = true;
@@ -266,10 +244,7 @@ export class Multiplexer {
   /**
    * Unregister a pending request (on cancel/timeout)
    */
-  private unregisterRequest(
-    messageType: number,
-    deferred: Deferred<Uint8Array>,
-  ): void {
+  private unregisterRequest(messageType: number, deferred: Deferred<Uint8Array>): void {
     const queue = this.pending.get(messageType);
     if (!queue) return;
 
@@ -277,11 +252,9 @@ export class Multiplexer {
     if (index >= 0) {
       queue.splice(index, 1);
       this.requestsInFlight--;
-      this.observability.meter?.gauge?.(
-        "fitz.requests.in_flight",
-        this.requestsInFlight,
-        { messageType },
-      );
+      this.observability.meter?.gauge?.("fitz.requests.in_flight", this.requestsInFlight, {
+        messageType,
+      });
       if (queue.length === 0) {
         this.pending.delete(messageType);
       }
@@ -309,11 +282,9 @@ export class Multiplexer {
       this.observability.meter?.counter("fitz.response.received", 1, {
         messageType,
       });
-      this.observability.meter?.gauge?.(
-        "fitz.requests.in_flight",
-        this.requestsInFlight,
-        { messageType },
-      );
+      this.observability.meter?.gauge?.("fitz.requests.in_flight", this.requestsInFlight, {
+        messageType,
+      });
 
       request.deferred.resolve(payload);
       return;

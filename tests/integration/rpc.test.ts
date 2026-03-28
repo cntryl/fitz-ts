@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it } from "vitest";
 
 import { TestFixture } from "./fixture/fixture";
 import { runWithBothTransports } from "./fixture/transport";
@@ -66,9 +66,7 @@ describe("RPC integration", () => {
       const frames = await collectResponses(iterator);
 
       expect(frames.map((frame) => Number(frame.sequence))).toEqual([0, 1, 2]);
-      expect(frames.map((frame) => frame.body.charCodeAt(0))).toEqual([
-        0, 1, 2,
-      ]);
+      expect(frames.map((frame) => frame.body.charCodeAt(0))).toEqual([0, 1, 2]);
       await sub.unsubscribe();
     });
 
@@ -136,16 +134,8 @@ describe("RPC integration", () => {
         });
 
       const [framesA, framesB] = await Promise.all([
-        caller
-          .client()
-          .rpc()
-          .call(route, b("req-A"), { timeoutMs: 5000 })
-          .then(collectResponses),
-        caller
-          .client()
-          .rpc()
-          .call(route, b("req-B"), { timeoutMs: 5000 })
-          .then(collectResponses),
+        caller.client().rpc().call(route, b("req-A"), { timeoutMs: 5000 }).then(collectResponses),
+        caller.client().rpc().call(route, b("req-B"), { timeoutMs: 5000 }).then(collectResponses),
       ]);
 
       expect(framesA[0]?.body).toBe("req-A");

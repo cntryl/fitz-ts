@@ -266,9 +266,7 @@ function collectInventory() {
 }
 
 function formatNames(values) {
-  return values.length === 0
-    ? "none"
-    : values.map((value) => `\`${value}\``).join(", ");
+  return values.length === 0 ? "none" : values.map((value) => `\`${value}\``).join(", ");
 }
 
 function generateMarkdownInventory(inventory, packageJson) {
@@ -321,18 +319,12 @@ function generateMarkdownInventory(inventory, packageJson) {
   for (const file of inventory.sourceFiles) {
     const symbols = file.symbols;
     const summary = [];
-    if (symbols.classes.length)
-      summary.push(`classes: ${formatNames(symbols.classes)}`);
-    if (symbols.interfaces.length)
-      summary.push(`interfaces: ${formatNames(symbols.interfaces)}`);
-    if (symbols.functions.length)
-      summary.push(`functions: ${formatNames(symbols.functions)}`);
-    if (symbols.types.length)
-      summary.push(`types: ${formatNames(symbols.types)}`);
-    if (symbols.enums.length)
-      summary.push(`enums: ${formatNames(symbols.enums)}`);
-    if (symbols.constants.length)
-      summary.push(`constants: ${formatNames(symbols.constants)}`);
+    if (symbols.classes.length) summary.push(`classes: ${formatNames(symbols.classes)}`);
+    if (symbols.interfaces.length) summary.push(`interfaces: ${formatNames(symbols.interfaces)}`);
+    if (symbols.functions.length) summary.push(`functions: ${formatNames(symbols.functions)}`);
+    if (symbols.types.length) summary.push(`types: ${formatNames(symbols.types)}`);
+    if (symbols.enums.length) summary.push(`enums: ${formatNames(symbols.enums)}`);
+    if (symbols.constants.length) summary.push(`constants: ${formatNames(symbols.constants)}`);
 
     lines.push(
       `- [${file.path}](${file.path}) - ${summary.length ? summary.join("; ") : "No top-level symbols found"}`,
@@ -388,9 +380,7 @@ function generateMarkdownInventory(inventory, packageJson) {
 }
 
 function main() {
-  const packageJson = JSON.parse(
-    fs.readFileSync(path.join(repoRoot, "package.json"), "utf8"),
-  );
+  const packageJson = JSON.parse(fs.readFileSync(path.join(repoRoot, "package.json"), "utf8"));
   const inventory = collectInventory();
   const markdown = generateMarkdownInventory(inventory, packageJson);
 

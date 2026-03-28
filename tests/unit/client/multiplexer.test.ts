@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vite-plus/test";
+import { describe, expect, it, vi } from "vitest";
 
 import { Multiplexer } from "../../../src/client/multiplexer";
 import type { FitzMeter, FitzSpan, FitzTracer } from "../../../src/core/types";
@@ -93,12 +93,7 @@ describe("Multiplexer", () => {
     const multiplexer = new Multiplexer({ tracer, meter });
     multiplexer.setConnected();
 
-    const request = multiplexer.request(
-      77,
-      new Uint8Array([1]),
-      async () => undefined,
-      100,
-    );
+    const request = multiplexer.request(77, new Uint8Array([1]), async () => undefined, 100);
 
     multiplexer.dispatch(77, new Uint8Array([2]));
 
@@ -117,12 +112,7 @@ describe("Multiplexer", () => {
     const multiplexer = new Multiplexer({ tracer, meter });
     multiplexer.setConnected();
 
-    const request = multiplexer.request(
-      88,
-      new Uint8Array([1]),
-      async () => undefined,
-      10,
-    );
+    const request = multiplexer.request(88, new Uint8Array([1]), async () => undefined, 10);
 
     const assertion = expect(request).rejects.toThrow(/Request timeout/);
 

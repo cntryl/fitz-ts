@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it } from "vitest";
 
 import type { Connection } from "../../../src/client/connection";
 import { BufferWriter } from "../../../src/core/buffer";
@@ -27,10 +27,7 @@ import {
 
 class FakeSubscriptionConnection {
   private readonly responses = new Map<number, Uint8Array>();
-  private readonly notificationHandlers = new Map<
-    number,
-    (payload: Uint8Array) => void
-  >();
+  private readonly notificationHandlers = new Map<number, (payload: Uint8Array) => void>();
   private readonly reconnectListeners = new Set<() => void | Promise<void>>();
   private readonly pendingHandlers: Promise<void>[] = [];
   readonly requestCalls: number[] = [];
@@ -51,10 +48,7 @@ class FakeSubscriptionConnection {
     return response.slice();
   }
 
-  registerNotificationHandler(
-    messageType: number,
-    handler: (payload: Uint8Array) => void,
-  ): void {
+  registerNotificationHandler(messageType: number, handler: (payload: Uint8Array) => void): void {
     this.notificationHandlers.set(messageType, handler);
   }
 
@@ -115,11 +109,7 @@ function encodeStatusOnlyResponse(): Uint8Array {
   return new Uint8Array([0]);
 }
 
-function encodeNoticeNotification(
-  subId: bigint,
-  route: string,
-  body: Uint8Array,
-): Uint8Array {
+function encodeNoticeNotification(subId: bigint, route: string, body: Uint8Array): Uint8Array {
   const writer = new BufferWriter(128);
   writer.writeU64BE(subId);
   writer.writeString(route);
@@ -142,10 +132,7 @@ function encodeLeaseNotification(subId: bigint, route: string): Uint8Array {
   return writer.getBuffer();
 }
 
-function encodeScheduleNotification(
-  subId: bigint,
-  payload: Uint8Array,
-): Uint8Array {
+function encodeScheduleNotification(subId: bigint, payload: Uint8Array): Uint8Array {
   const writer = new BufferWriter(128);
   writer.writeU64BE(subId);
   writer.writeU32BE(payload.length);
@@ -153,11 +140,7 @@ function encodeScheduleNotification(
   return writer.getBuffer();
 }
 
-function encodeStreamNotification(
-  subId: bigint,
-  route: string,
-  payload: Uint8Array,
-): Uint8Array {
+function encodeStreamNotification(subId: bigint, route: string, payload: Uint8Array): Uint8Array {
   const writer = new BufferWriter(128);
   writer.writeU64BE(subId);
   writer.writeString(route);
@@ -235,10 +218,7 @@ describe("Subscription Multiplexing", () => {
     expect(second.subId).toBe(21n);
     expect(connection.countRequests(MSG_QUEUE_SUBSCRIBE)).toBe(1);
 
-    connection.emitNotification(
-      MSG_QUEUE_NOTIFY,
-      encodeQueueNotification(21n, pattern),
-    );
+    connection.emitNotification(MSG_QUEUE_NOTIFY, encodeQueueNotification(21n, pattern));
     await connection.flushHandlers();
     expect(firstRoutes).toEqual([pattern]);
     expect(secondRoutes).toEqual([pattern]);
@@ -246,10 +226,7 @@ describe("Subscription Multiplexing", () => {
     await first.unsubscribe();
     expect(connection.countRequests(MSG_QUEUE_UNSUBSCRIBE)).toBe(0);
 
-    connection.emitNotification(
-      MSG_QUEUE_NOTIFY,
-      encodeQueueNotification(21n, pattern),
-    );
+    connection.emitNotification(MSG_QUEUE_NOTIFY, encodeQueueNotification(21n, pattern));
     await connection.flushHandlers();
     expect(firstRoutes).toEqual([pattern]);
     expect(secondRoutes).toEqual([pattern, pattern]);
@@ -279,10 +256,7 @@ describe("Subscription Multiplexing", () => {
     expect(second.subId).toBe(31n);
     expect(connection.countRequests(MSG_LEASE_SUBSCRIBE)).toBe(1);
 
-    connection.emitNotification(
-      MSG_LEASE_NOTIFY,
-      encodeLeaseNotification(31n, pattern),
-    );
+    connection.emitNotification(MSG_LEASE_NOTIFY, encodeLeaseNotification(31n, pattern));
     await connection.flushHandlers();
     expect(firstRoutes).toEqual([pattern]);
     expect(secondRoutes).toEqual([pattern]);
@@ -290,10 +264,7 @@ describe("Subscription Multiplexing", () => {
     await first.unsubscribe();
     expect(connection.countRequests(MSG_LEASE_UNSUBSCRIBE)).toBe(0);
 
-    connection.emitNotification(
-      MSG_LEASE_NOTIFY,
-      encodeLeaseNotification(31n, pattern),
-    );
+    connection.emitNotification(MSG_LEASE_NOTIFY, encodeLeaseNotification(31n, pattern));
     await connection.flushHandlers();
     expect(firstRoutes).toEqual([pattern]);
     expect(secondRoutes).toEqual([pattern, pattern]);

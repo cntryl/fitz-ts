@@ -13,13 +13,7 @@ import {
 } from "../../frame/types";
 import { DomainClient } from "../base";
 import { LeaseCodec } from "./codec";
-import {
-  ChangeHandler,
-  ChangeNotification,
-  Lease,
-  LeaseInfo,
-  LeaseSubscription,
-} from "./types";
+import { ChangeHandler, ChangeNotification, Lease, LeaseInfo, LeaseSubscription } from "./types";
 
 type LeaseSubscriptionState = {
   subId: bigint;
@@ -27,10 +21,7 @@ type LeaseSubscriptionState = {
 };
 
 export class LeaseClient extends DomainClient {
-  private readonly subscriptionsByPattern = new Map<
-    string,
-    LeaseSubscriptionState
-  >();
+  private readonly subscriptionsByPattern = new Map<string, LeaseSubscriptionState>();
   private readonly patternsBySubId = new Map<bigint, string>();
   private initialized = false;
   private nextHandlerId = 1;
@@ -72,9 +63,7 @@ export class LeaseClient extends DomainClient {
       throw new LeaseError("ACQUIRE failed", "ACQUIRE_FAILED");
     }
 
-    const expiresAt =
-      decoded.expiresAt ??
-      BigInt(Math.floor(Date.now() / 1000)) + BigInt(ttlSecs);
+    const expiresAt = decoded.expiresAt ?? BigInt(Math.floor(Date.now() / 1000)) + BigInt(ttlSecs);
     return new Lease(decoded.token, expiresAt, route, this.connection);
   }
 
@@ -93,10 +82,7 @@ export class LeaseClient extends DomainClient {
     };
   }
 
-  async subscribe(
-    pattern: string,
-    handler: ChangeHandler,
-  ): Promise<LeaseSubscription> {
+  async subscribe(pattern: string, handler: ChangeHandler): Promise<LeaseSubscription> {
     this.initNotifyHandler();
     const existing = this.subscriptionsByPattern.get(pattern);
     if (existing) {

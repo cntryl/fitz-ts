@@ -4,12 +4,7 @@
  */
 
 import { BufferWriter, BufferReader, utf8Decoder } from "../../core/buffer";
-import {
-  StreamRecord,
-  StreamMetadata,
-  StreamCommitMode,
-  StreamCommitPayload,
-} from "./types";
+import { StreamRecord, StreamMetadata, StreamCommitMode, StreamCommitPayload } from "./types";
 
 export class StreamCodec {
   /**
@@ -50,11 +45,7 @@ export class StreamCodec {
    * Encode APPEND request
    * Payload: [session_id: u64][body: bytes][has_metadata: u8][metadata?: bytes]
    */
-  static encodeAppend(
-    sessionId: bigint,
-    body: Uint8Array,
-    metadata?: Uint8Array,
-  ): Uint8Array {
+  static encodeAppend(sessionId: bigint, body: Uint8Array, metadata?: Uint8Array): Uint8Array {
     const writer = new BufferWriter(512);
     writer.writeU64BE(sessionId);
     writer.writeU32BE(body.length);
@@ -291,9 +282,7 @@ export class StreamCodec {
     let parsedPayload: StreamCommitPayload = {};
     if (rawPayload.length > 0) {
       try {
-        parsedPayload = JSON.parse(
-          utf8Decoder.decode(rawPayload),
-        ) as StreamCommitPayload;
+        parsedPayload = JSON.parse(utf8Decoder.decode(rawPayload)) as StreamCommitPayload;
       } catch {
         parsedPayload = {};
       }

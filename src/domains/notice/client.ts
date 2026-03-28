@@ -20,10 +20,7 @@ type NoticeSubscriptionState = {
 };
 
 export class NoticeClient extends DomainClient {
-  private readonly subscriptionsByPattern = new Map<
-    string,
-    NoticeSubscriptionState
-  >();
+  private readonly subscriptionsByPattern = new Map<string, NoticeSubscriptionState>();
   private readonly patternsBySubId = new Map<bigint, string>();
   private initialized = false;
   private nextHandlerId = 1;
@@ -69,10 +66,7 @@ export class NoticeClient extends DomainClient {
     }
   }
 
-  async subscribe(
-    pattern: string,
-    handler: NoticeHandler,
-  ): Promise<NoticeSubscription> {
+  async subscribe(pattern: string, handler: NoticeHandler): Promise<NoticeSubscription> {
     this.initNotifyHandler();
     const existing = this.subscriptionsByPattern.get(pattern);
     if (existing) {
@@ -89,10 +83,7 @@ export class NoticeClient extends DomainClient {
     const decoded = NoticeCodec.decodeSubscribeResponse(response);
 
     if (decoded.subId === undefined) {
-      throw new NoticeError(
-        "SUBSCRIBE response missing subId",
-        "MISSING_SUB_ID",
-      );
+      throw new NoticeError("SUBSCRIBE response missing subId", "MISSING_SUB_ID");
     }
 
     return decoded.subId;
@@ -140,33 +131,29 @@ export class NoticeClient extends DomainClient {
     }
 
     this.initialized = true;
-    this.connection.registerNotificationHandler(
-      MSG_NOTICE_NOTIFY,
-      (payload) => {
-        try {
-          const { subId, route, body } =
-            NoticeCodec.decodeNotification(payload);
-          const pattern = this.patternsBySubId.get(subId);
-          if (!pattern) {
-            return;
-          }
-
-          const subscription = this.subscriptionsByPattern.get(pattern);
-          if (!subscription) {
-            return;
-          }
-
-          const msg: NoticeMsg = { route, body };
-          for (const handler of subscription.handlers.values()) {
-            this.connection.dispatchAsyncHandler(async () => {
-              await handler(msg);
-            });
-          }
-        } catch {
-          // Best-effort notification dispatch.
+    this.connection.registerNotificationHandler(MSG_NOTICE_NOTIFY, (payload) => {
+      try {
+        const { subId, route, body } = NoticeCodec.decodeNotification(payload);
+        const pattern = this.patternsBySubId.get(subId);
+        if (!pattern) {
+          return;
         }
-      },
-    );
+
+        const subscription = this.subscriptionsByPattern.get(pattern);
+        if (!subscription) {
+          return;
+        }
+
+        const msg: NoticeMsg = { route, body };
+        for (const handler of subscription.handlers.values()) {
+          this.connection.dispatchAsyncHandler(async () => {
+            await handler(msg);
+          });
+        }
+      } catch {
+        // Best-effort notification dispatch.
+      }
+    });
   }
 }
 

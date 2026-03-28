@@ -1,4 +1,4 @@
-﻿import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it } from "vitest";
 
 import { TestFixture } from "./fixture/fixture";
 import { runWithBothTransports } from "./fixture/transport";
@@ -11,10 +11,7 @@ describe("Stream integration", () => {
       const f = new TestFixture(transport, authMode);
       await f.connectOrFail();
 
-      const session = await f
-        .client()
-        .stream()
-        .begin(f.uniqueRoute("stream"), 0n);
+      const session = await f.client().stream().begin(f.uniqueRoute("stream"), 0n);
       const offset1 = await session.append(b("record-1"));
       const offset2 = await session.append(b("record-2"));
       await session.commit("Sync");
@@ -50,9 +47,7 @@ describe("Stream integration", () => {
       await session.append(b("first"));
       await session.commit("Sync");
 
-      await expect(
-        f.client().stream().begin(route, 99999n),
-      ).rejects.toBeTruthy();
+      await expect(f.client().stream().begin(route, 99999n)).rejects.toBeTruthy();
     });
 
     it("should discard uncommitted appends on rollback", async () => {

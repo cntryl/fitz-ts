@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it } from "vitest";
 
 import { BufferReader } from "../../../src/core/buffer";
 import { ConnectionError } from "../../../src/core/errors";
@@ -7,8 +7,7 @@ import { KvClient } from "../../../src/domains/kv/client";
 import type { Connection } from "../../../src/client/connection";
 
 class FakeKvConnection {
-  public lastRequest: { messageType: number; payload: Uint8Array } | null =
-    null;
+  public lastRequest: { messageType: number; payload: Uint8Array } | null = null;
   public lastSignal: AbortSignal | undefined;
   private disconnectListeners = new Set<() => void>();
 
@@ -101,9 +100,7 @@ describe("KvClient", () => {
     const connection = new FakeKvConnection();
     const client = new KvClient(connection as unknown as Connection);
 
-    await expect(
-      client.begin("kv://realm/area/resource", {} as never),
-    ).rejects.toMatchObject({
+    await expect(client.begin("kv://realm/area/resource", {} as never)).rejects.toMatchObject({
       code: "KV_MISSING_DURABILITY",
     });
   });

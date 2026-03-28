@@ -4,12 +4,7 @@
  *   fitz/docs/clients/cross-language-conformance-runner.md
  */
 
-export type Verdict =
-  | "pass"
-  | "partial"
-  | "fail"
-  | "not_implemented"
-  | "unclear";
+export type Verdict = "pass" | "partial" | "fail" | "not_implemented" | "unclear";
 
 export interface ScenarioResult {
   scenario_id: string;
@@ -44,24 +39,16 @@ export class ResultCollector {
     this.results.push(result);
   }
 
-  aggregate(opts: {
-    client: string;
-    transport: string;
-    auth_mode: string;
-  }): AggregateResult {
+  aggregate(opts: { client: string; transport: string; auth_mode: string }): AggregateResult {
     const p0 = this.results.filter((r) => r.priority === "P0");
     const p1 = this.results.filter((r) => r.priority === "P1");
     const rate = (arr: ScenarioResult[]) =>
-      arr.length === 0
-        ? 1
-        : arr.filter((r) => r.verdict === "pass").length / arr.length;
+      arr.length === 0 ? 1 : arr.filter((r) => r.verdict === "pass").length / arr.length;
 
     const p0Rate = rate(p0);
     const p1Rate = rate(p1);
     const anyP0Fail = p0.some((r) => r.verdict !== "pass");
-    const anyP1Warn = p1.some(
-      (r) => r.verdict === "fail" || r.verdict === "partial",
-    );
+    const anyP1Warn = p1.some((r) => r.verdict === "fail" || r.verdict === "partial");
 
     let overall_status: "pass" | "fail" | "partial";
     if (anyP0Fail) {

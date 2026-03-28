@@ -2,7 +2,7 @@
  * RPC Codec unit tests
  */
 
-import { describe, it, expect, vi, afterEach } from "vite-plus/test";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import { RpcCodec } from "../../../src/domains/rpc/codec";
 import { BufferWriter } from "../../../src/core/buffer";
 import { ProtocolError } from "../../../src/core/errors";
@@ -22,12 +22,7 @@ describe("RpcCodec", () => {
       const correlationId = new Uint8Array(16).fill(0x42);
 
       // Act
-      const encoded = RpcCodec.encodeRequest(
-        correlationId,
-        route,
-        replyRoute,
-        payload,
-      );
+      const encoded = RpcCodec.encodeRequest(correlationId, route, replyRoute, payload);
 
       // Assert
       expect(encoded).toBeInstanceOf(Uint8Array);
@@ -77,9 +72,7 @@ describe("RpcCodec", () => {
     });
 
     it("throws ProtocolError for empty request responses", () => {
-      expect(() =>
-        RpcCodec.decodeRequestResponse(new Uint8Array()),
-      ).toThrowError(ProtocolError);
+      expect(() => RpcCodec.decodeRequestResponse(new Uint8Array())).toThrowError(ProtocolError);
     });
   });
 
@@ -133,9 +126,7 @@ describe("RpcCodec", () => {
     it("throws ProtocolError when cryptographic randomness is unavailable", () => {
       vi.stubGlobal("crypto", undefined);
 
-      expect(() => RpcCodec.generateCorrelationId()).toThrowError(
-        ProtocolError,
-      );
+      expect(() => RpcCodec.generateCorrelationId()).toThrowError(ProtocolError);
     });
 
     it("should_include_correlation_id_in_encoded_call", () => {
@@ -165,9 +156,7 @@ describe("RpcCodec", () => {
       writer.writeU64BE(1n);
       writer.writeU32BE(0);
 
-      expect(() => RpcCodec.decodeResponse(writer.getBuffer())).toThrowError(
-        ProtocolError,
-      );
+      expect(() => RpcCodec.decodeResponse(writer.getBuffer())).toThrowError(ProtocolError);
     });
   });
 });

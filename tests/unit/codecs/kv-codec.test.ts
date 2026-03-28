@@ -3,7 +3,7 @@
  * Tests encoding and decoding of all KV protocol messages
  */
 
-import { describe, it, expect } from "vite-plus/test";
+import { describe, it, expect } from "vitest";
 import { KvCodec } from "../../../src/domains/kv/codec";
 import { BufferReader, BufferWriter } from "../../../src/core/buffer";
 import {
@@ -31,11 +31,7 @@ describe("KvCodec", () => {
 
     it("should_encode_begin_read_only_mode", () => {
       // Arrange/Act
-      const encoded = KvCodec.encodeBegin(
-        "kv://test/app/data",
-        "ReadOnly",
-        "Buffered",
-      );
+      const encoded = KvCodec.encodeBegin("kv://test/app/data", "ReadOnly", "Buffered");
 
       // Assert: Verify encoding is valid
       const reader = new BufferReader(encoded);
@@ -50,11 +46,7 @@ describe("KvCodec", () => {
       ] as const;
 
       for (const tc of testCases) {
-        const encoded = KvCodec.encodeBegin(
-          "kv://test/app/data",
-          "ReadWrite",
-          tc.durability,
-        );
+        const encoded = KvCodec.encodeBegin("kv://test/app/data", "ReadWrite", tc.durability);
         expect(encoded.length).toBeGreaterThan(0);
       }
     });
@@ -249,11 +241,7 @@ describe("KvCodec", () => {
   describe("SCAN encoding", () => {
     it("should_encode_scan_without_cursor", () => {
       // Arrange/Act
-      const encoded = KvCodec.encodeScan(
-        100n,
-        "kv://test/app/items",
-        undefined,
-      );
+      const encoded = KvCodec.encodeScan(100n, "kv://test/app/items", undefined);
 
       // Assert
       const reader = new BufferReader(encoded);

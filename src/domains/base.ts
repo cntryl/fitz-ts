@@ -19,10 +19,7 @@ export class DomainClient {
     return this.connection.request(messageType, payload, signal);
   }
 
-  protected async sendFrame(
-    messageType: number,
-    payload: Uint8Array,
-  ): Promise<void> {
+  protected async sendFrame(messageType: number, payload: Uint8Array): Promise<void> {
     return this.connection.send(messageType, payload);
   }
 }

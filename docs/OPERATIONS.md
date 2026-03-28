@@ -16,6 +16,10 @@ The client transitions through these states:
 
 `connect()` opens the selected transport, sends `CONNECT`, and treats the connection as authenticated only after the auth settle window passes without the broker closing the socket.
 
+Caller-triggered abort during `connect({ signal })` fails the attempt without
+marking the client as auth rejected. A later `connect()` attempt may be made on
+the same client instance.
+
 If reconnect is enabled, transport loss moves the client back through `RECONNECTING` and then `AUTHENTICATING`. Reconnect listeners are replayed during the reconnect authentication flow before the client reports `AUTHENTICATED`, so subscriptions and workers are restored before the connection is considered fully ready again.
 
 ## Token Provider Expectations
@@ -45,12 +49,7 @@ Async handler controls:
 Example:
 
 ```typescript
-import {
-  Client,
-  type FitzLogger,
-  type FitzMeter,
-  type FitzTracer,
-} from "@cntryl/fitz";
+import { Client, type FitzLogger, type FitzMeter, type FitzTracer } from "@cntryl/fitz";
 
 const logger: FitzLogger = {
   log(level, event, fields) {
@@ -137,6 +136,7 @@ Current metric names:
 - `close()` cancels in-flight requests, tears down the receive loop, and closes the active transport.
 - Domain clients are connection-scoped; recreate them after building a new top-level `Client`.
 - Stateful handles obtained before `close()` are no longer valid after shutdown or reconnect recovery. Treat post-close use as an application bug and reacquire fresh handles.
+- Pending RPC iterators fail promptly when the underlying connection closes or resets.
 
 ## Verification Workflow
 
@@ -144,19 +144,14 @@ Fast local checks:
 
 ```bash
 npm ci
-npm run typecheck
-npm run lint
-npm run fmt:check
-npm run build
-npm run test:unit
+npm run verify:fast
 ```
 
 Broker-backed checks:
 
 ```bash
 docker compose -f ../fitz-go/compose.yml up -d
-npm run test:integration
-npm run test:conformance
+npm run verify
 docker compose -f ../fitz-go/compose.yml down --volumes
 ```
 
@@ -175,14 +170,9 @@ Release-oriented checklist:
 
 ```bash
 npm ci
-npm run typecheck
-npm run lint
-npm run fmt:check
-npm run build
-npm run test:unit
+npm run verify:fast
 docker compose -f ../fitz-go/compose.yml up -d
-npm run test:integration
-npm run test:conformance
+npm run verify
 npm run bench -- --run tests/bench/hotpath.bench.ts
 docker compose -f ../fitz-go/compose.yml down --volumes
 npm run pack:smoke

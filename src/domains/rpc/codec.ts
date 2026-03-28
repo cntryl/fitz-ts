@@ -5,11 +5,7 @@
 
 import { BufferWriter, BufferReader } from "../../core/buffer";
 import { ProtocolError } from "../../core/errors";
-import {
-  InboundRequest,
-  SubscribeResponse,
-  UnsubscribeResponse,
-} from "./types";
+import { InboundRequest, SubscribeResponse, UnsubscribeResponse } from "./types";
 
 export class RpcCodec {
   /**
@@ -102,11 +98,10 @@ export class RpcCodec {
 
     const corrLen = reader.readU32BE();
     if (corrLen !== 16) {
-      throw new ProtocolError(
-        `Invalid correlation ID length: ${corrLen}, expected 16`,
-        undefined,
-        { correlationLength: corrLen, expectedLength: 16 },
-      );
+      throw new ProtocolError(`Invalid correlation ID length: ${corrLen}, expected 16`, undefined, {
+        correlationLength: corrLen,
+        expectedLength: 16,
+      });
     }
     const correlationId = reader.readBytes(corrLen);
 
@@ -160,9 +155,7 @@ export class RpcCodec {
   /**
    * Decode UNSUBSCRIBE_WORKER response (standard [u8 status])
    */
-  static decodeUnsubscribeWorkerResponse(
-    payload: Uint8Array,
-  ): UnsubscribeResponse {
+  static decodeUnsubscribeWorkerResponse(payload: Uint8Array): UnsubscribeResponse {
     if (payload.length === 0) {
       throw new ProtocolError("Empty UNSUBSCRIBE_WORKER response", undefined, {
         operation: "RPC_UNSUBSCRIBE_WORKER",
@@ -182,11 +175,10 @@ export class RpcCodec {
 
     const corrLen = reader.readU32BE();
     if (corrLen !== 16) {
-      throw new ProtocolError(
-        `Invalid correlation ID length: ${corrLen}, expected 16`,
-        undefined,
-        { correlationLength: corrLen, expectedLength: 16 },
-      );
+      throw new ProtocolError(`Invalid correlation ID length: ${corrLen}, expected 16`, undefined, {
+        correlationLength: corrLen,
+        expectedLength: 16,
+      });
     }
     const correlationId = reader.readBytes(corrLen);
 

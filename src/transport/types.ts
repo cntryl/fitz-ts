@@ -11,10 +11,7 @@ export interface Transport {
   isConnected(): boolean;
 }
 
-export type TransportConstructor = new (
-  url: string,
-  options?: TransportOptions,
-) => Transport;
+export type TransportConstructor = new (url: string, options?: TransportOptions) => Transport;
 
 export interface TransportOptions {
   timeout?: number;
