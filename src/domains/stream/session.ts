@@ -5,7 +5,7 @@
 
 import { Connection } from "../../client/connection";
 import { StreamCodec } from "./codec";
-import { StreamSession, StreamStatus } from "./types";
+import { StreamCommitMode, StreamSession, StreamStatus } from "./types";
 import { StreamError } from "../../core/errors";
 import {
   MSG_STREAM_APPEND,
@@ -50,12 +50,12 @@ export class StreamSessionImpl implements StreamSession {
   /**
    * Commit the write session and make appends durable.
    */
-  async commit(signal?: AbortSignal): Promise<void> {
+  async commit(mode: StreamCommitMode, signal?: AbortSignal): Promise<void> {
     this.ensureOpen();
     this.closed = true;
     this.unsubscribeDisconnect();
 
-    const payload = StreamCodec.encodeCommit(this.sessionId);
+    const payload = StreamCodec.encodeCommit(this.sessionId, mode);
     const response = await this.connection.request(
       MSG_STREAM_COMMIT,
       payload,

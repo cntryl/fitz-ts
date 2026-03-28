@@ -197,8 +197,7 @@ export class KvCodec {
 
   private static encodeDurability(durability: DurabilityMode): number {
     switch (durability) {
-      case "None":
-      case "Async":
+      case "Buffered":
         return 0;
       case "Sync":
         return 1;

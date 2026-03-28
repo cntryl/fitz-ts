@@ -31,24 +31,41 @@ import {
   MSG_STREAM_NOTIFY,
 } from "../../frame/types";
 
+type StreamSubscriptionState = {
+  subId: bigint;
+  handlers: Map<number, StreamCommitHandler>;
+};
+
 export class StreamClient extends DomainClient {
-  private subscriptions = new Map<
-    bigint,
-    { pattern: string; handler: StreamCommitHandler }
-  >();
+  private subscriptionsByPattern = new Map<string, StreamSubscriptionState>();
+  private patternsBySubId = new Map<bigint, string>();
   private initialized = false;
+  private nextHandlerId = 1;
 
   constructor(connection: import("../../client/connection").Connection) {
     super(connection);
     this.connection.onReconnect(async () => {
-      if (this.subscriptions.size === 0) {
+      if (this.subscriptionsByPattern.size === 0) {
         return;
       }
 
-      const snapshot = Array.from(this.subscriptions.values());
-      this.subscriptions.clear();
+      const snapshot = Array.from(
+        this.subscriptionsByPattern.entries(),
+        ([pattern, state]) => ({
+          pattern,
+          handlers: Array.from(state.handlers.entries()),
+        }),
+      );
+      this.subscriptionsByPattern.clear();
+      this.patternsBySubId.clear();
+
       for (const subscription of snapshot) {
-        await this.subscribe(subscription.pattern, subscription.handler);
+        const subId = await this.subscribeWire(subscription.pattern);
+        this.subscriptionsByPattern.set(subscription.pattern, {
+          subId,
+          handlers: new Map(subscription.handlers),
+        });
+        this.patternsBySubId.set(subId, subscription.pattern);
       }
     });
   }
@@ -155,7 +172,16 @@ export class StreamClient extends DomainClient {
     handler: StreamCommitHandler,
   ): Promise<StreamSubscription> {
     this.initNotifyHandler();
+    const existing = this.subscriptionsByPattern.get(pattern);
+    if (existing) {
+      return this.addLocalSubscription(pattern, existing.subId, handler);
+    }
 
+    const subId = await this.subscribeWire(pattern);
+    return this.addLocalSubscription(pattern, subId, handler);
+  }
+
+  private async subscribeWire(pattern: string): Promise<bigint> {
     const payload = StreamCodec.encodeSubscribe(pattern);
     const response = await this.requestFrame(MSG_STREAM_SUBSCRIBE, payload);
     const decoded = StreamCodec.decodeSubscribeResponse(response);
@@ -168,23 +194,41 @@ export class StreamClient extends DomainClient {
       );
     }
 
-    this.subscriptions.set(decoded.subId, { pattern, handler });
-    return new StreamSubscription(
-      decoded.subId,
-      pattern,
-      async (routePattern) => {
-        await this.unsubscribe(routePattern);
-      },
-    );
+    return decoded.subId;
   }
 
-  private async unsubscribe(pattern: string): Promise<void> {
-    for (const [subId, subscription] of this.subscriptions.entries()) {
-      if (subscription.pattern === pattern) {
-        this.subscriptions.delete(subId);
-      }
+  private addLocalSubscription(
+    pattern: string,
+    subId: bigint,
+    handler: StreamCommitHandler,
+  ): StreamSubscription {
+    const handlerId = this.nextHandlerId++;
+    let subscription = this.subscriptionsByPattern.get(pattern);
+    if (!subscription) {
+      subscription = { subId, handlers: new Map() };
+      this.subscriptionsByPattern.set(pattern, subscription);
+      this.patternsBySubId.set(subId, pattern);
     }
 
+    subscription.handlers.set(handlerId, handler);
+    return new StreamSubscription(subId, pattern, async () => {
+      await this.unsubscribe(pattern, handlerId);
+    });
+  }
+
+  private async unsubscribe(pattern: string, handlerId: number): Promise<void> {
+    const subscription = this.subscriptionsByPattern.get(pattern);
+    if (!subscription) {
+      return;
+    }
+
+    subscription.handlers.delete(handlerId);
+    if (subscription.handlers.size > 0) {
+      return;
+    }
+
+    this.subscriptionsByPattern.delete(pattern);
+    this.patternsBySubId.delete(subscription.subId);
     const payload = StreamCodec.encodeUnsubscribe(pattern);
     const response = await this.requestFrame(MSG_STREAM_UNSUBSCRIBE, payload);
     const decoded = StreamCodec.decodeUnsubscribeResponse(response);
@@ -202,19 +246,17 @@ export class StreamClient extends DomainClient {
       (payload) => {
         try {
           const decoded = StreamCodec.decodeNotification(payload);
-          const subscription = this.subscriptions.get(decoded.subId);
+          const pattern = this.patternsBySubId.get(decoded.subId);
+          if (!pattern) {
+            return;
+          }
+
+          const subscription = this.subscriptionsByPattern.get(pattern);
           if (!subscription) {
             return;
           }
 
-          const parsedPayload = decoded.parsedPayload as
-            | {
-                event?: string;
-                first_resource_offset?: number;
-                last_resource_offset?: number;
-                batch_size?: number;
-              }
-            | undefined;
+          const parsedPayload = decoded.parsedPayload;
 
           const notification: StreamCommitNotification = {
             route: decoded.route,
@@ -227,13 +269,31 @@ export class StreamClient extends DomainClient {
               parsedPayload?.last_resource_offset !== undefined
                 ? BigInt(parsedPayload.last_resource_offset)
                 : undefined,
+            firstAreaOffset:
+              parsedPayload?.first_area_offset !== undefined
+                ? BigInt(parsedPayload.first_area_offset)
+                : undefined,
+            lastAreaOffset:
+              parsedPayload?.last_area_offset !== undefined
+                ? BigInt(parsedPayload.last_area_offset)
+                : undefined,
+            firstRealmOffset:
+              parsedPayload?.first_realm_offset !== undefined
+                ? BigInt(parsedPayload.first_realm_offset)
+                : undefined,
+            lastRealmOffset:
+              parsedPayload?.last_realm_offset !== undefined
+                ? BigInt(parsedPayload.last_realm_offset)
+                : undefined,
             batchSize: parsedPayload?.batch_size,
-            payload: decoded.parsedPayload,
+            payload: parsedPayload,
           };
 
-          this.connection.dispatchAsyncHandler(async () => {
-            await subscription.handler(notification);
-          });
+          for (const handler of subscription.handlers.values()) {
+            this.connection.dispatchAsyncHandler(async () => {
+              await handler(notification);
+            });
+          }
         } catch {
           // Best-effort notification dispatch.
         }

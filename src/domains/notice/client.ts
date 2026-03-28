@@ -14,24 +14,44 @@ import { DomainClient } from "../base";
 import { NoticeCodec } from "./codec";
 import { NoticeHandler, NoticeMsg, NoticeSubscription } from "./types";
 
+type NoticeSubscriptionState = {
+  subId: bigint;
+  handlers: Map<number, NoticeHandler>;
+};
+
 export class NoticeClient extends DomainClient {
-  private readonly subscriptions = new Map<
-    bigint,
-    { pattern: string; handler: NoticeHandler }
+  private readonly subscriptionsByPattern = new Map<
+    string,
+    NoticeSubscriptionState
   >();
+  private readonly patternsBySubId = new Map<bigint, string>();
   private initialized = false;
+  private nextHandlerId = 1;
 
   constructor(connection: Connection) {
     super(connection);
     this.connection.onReconnect(async () => {
-      if (this.subscriptions.size === 0) {
+      if (this.subscriptionsByPattern.size === 0) {
         return;
       }
 
-      const subscriptions = Array.from(this.subscriptions.values());
-      this.subscriptions.clear();
+      const subscriptions = Array.from(
+        this.subscriptionsByPattern.entries(),
+        ([pattern, state]) => ({
+          pattern,
+          handlers: Array.from(state.handlers.entries()),
+        }),
+      );
+      this.subscriptionsByPattern.clear();
+      this.patternsBySubId.clear();
+
       for (const subscription of subscriptions) {
-        await this.subscribe(subscription.pattern, subscription.handler);
+        const subId = await this.subscribeWire(subscription.pattern);
+        this.subscriptionsByPattern.set(subscription.pattern, {
+          subId,
+          handlers: new Map(subscription.handlers),
+        });
+        this.patternsBySubId.set(subId, subscription.pattern);
       }
     });
   }
@@ -54,6 +74,16 @@ export class NoticeClient extends DomainClient {
     handler: NoticeHandler,
   ): Promise<NoticeSubscription> {
     this.initNotifyHandler();
+    const existing = this.subscriptionsByPattern.get(pattern);
+    if (existing) {
+      return this.addLocalSubscription(pattern, existing.subId, handler);
+    }
+
+    const subId = await this.subscribeWire(pattern);
+    return this.addLocalSubscription(pattern, subId, handler);
+  }
+
+  private async subscribeWire(pattern: string): Promise<bigint> {
     const payload = NoticeCodec.encodeSubscribe(pattern);
     const response = await this.requestFrame(MSG_NOTICE_SUBSCRIBE, payload);
     const decoded = NoticeCodec.decodeSubscribeResponse(response);
@@ -65,20 +95,42 @@ export class NoticeClient extends DomainClient {
       );
     }
 
-    this.subscriptions.set(decoded.subId, { pattern, handler });
-    return new NoticeSubscription(decoded.subId, pattern, async (subId) => {
-      await this.unsubscribe(subId);
+    return decoded.subId;
+  }
+
+  private addLocalSubscription(
+    pattern: string,
+    subId: bigint,
+    handler: NoticeHandler,
+  ): NoticeSubscription {
+    const handlerId = this.nextHandlerId++;
+    let subscription = this.subscriptionsByPattern.get(pattern);
+    if (!subscription) {
+      subscription = { subId, handlers: new Map() };
+      this.subscriptionsByPattern.set(pattern, subscription);
+      this.patternsBySubId.set(subId, pattern);
+    }
+
+    subscription.handlers.set(handlerId, handler);
+    return new NoticeSubscription(subId, pattern, async () => {
+      await this.unsubscribe(pattern, handlerId);
     });
   }
 
-  private async unsubscribe(subId: bigint): Promise<void> {
-    const subscription = this.subscriptions.get(subId);
+  private async unsubscribe(pattern: string, handlerId: number): Promise<void> {
+    const subscription = this.subscriptionsByPattern.get(pattern);
     if (!subscription) {
       return;
     }
 
-    this.subscriptions.delete(subId);
-    const payload = NoticeCodec.encodeUnsubscribe(subscription.pattern);
+    subscription.handlers.delete(handlerId);
+    if (subscription.handlers.size > 0) {
+      return;
+    }
+
+    this.subscriptionsByPattern.delete(pattern);
+    this.patternsBySubId.delete(subscription.subId);
+    const payload = NoticeCodec.encodeUnsubscribe(pattern);
     await this.requestFrame(MSG_NOTICE_UNSUBSCRIBE, payload);
   }
 
@@ -94,15 +146,22 @@ export class NoticeClient extends DomainClient {
         try {
           const { subId, route, body } =
             NoticeCodec.decodeNotification(payload);
-          const subscription = this.subscriptions.get(subId);
+          const pattern = this.patternsBySubId.get(subId);
+          if (!pattern) {
+            return;
+          }
+
+          const subscription = this.subscriptionsByPattern.get(pattern);
           if (!subscription) {
             return;
           }
 
           const msg: NoticeMsg = { route, body };
-          this.connection.dispatchAsyncHandler(async () => {
-            await subscription.handler(msg);
-          });
+          for (const handler of subscription.handlers.values()) {
+            this.connection.dispatchAsyncHandler(async () => {
+              await handler(msg);
+            });
+          }
         } catch {
           // Best-effort notification dispatch.
         }

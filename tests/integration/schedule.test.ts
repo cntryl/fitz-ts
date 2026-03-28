@@ -48,8 +48,9 @@ describe("Schedule integration", () => {
       await f.connectOrFail();
 
       const route = f.uniqueRoute("schedule");
+      const secondRoute = route.replace(/\/run$/, "/send");
       await f.client().schedule().create(route, "0 9 * * 1", b("s1"));
-      await f.client().schedule().create(`${route}-2`, "0 12 * * *", b("s2"));
+      await f.client().schedule().create(secondRoute, "0 12 * * *", b("s2"));
 
       const [entries, totalCount] = await f.client().schedule().list(0n, 100n);
       expect(Array.isArray(entries)).toBe(true);

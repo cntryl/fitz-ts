@@ -3,10 +3,11 @@
  */
 
 export type TxMode = "ReadOnly" | "ReadWrite";
-export type DurabilityMode = "None" | "Async" | "Sync";
+export type DurabilityMode = "Buffered" | "Sync";
 
 export interface KvBeginOptions {
-  durability?: DurabilityMode;
+  mode?: TxMode;
+  durability: DurabilityMode;
 }
 
 export interface KvScanOptions {

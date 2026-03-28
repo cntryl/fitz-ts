@@ -34,7 +34,7 @@ describe("KvCodec", () => {
       const encoded = KvCodec.encodeBegin(
         "kv://test/app/data",
         "ReadOnly",
-        "Async",
+        "Buffered",
       );
 
       // Assert: Verify encoding is valid
@@ -45,8 +45,7 @@ describe("KvCodec", () => {
 
     it("should_encode_begin_with_different_durabilities", () => {
       const testCases = [
-        { durability: "None", desc: "None durability" },
-        { durability: "Async", desc: "Async durability" },
+        { durability: "Buffered", desc: "Buffered durability" },
         { durability: "Sync", desc: "Sync durability" },
       ] as const;
 

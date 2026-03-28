@@ -25,7 +25,7 @@
     "test": "vp test run --config vitest.unit.config.ts && vp test run --config vitest.integration.config.ts",
     "test:spec": "vp test run --config vitest.conformance.config.ts --reporter=verbose",
     "verify": "vp check && vp pack && vp test run --config vitest.unit.config.ts && vp test run --config vitest.integration.config.ts && vp test run --config vitest.conformance.config.ts --reporter=verbose",
-    "typecheck": "vp check --no-fmt --no-lint",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
     "test:unit": "vp test run --config vitest.unit.config.ts",
     "test:integration": "vp test run --config vitest.integration.config.ts",
     "test:conformance": "vp test run --config vitest.conformance.config.ts --reporter=verbose",

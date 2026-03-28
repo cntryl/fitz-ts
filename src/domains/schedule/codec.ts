@@ -120,16 +120,23 @@ export class ScheduleCodec {
 
   /**
    * Decode SUBSCRIBE response
-   * Success payload: optional [has_sub_id: u8][sub_id: u64 if has=1]
+   * Success payload: [has_sub_id: u8][sub_id: u64 if has=1]
    */
   static decodeSubscribeResponse(data: Uint8Array): ScheduleSubscribeResponse {
     const reader = new BufferReader(data);
-    let subId: bigint | undefined;
-    if (!reader.isEOF() && reader.readU8() === 1) {
-      subId = reader.readU64BE();
+    if (reader.isEOF()) {
+      throw new Error("SUBSCRIBE response missing subscription_id");
     }
 
-    return { subId };
+    if (reader.readU8() !== 1) {
+      throw new Error("SUBSCRIBE response missing subscription_id");
+    }
+
+    if (reader.remainingBytes() < 8) {
+      throw new Error("SUBSCRIBE response too short for subscription_id");
+    }
+
+    return { subId: reader.readU64BE() };
   }
 
   /**
@@ -154,30 +161,20 @@ export class ScheduleCodec {
 
   /**
    * Decode NOTIFY notification (MSG_SCHEDULE_NOTIFY 705)
-   *
-   * Current brokers emit raw bytes payloads. The canonical spec allows an
-   * optional subscription id prefix, so the decoder accepts both:
-   * - [bytes payload]
-   * - [subscription_id: u64][payload: bytes]
+   * Payload: [subscription_id: u64][payload: bytes]
    */
   static decodeNotification(payload: Uint8Array): DecodedScheduleNotification {
-    if (payload.length < 4) {
-      return { payload: new Uint8Array(0) };
-    }
-
-    const bytesOnlyLength =
-      ((payload[0] << 24) |
-        (payload[1] << 16) |
-        (payload[2] << 8) |
-        payload[3]) >>>
-      0;
-    if (bytesOnlyLength === payload.length - 4) {
-      const reader = new BufferReader(payload);
-      return { payload: reader.readBytes(reader.readU32BE()) };
+    if (payload.length < 12) {
+      throw new Error("SCHEDULE_NOTIFY payload too short");
     }
 
     const reader = new BufferReader(payload);
     const subId = reader.readU64BE();
-    return { subId, payload: reader.readBytes(reader.readU32BE()) };
+    const payloadLength = reader.readU32BE();
+    if (reader.remainingBytes() < payloadLength) {
+      throw new Error("SCHEDULE_NOTIFY payload truncated");
+    }
+
+    return { subId, payload: reader.readBytes(payloadLength) };
   }
 }

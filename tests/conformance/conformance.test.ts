@@ -1,5 +1,5 @@
-/**
- * Fitz cross-language conformance harness — TypeScript / fitz-ts
+﻿/**
+ * Fitz cross-language conformance harness â€” TypeScript / fitz-ts
  *
  * Implements all 15 scenarios defined in:
  *   fitz/docs/clients/cross-language-conformance-suite.yaml
@@ -147,8 +147,8 @@ const collector = new ResultCollector();
 // Scenarios
 // ---------------------------------------------------------------------------
 
-describe(`Fitz conformance — fitz-ts [transport=${TRANSPORT}, auth=${AUTH_MODE}]`, () => {
-  // CS-001 ─ connect success
+describe(`Fitz conformance â€” fitz-ts [transport=${TRANSPORT}, auth=${AUTH_MODE}]`, () => {
+  // CS-001 â”€ connect success
   it("CS-001 connect success", async () => {
     const result = await runScenario(
       "CS-001",
@@ -172,7 +172,7 @@ describe(`Fitz conformance — fitz-ts [transport=${TRANSPORT}, auth=${AUTH_MODE
           expect(connected).toBe(true);
 
           const route = uniqueRoute("kv");
-          const tx = await client.kv().begin(route);
+          const tx = await client.kv().begin(route, { durability: "Sync" });
           await tx.put(b("cs001-key"), b("cs001-value"));
           await tx.commit();
           evidence.push("first domain request (kv) succeeded");
@@ -188,7 +188,7 @@ describe(`Fitz conformance — fitz-ts [transport=${TRANSPORT}, auth=${AUTH_MODE
     expect(result.verdict).toBe("pass");
   });
 
-  // CS-002 ─ auth failure
+  // CS-002 â”€ auth failure
   it("CS-002 auth failure", async () => {
     const result = await runScenario(
       "CS-002",
@@ -221,14 +221,16 @@ describe(`Fitz conformance — fitz-ts [transport=${TRANSPORT}, auth=${AUTH_MODE
             }
             // If still connected but domain ops fail, that's partial
             try {
-              await client.kv().begin(uniqueRoute("kv"));
+              await client.kv().begin(uniqueRoute("kv"), {
+                durability: "Sync",
+              });
               evidence.push(
-                "domain request unexpectedly succeeded — verdict partial",
+                "domain request unexpectedly succeeded â€” verdict partial",
               );
               return { verdict: "partial", evidence };
             } catch {
               evidence.push(
-                "domain request failed after silent auth close — partial pass",
+                "domain request failed after silent auth close â€” partial pass",
               );
               return { verdict: "partial", evidence };
             }
@@ -263,7 +265,7 @@ describe(`Fitz conformance — fitz-ts [transport=${TRANSPORT}, auth=${AUTH_MODE
             }
             return { verdict: "pass", evidence };
           }
-          // Didn't throw — check that client is not usable
+          // Didn't throw â€” check that client is not usable
           const afterConnected = client.isConnected();
           evidence.push(`isConnected() after invalid auth = ${afterConnected}`);
           evidence.push("connect did not throw for invalid JWT");
@@ -279,7 +281,7 @@ describe(`Fitz conformance — fitz-ts [transport=${TRANSPORT}, auth=${AUTH_MODE
     expect(["pass", "partial"]).toContain(result.verdict);
   });
 
-  // CS-003 ─ request success (kv read-after-write)
+  // CS-003 â”€ request success (kv read-after-write)
   it("CS-003 request success", async () => {
     const result = await runScenario(
       "CS-003",
@@ -291,12 +293,14 @@ describe(`Fitz conformance — fitz-ts [transport=${TRANSPORT}, auth=${AUTH_MODE
         await withClient({}, async (client) => {
           const route = uniqueRoute("kv");
 
-          const tx = await client.kv().begin(route);
+          const tx = await client.kv().begin(route, { durability: "Sync" });
           await tx.put(b("user:1"), b("Alice"));
           await tx.commit();
           evidence.push("kv begin/put/commit succeeded");
 
-          const rtx = await client.kv().begin(route, "ReadOnly");
+          const rtx = await client
+            .kv()
+            .begin(route, { mode: "ReadOnly", durability: "Sync" });
           const result = await rtx.get(b("user:1"));
           expect(result.type).toBe("found");
           if (result.type === "found") {
@@ -314,7 +318,7 @@ describe(`Fitz conformance — fitz-ts [transport=${TRANSPORT}, auth=${AUTH_MODE
     expect(result.verdict).toBe("pass");
   });
 
-  // CS-004 ─ unknown route (rpc with no worker)
+  // CS-004 â”€ unknown route (rpc with no worker)
   it("CS-004 unknown route", async () => {
     const result = await runScenario(
       "CS-004",
@@ -340,7 +344,7 @@ describe(`Fitz conformance — fitz-ts [transport=${TRANSPORT}, auth=${AUTH_MODE
 
           // Client must still be usable
           const route = uniqueRoute("kv");
-          const tx = await client.kv().begin(route);
+          const tx = await client.kv().begin(route, { durability: "Sync" });
           await tx.put(b("k"), b("v"));
           await tx.commit();
           evidence.push("client remains usable after unknown-route error");
@@ -354,7 +358,7 @@ describe(`Fitz conformance — fitz-ts [transport=${TRANSPORT}, auth=${AUTH_MODE
     expect(result.verdict).toBe("pass");
   });
 
-  // CS-005 ─ invalid payload (duplicate insert → domain error, client stays healthy)
+  // CS-005 â”€ invalid payload (duplicate insert â†’ domain error, client stays healthy)
   it("CS-005 invalid payload", async () => {
     const result = await runScenario(
       "CS-005",
@@ -367,13 +371,13 @@ describe(`Fitz conformance — fitz-ts [transport=${TRANSPORT}, auth=${AUTH_MODE
           const route = uniqueRoute("kv");
 
           // Write key once
-          const tx1 = await client.kv().begin(route);
+          const tx1 = await client.kv().begin(route, { durability: "Sync" });
           await tx1.insert(b("dup-key"), b("first"));
           await tx1.commit();
           evidence.push("first insert succeeded");
 
           // Attempting insert on an existing key is a server-rejected operation
-          const tx2 = await client.kv().begin(route);
+          const tx2 = await client.kv().begin(route, { durability: "Sync" });
           let caught: unknown;
           try {
             await tx2.insert(b("dup-key"), b("second"));
@@ -388,7 +392,9 @@ describe(`Fitz conformance — fitz-ts [transport=${TRANSPORT}, auth=${AUTH_MODE
           );
 
           // Client must remain usable
-          const rtx = await client.kv().begin(route, "ReadOnly");
+          const rtx = await client
+            .kv()
+            .begin(route, { mode: "ReadOnly", durability: "Sync" });
           const val = await rtx.get(b("dup-key"));
           expect(val.type).toBe("found");
           evidence.push(
@@ -404,7 +410,7 @@ describe(`Fitz conformance — fitz-ts [transport=${TRANSPORT}, auth=${AUTH_MODE
     expect(result.verdict).toBe("pass");
   });
 
-  // CS-006 ─ server error mapping
+  // CS-006 â”€ server error mapping
   it("CS-006 server error mapping", async () => {
     const result = await runScenario(
       "CS-006",
@@ -416,7 +422,7 @@ describe(`Fitz conformance — fitz-ts [transport=${TRANSPORT}, auth=${AUTH_MODE
         await withClient({}, async (client) => {
           const route = uniqueRoute("rpc");
 
-          // No worker registered — server returns RPC_ERR_NO_WORKER (retryable or
+          // No worker registered â€” server returns RPC_ERR_NO_WORKER (retryable or
           // domain error, code should be accessible on the thrown error)
           let caught: unknown;
           try {
@@ -437,11 +443,11 @@ describe(`Fitz conformance — fitz-ts [transport=${TRANSPORT}, auth=${AUTH_MODE
 
           // Also verify that kv insert conflict carries a domainCode
           const kvRoute = uniqueRoute("kv");
-          const tx = await client.kv().begin(kvRoute);
+          const tx = await client.kv().begin(kvRoute, { durability: "Sync" });
           await tx.insert(b("x"), b("1"));
           await tx.commit();
 
-          const tx2 = await client.kv().begin(kvRoute);
+          const tx2 = await client.kv().begin(kvRoute, { durability: "Sync" });
           let kvErr: unknown;
           try {
             await tx2.insert(b("x"), b("2"));
@@ -464,7 +470,7 @@ describe(`Fitz conformance — fitz-ts [transport=${TRANSPORT}, auth=${AUTH_MODE
     expect(result.verdict).toBe("pass");
   });
 
-  // CS-007 ─ timeout handling
+  // CS-007 â”€ timeout handling
   it("CS-007 timeout handling", async () => {
     const result = await runScenario(
       "CS-007",
@@ -493,11 +499,11 @@ describe(`Fitz conformance — fitz-ts [transport=${TRANSPORT}, auth=${AUTH_MODE
 
           // Must NOT be AbortError
           expect((caught as Error).name).not.toBe("AbortError");
-          evidence.push("error is not AbortError (timeout ≠ cancellation)");
+          evidence.push("error is not AbortError (timeout â‰  cancellation)");
 
           // Connection still healthy
           const kvRoute = uniqueRoute("kv");
-          const tx = await client.kv().begin(kvRoute);
+          const tx = await client.kv().begin(kvRoute, { durability: "Sync" });
           await tx.put(b("post-timeout"), b("ok"));
           await tx.commit();
           evidence.push("connection healthy after timeout");
@@ -511,7 +517,7 @@ describe(`Fitz conformance — fitz-ts [transport=${TRANSPORT}, auth=${AUTH_MODE
     expect(result.verdict).toBe("pass");
   });
 
-  // CS-008 ─ caller cancellation
+  // CS-008 â”€ caller cancellation
   it("CS-008 caller cancellation", async () => {
     const result = await runScenario(
       "CS-008",
@@ -568,13 +574,15 @@ describe(`Fitz conformance — fitz-ts [transport=${TRANSPORT}, auth=${AUTH_MODE
           expect(caught).toBeTruthy();
           evidence.push(`cancellation threw: ${(caught as Error).name}`);
           expect((caught as Error).name).toBe("AbortError");
-          evidence.push("error is AbortError (correct — not timeout)");
+          evidence.push("error is AbortError (correct â€” not timeout)");
 
           await sub.unsubscribe().catch(() => undefined);
 
           // Subsequent request should succeed
           const kvRoute = uniqueRoute("kv");
-          const tx = await callerClient.kv().begin(kvRoute);
+          const tx = await callerClient
+            .kv()
+            .begin(kvRoute, { durability: "Sync" });
           await tx.put(b("after-cancel"), b("ok"));
           await tx.commit();
           evidence.push("subsequent request succeeded after cancellation");
@@ -591,7 +599,7 @@ describe(`Fitz conformance — fitz-ts [transport=${TRANSPORT}, auth=${AUTH_MODE
     expect(result.verdict).toBe("pass");
   });
 
-  // CS-009 ─ disconnect during request
+  // CS-009 â”€ disconnect during request
   it("CS-009 disconnect during request", async () => {
     const result = await runScenario(
       "CS-009",
@@ -668,7 +676,7 @@ describe(`Fitz conformance — fitz-ts [transport=${TRANSPORT}, auth=${AUTH_MODE
     expect(result.verdict).toBe("pass");
   });
 
-  // CS-010 ─ reconnect and retry behavior
+  // CS-010 â”€ reconnect and retry behavior
   it("CS-010 reconnect and retry behavior", async () => {
     const result = await runScenario(
       "CS-010",
@@ -702,7 +710,7 @@ describe(`Fitz conformance — fitz-ts [transport=${TRANSPORT}, auth=${AUTH_MODE
           });
           await client2.connect();
           const route = uniqueRoute("kv");
-          const tx = await client2.kv().begin(route);
+          const tx = await client2.kv().begin(route, { durability: "Sync" });
           await tx.put(b("after-reconnect"), b("ok"));
           await tx.commit();
           evidence.push("new requests succeed after reconnect (new client)");
@@ -718,7 +726,7 @@ describe(`Fitz conformance — fitz-ts [transport=${TRANSPORT}, auth=${AUTH_MODE
           ) {
             evidence.push(`reconnect config not accepted: ${message}`);
             evidence.push(
-              "NOTE: reconnect config key may differ from 'reconnect' — check ClientConfig",
+              "NOTE: reconnect config key may differ from 'reconnect' â€” check ClientConfig",
             );
             return { verdict: "partial", evidence };
           }
@@ -730,11 +738,11 @@ describe(`Fitz conformance — fitz-ts [transport=${TRANSPORT}, auth=${AUTH_MODE
     );
 
     collector.record(result);
-    // pass or partial are both acceptable — full reconnect loop needs controlled network
+    // pass or partial are both acceptable â€” full reconnect loop needs controlled network
     expect(["pass", "partial"]).toContain(result.verdict);
   });
 
-  // CS-011 ─ stream receive sequence
+  // CS-011 â”€ stream receive sequence
   it("CS-011 stream receive sequence", async () => {
     const result = await runScenario(
       "CS-011",
@@ -751,7 +759,7 @@ describe(`Fitz conformance — fitz-ts [transport=${TRANSPORT}, auth=${AUTH_MODE
             await session.append(Uint8Array.of(10));
             await session.append(Uint8Array.of(20));
             await session.append(Uint8Array.of(30));
-            await session.commit();
+            await session.commit("Sync");
             evidence.push("stream session appended 3 records");
 
             const records = await client.stream().read(route, 0n, 10);
@@ -791,7 +799,7 @@ describe(`Fitz conformance — fitz-ts [transport=${TRANSPORT}, auth=${AUTH_MODE
     expect(["pass", "partial"]).toContain(result.verdict);
   });
 
-  // CS-012 ─ stream completion
+  // CS-012 â”€ stream completion
   it("CS-012 stream completion", async () => {
     const result = await runScenario(
       "CS-012",
@@ -806,7 +814,7 @@ describe(`Fitz conformance — fitz-ts [transport=${TRANSPORT}, auth=${AUTH_MODE
           const session = await client.stream().begin(route, 0n);
           await session.append(b("first"));
           await session.append(b("last"));
-          await session.commit();
+          await session.commit("Sync");
           evidence.push("stream session committed");
 
           // stream.read() should return and not block forever
@@ -832,7 +840,7 @@ describe(`Fitz conformance — fitz-ts [transport=${TRANSPORT}, auth=${AUTH_MODE
     expect(["pass", "partial"]).toContain(result.verdict);
   });
 
-  // CS-013 ─ stream error mid-flight
+  // CS-013 â”€ stream error mid-flight
   it("CS-013 stream error mid-flight", async () => {
     const result = await runScenario(
       "CS-013",
@@ -844,15 +852,15 @@ describe(`Fitz conformance — fitz-ts [transport=${TRANSPORT}, auth=${AUTH_MODE
         await withClient({}, async (client) => {
           const route = uniqueRoute("stream");
 
-          // begin() with a wrong expected offset → server rejects it
+          // begin() with a wrong expected offset â†’ server rejects it
           const session = await client.stream().begin(route, 0n);
           await session.append(b("record-1"));
-          await session.commit();
+          await session.commit("Sync");
           evidence.push("written first record at offset 0");
 
           let caught: unknown;
           try {
-            // Expected offset 0 again, but stream is now at >0 — should fail
+            // Expected offset 0 again, but stream is now at >0 â€” should fail
             await client.stream().begin(route, 0n);
           } catch (err) {
             caught = err;
@@ -866,7 +874,7 @@ describe(`Fitz conformance — fitz-ts [transport=${TRANSPORT}, auth=${AUTH_MODE
 
           // Client must remain usable (no resource leak)
           const kvRoute = uniqueRoute("kv");
-          const tx = await client.kv().begin(kvRoute);
+          const tx = await client.kv().begin(kvRoute, { durability: "Sync" });
           await tx.put(b("after-stream-error"), b("ok"));
           await tx.commit();
           evidence.push("client still usable after stream error");
@@ -880,7 +888,7 @@ describe(`Fitz conformance — fitz-ts [transport=${TRANSPORT}, auth=${AUTH_MODE
     expect(result.verdict).toBe("pass");
   });
 
-  // CS-014 ─ concurrent in-flight requests
+  // CS-014 â”€ concurrent in-flight requests
   it("CS-014 concurrent in-flight requests", async () => {
     const result = await runScenario(
       "CS-014",
@@ -898,10 +906,12 @@ describe(`Fitz conformance — fitz-ts [transport=${TRANSPORT}, auth=${AUTH_MODE
           ];
 
           const tasks = routes.map(async (route, i) => {
-            const tx = await client.kv().begin(route);
+            const tx = await client.kv().begin(route, { durability: "Sync" });
             await tx.put(b(`key-${i}`), b(`value-${i}`));
             await tx.commit();
-            const rtx = await client.kv().begin(route, "ReadOnly");
+            const rtx = await client
+              .kv()
+              .begin(route, { mode: "ReadOnly", durability: "Sync" });
             return rtx.get(b(`key-${i}`));
           });
 
@@ -929,7 +939,7 @@ describe(`Fitz conformance — fitz-ts [transport=${TRANSPORT}, auth=${AUTH_MODE
     expect(result.verdict).toBe("pass");
   });
 
-  // CS-015 ─ shutdown during active work
+  // CS-015 â”€ shutdown during active work
   it("CS-015 shutdown during active work", async () => {
     const result = await runScenario(
       "CS-015",
@@ -950,7 +960,9 @@ describe(`Fitz conformance — fitz-ts [transport=${TRANSPORT}, auth=${AUTH_MODE
 
           // Start an async KV operation, close the client mid-flight
           const route = uniqueRoute("kv");
-          const kvBeginPromise = client.kv().begin(route);
+          const kvBeginPromise = client
+            .kv()
+            .begin(route, { durability: "Sync" });
           // Prevent vitest unhandled rejection warnings before explicit await below.
           kvBeginPromise.catch(() => undefined);
 
@@ -972,9 +984,9 @@ describe(`Fitz conformance — fitz-ts [transport=${TRANSPORT}, auth=${AUTH_MODE
             );
             expect(caught).toBeInstanceOf(Error);
           } else {
-            // Operation may have completed before close — acceptable
+            // Operation may have completed before close â€” acceptable
             evidence.push(
-              "operation completed before close (race — acceptable)",
+              "operation completed before close (race â€” acceptable)",
             );
           }
 

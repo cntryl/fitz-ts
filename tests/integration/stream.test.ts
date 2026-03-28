@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vite-plus/test";
+﻿import { describe, expect, it } from "vite-plus/test";
 
 import { TestFixture } from "./fixture/fixture";
 import { runWithBothTransports } from "./fixture/transport";
@@ -17,7 +17,7 @@ describe("Stream integration", () => {
         .begin(f.uniqueRoute("stream"), 0n);
       const offset1 = await session.append(b("record-1"));
       const offset2 = await session.append(b("record-2"));
-      await session.commit();
+      await session.commit("Sync");
 
       expect(offset1).toBeGreaterThanOrEqual(0n);
       expect(offset2).toBeGreaterThanOrEqual(offset1);
@@ -32,7 +32,7 @@ describe("Stream integration", () => {
       await session.append(Uint8Array.of(0));
       await session.append(Uint8Array.of(1));
       await session.append(Uint8Array.of(2));
-      await session.commit();
+      await session.commit("Sync");
 
       const records = await f.client().stream().read(route, 0n, 10);
       expect(records.length).toBeGreaterThanOrEqual(3);
@@ -48,7 +48,7 @@ describe("Stream integration", () => {
       const route = f.uniqueRoute("stream");
       const session = await f.client().stream().begin(route, 0n);
       await session.append(b("first"));
-      await session.commit();
+      await session.commit("Sync");
 
       await expect(
         f.client().stream().begin(route, 99999n),
@@ -76,7 +76,7 @@ describe("Stream integration", () => {
       const session = await f.client().stream().begin(route, 0n);
       await session.append(b("first"));
       await session.append(b("last-one"));
-      await session.commit();
+      await session.commit("Sync");
 
       const record = await f.client().stream().peek(route);
       expect(record).not.toBeNull();
@@ -94,7 +94,7 @@ describe("Stream integration", () => {
       const route = f.uniqueRoute("stream");
       const session = await f.client().stream().begin(route, 0n);
       await session.append(b("data"));
-      await session.commit();
+      await session.commit("Sync");
 
       const metadata = await f.client().stream().metadata(route);
       expect(metadata.recordCount).toBeGreaterThanOrEqual(1n);
@@ -107,7 +107,7 @@ describe("Stream integration", () => {
       const route = f.uniqueRoute("stream");
       const session = await f.client().stream().begin(route, 0n);
       await session.append(b("only"));
-      await session.commit();
+      await session.commit("Sync");
 
       const read = f.client().stream().read(route, 999999n, 10);
       try {
@@ -123,7 +123,14 @@ describe("Stream integration", () => {
       await f.connectOrFail();
 
       const route = f.uniqueRoute("stream");
-      const notification = new Promise<string>((resolve, reject) => {
+      const notification = new Promise<{
+        route: string;
+        event?: string;
+        firstResourceOffset?: bigint;
+        firstAreaOffset?: bigint;
+        firstRealmOffset?: bigint;
+        batchSize?: number;
+      }>((resolve, reject) => {
         const timer = setTimeout(() => {
           reject(new Error("timed out waiting for stream notification"));
         }, 5000);
@@ -133,15 +140,29 @@ describe("Stream integration", () => {
           .stream()
           .subscribe(route, async (notif) => {
             clearTimeout(timer);
-            resolve(notif.route);
+            resolve({
+              route: notif.route,
+              event: notif.event,
+              firstResourceOffset: notif.firstResourceOffset,
+              firstAreaOffset: notif.firstAreaOffset,
+              firstRealmOffset: notif.firstRealmOffset,
+              batchSize: notif.batchSize,
+            });
           });
       });
 
       const session = await f.client().stream().begin(route, 0n);
       await session.append(b("notify"));
-      await session.commit();
+      await session.commit("Sync");
 
-      await expect(notification).resolves.toBe(route);
+      await expect(notification).resolves.toMatchObject({
+        route,
+        event: "committed",
+        firstResourceOffset: 0n,
+        firstAreaOffset: 0n,
+        firstRealmOffset: 0n,
+        batchSize: 1,
+      });
     });
   });
 });

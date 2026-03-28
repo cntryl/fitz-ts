@@ -22,7 +22,7 @@ export interface ScheduleNotification {
 }
 
 export interface DecodedScheduleNotification {
-  subId?: bigint;
+  subId: bigint;
   payload: Uint8Array;
 }
 
@@ -62,7 +62,7 @@ export interface ScheduleListResponse {
 }
 
 export interface ScheduleSubscribeResponse {
-  subId?: bigint;
+  subId: bigint;
 }
 
 export type ScheduleUnsubscribeResponse = Record<string, never>;

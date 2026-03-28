@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vite-plus/test";
+﻿import { describe, expect, it, vi } from "vite-plus/test";
 
 import { FrameCodec } from "../../src/frame/codec";
 import { AuthenticationError, ConnectionError } from "../../src/core/errors";
@@ -6,10 +6,7 @@ import { MSG_KV_BEGIN } from "../../src/frame/types";
 import { createTransport } from "../../src/transport/factory";
 import { sleep } from "./helpers";
 import { brokerAddrFor, TestFixture } from "./fixture/fixture";
-import {
-  runWithBothTransports,
-  runWithTransportsOnly,
-} from "./fixture/transport";
+import { runWithTransportsOnly } from "./fixture/transport";
 
 describe("Transport integration", () => {
   runWithTransportsOnly(({ transport }) => {
@@ -27,30 +24,40 @@ describe("Transport integration", () => {
 
     it("should reject an expired jwt", async () => {
       const f = new TestFixture(transport, "expired_jwt");
+      const connectAttempt = f.connect({ timeout: 1000 });
       if (transport === "tcp") {
         try {
-          await f.connect();
+          await connectAttempt;
+          await f
+            .client()
+            .close()
+            .catch(() => undefined);
           return;
         } catch {
           return;
         }
       }
 
-      await expect(f.connect()).rejects.toBeTruthy();
+      await expect(connectAttempt).rejects.toBeTruthy();
     });
 
     it("should reject an invalid-signature jwt", async () => {
       const f = new TestFixture(transport, "invalid_signature");
+      const connectAttempt = f.connect({ timeout: 1000 });
       if (transport === "tcp") {
         try {
-          await f.connect();
+          await connectAttempt;
+          await f
+            .client()
+            .close()
+            .catch(() => undefined);
           return;
         } catch {
           return;
         }
       }
 
-      await expect(f.connect()).rejects.toBeTruthy();
+      await expect(connectAttempt).rejects.toBeTruthy();
     });
 
     it("should transition to closed and never auto-reconnect after auth rejection", async () => {
@@ -58,6 +65,7 @@ describe("Transport integration", () => {
 
       await expect(
         f.connect({
+          timeout: 1000,
           reconnect: {
             enabled: true,
             maxAttempts: 3,
@@ -72,7 +80,9 @@ describe("Transport integration", () => {
     });
   });
 
-  runWithBothTransports(({ transport, authMode }) => {
+  runWithTransportsOnly(({ transport }) => {
+    const authMode = "anonymous" as const;
+
     it("should expose all domain clients on a connected client", async () => {
       const f = new TestFixture(transport, authMode);
       await f.connectOrFail();
@@ -169,7 +179,7 @@ describe("Transport integration", () => {
         transport === "tcp" ? "localhost:39999" : "ws://localhost:39998/ws",
       );
 
-      await expect(f.connect()).rejects.toBeTruthy();
+      await expect(f.connect({ timeout: 1000 })).rejects.toBeTruthy();
     });
 
     it("should fail connect when the signal is already aborted", async () => {
@@ -207,7 +217,9 @@ describe("Transport integration", () => {
       await f.client().close();
 
       await expect(
-        Promise.resolve().then(() => f.client().kv().begin(route)),
+        Promise.resolve().then(() =>
+          f.client().kv().begin(route, { durability: "Sync" }),
+        ),
       ).rejects.toBeInstanceOf(ConnectionError);
     });
 

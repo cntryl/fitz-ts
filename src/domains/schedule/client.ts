@@ -22,24 +22,54 @@ import {
   ScheduleSubscription,
 } from "./types";
 
+function isValidConcreteScheduleRoute(route: string): boolean {
+  return /^schedule:\/\/([^/*]+)\/([^/*]+)\/([^/*]+)\/([^/*]+)$/.test(route);
+}
+
+function assertConcreteScheduleRoute(route: string, noun: string): void {
+  if (!isValidConcreteScheduleRoute(route)) {
+    throw new ScheduleError(`Invalid ${noun}: ${route}`, "INVALID_ROUTE");
+  }
+}
+
+type ScheduleSubscriptionState = {
+  subId: bigint;
+  handlers: Map<number, ScheduleHandler>;
+};
+
 export class ScheduleClient extends DomainClient {
-  private readonly subscriptions = new Map<
-    bigint,
-    { pattern: string; handler: ScheduleHandler }
+  private readonly subscriptionsByPattern = new Map<
+    string,
+    ScheduleSubscriptionState
   >();
+  private readonly patternsBySubId = new Map<bigint, string>();
   private notifyHandlerInitialized = false;
+  private nextHandlerId = 1;
 
   constructor(connection: Connection) {
     super(connection);
     this.connection.onReconnect(async () => {
-      if (this.subscriptions.size === 0) {
+      if (this.subscriptionsByPattern.size === 0) {
         return;
       }
 
-      const subscriptions = Array.from(this.subscriptions.values());
-      this.subscriptions.clear();
+      const subscriptions = Array.from(
+        this.subscriptionsByPattern.entries(),
+        ([pattern, state]) => ({
+          pattern,
+          handlers: Array.from(state.handlers.entries()),
+        }),
+      );
+      this.subscriptionsByPattern.clear();
+      this.patternsBySubId.clear();
+
       for (const subscription of subscriptions) {
-        await this.subscribe(subscription.pattern, subscription.handler);
+        const subId = await this.subscribeWire(subscription.pattern);
+        this.subscriptionsByPattern.set(subscription.pattern, {
+          subId,
+          handlers: new Map(subscription.handlers),
+        });
+        this.patternsBySubId.set(subId, subscription.pattern);
       }
     });
   }
@@ -49,6 +79,8 @@ export class ScheduleClient extends DomainClient {
     cronExpr: string,
     payload: Uint8Array = new Uint8Array(),
   ): Promise<string> {
+    assertConcreteScheduleRoute(route, "route");
+
     const response = await this.requestFrame(
       MSG_SCHEDULE_CREATE,
       ScheduleCodec.encodeCreate(route, cronExpr, payload),
@@ -60,6 +92,8 @@ export class ScheduleClient extends DomainClient {
   }
 
   async cancel(route: string): Promise<void> {
+    assertConcreteScheduleRoute(route, "route");
+
     const response = await this.requestFrame(
       MSG_SCHEDULE_CANCEL,
       ScheduleCodec.encodeCancel(route),
@@ -85,7 +119,19 @@ export class ScheduleClient extends DomainClient {
     pattern: string,
     handler: ScheduleHandler,
   ): Promise<ScheduleSubscription> {
+    assertConcreteScheduleRoute(pattern, "pattern");
+
     this.initNotifyHandler();
+    const existing = this.subscriptionsByPattern.get(pattern);
+    if (existing) {
+      return this.addLocalSubscription(pattern, existing.subId, handler);
+    }
+
+    const subId = await this.subscribeWire(pattern);
+    return this.addLocalSubscription(pattern, subId, handler);
+  }
+
+  private async subscribeWire(pattern: string): Promise<bigint> {
     const response = await this.requestFrame(
       MSG_SCHEDULE_SUBSCRIBE,
       ScheduleCodec.encodeSubscribe(pattern),
@@ -94,15 +140,41 @@ export class ScheduleClient extends DomainClient {
       this.assertSuccess(response, "SUBSCRIBE"),
     );
 
-    const subId = decoded.subId ?? BigInt(this.subscriptions.size + 1);
-    this.subscriptions.set(subId, { pattern, handler });
+    return decoded.subId;
+  }
+
+  private addLocalSubscription(
+    pattern: string,
+    subId: bigint,
+    handler: ScheduleHandler,
+  ): ScheduleSubscription {
+    const handlerId = this.nextHandlerId++;
+    let subscription = this.subscriptionsByPattern.get(pattern);
+    if (!subscription) {
+      subscription = { subId, handlers: new Map() };
+      this.subscriptionsByPattern.set(pattern, subscription);
+      this.patternsBySubId.set(subId, pattern);
+    }
+
+    subscription.handlers.set(handlerId, handler);
     return new ScheduleSubscription(subId, pattern, handler, async () => {
-      await this.unsubscribe(subId, pattern);
+      await this.unsubscribe(pattern, handlerId);
     });
   }
 
-  private async unsubscribe(subId: bigint, pattern: string): Promise<void> {
-    this.subscriptions.delete(subId);
+  private async unsubscribe(pattern: string, handlerId: number): Promise<void> {
+    const subscription = this.subscriptionsByPattern.get(pattern);
+    if (!subscription) {
+      return;
+    }
+
+    subscription.handlers.delete(handlerId);
+    if (subscription.handlers.size > 0) {
+      return;
+    }
+
+    this.subscriptionsByPattern.delete(pattern);
+    this.patternsBySubId.delete(subscription.subId);
     const response = await this.requestFrame(
       MSG_SCHEDULE_UNSUBSCRIBE,
       ScheduleCodec.encodeUnsubscribe(pattern),
@@ -123,32 +195,22 @@ export class ScheduleClient extends DomainClient {
       (payload) => {
         try {
           const decoded = ScheduleCodec.decodeNotification(payload);
-          if (decoded.subId !== undefined) {
-            const subscription = this.subscriptions.get(decoded.subId);
-            if (!subscription) {
-              return;
-            }
-
-            const notification: ScheduleNotification = {
-              payload: decoded.payload,
-            };
-            this.connection.dispatchAsyncHandler(async () => {
-              await subscription.handler(notification);
-            });
+          const pattern = this.patternsBySubId.get(decoded.subId);
+          if (!pattern) {
             return;
           }
 
-          const subscriptions = Array.from(this.subscriptions.values());
-          if (subscriptions.length === 0) {
+          const subscription = this.subscriptionsByPattern.get(pattern);
+          if (!subscription) {
             return;
           }
 
           const notification: ScheduleNotification = {
             payload: decoded.payload,
           };
-          for (const subscription of subscriptions) {
+          for (const handler of subscription.handlers.values()) {
             this.connection.dispatchAsyncHandler(async () => {
-              await subscription.handler(notification);
+              await handler(notification);
             });
           }
         } catch {
@@ -174,6 +236,9 @@ export class ScheduleClient extends DomainClient {
     const normalized = message?.toLowerCase() ?? "";
     if (normalized.includes("not found")) {
       return "NOT_FOUND";
+    }
+    if (normalized.includes("invalid route")) {
+      return "INVALID_ROUTE";
     }
     if (normalized.includes("cron")) {
       return "INVALID_CRON";

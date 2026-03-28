@@ -60,11 +60,11 @@ class FakeKvConnection {
 }
 
 describe("KvClient", () => {
-  it("uses Sync durability by default in BEGIN payload", async () => {
+  it("encodes the explicitly requested Sync durability in BEGIN payload", async () => {
     const connection = new FakeKvConnection();
     const client = new KvClient(connection as unknown as Connection);
 
-    await client.begin("kv://realm/area/resource");
+    await client.begin("kv://realm/area/resource", { durability: "Sync" });
 
     expect(connection.lastRequest).not.toBeNull();
     expect(connection.lastRequest?.messageType).toBe(MSG_KV_BEGIN);
@@ -80,11 +80,41 @@ describe("KvClient", () => {
     expect(reader.readU8()).toBe(1);
   });
 
+  it("accepts bare server-legal KV routes", async () => {
+    const connection = new FakeKvConnection();
+    const client = new KvClient(connection as unknown as Connection);
+
+    await client.begin("realm/area/resource", { durability: "Buffered" });
+
+    const lastRequest = connection.lastRequest;
+    if (!lastRequest) {
+      throw new Error("Expected BEGIN request to be recorded");
+    }
+
+    const reader = new BufferReader(lastRequest.payload);
+    expect(reader.readString()).toBe("realm/area/resource");
+    reader.readU8();
+    expect(reader.readU8()).toBe(0);
+  });
+
+  it("rejects BEGIN when durability is omitted", async () => {
+    const connection = new FakeKvConnection();
+    const client = new KvClient(connection as unknown as Connection);
+
+    await expect(
+      client.begin("kv://realm/area/resource", {} as never),
+    ).rejects.toMatchObject({
+      code: "KV_MISSING_DURABILITY",
+    });
+  });
+
   it("invalidates open transactions on disconnect", async () => {
     const connection = new FakeKvConnection();
     const client = new KvClient(connection as unknown as Connection);
 
-    const tx = await client.begin("kv://realm/area/resource");
+    const tx = await client.begin("kv://realm/area/resource", {
+      durability: "Sync",
+    });
     connection.disconnect();
 
     await expect(tx.get(new Uint8Array([1]))).rejects.toMatchObject({
@@ -96,7 +126,9 @@ describe("KvClient", () => {
     const connection = new FakeKvConnection();
     const client = new KvClient(connection as unknown as Connection);
 
-    const tx = await client.begin("kv://realm/area/resource");
+    const tx = await client.begin("kv://realm/area/resource", {
+      durability: "Sync",
+    });
     const controller = new AbortController();
     const pending = tx.get(new Uint8Array([1]), controller.signal);
 

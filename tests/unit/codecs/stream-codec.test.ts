@@ -84,6 +84,15 @@ describe("StreamCodec", () => {
     });
   });
 
+  describe("COMMIT encoding", () => {
+    it("should_encode_commit_with_explicit_mode", () => {
+      const encoded = StreamCodec.encodeCommit(456n, "Sync");
+
+      expect(encoded).toBeInstanceOf(Uint8Array);
+      expect(encoded[8]).toBe(1);
+    });
+  });
+
   describe("READ encoding", () => {
     it("should_encode_read_with_offset_and_limit", () => {
       // Arrange/Act

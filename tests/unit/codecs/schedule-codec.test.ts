@@ -11,7 +11,7 @@ describe("ScheduleCodec", () => {
   describe("CREATE encoding", () => {
     it("should_encode_create_with_route_cron_payload", () => {
       // Arrange
-      const route = "schedule://acme/tasks/nightly_backup";
+      const route = "schedule://acme/tasks/nightly_backup/run";
       const cronExpr = "0 0 * * *"; // midnight daily
       const payload = testData('{"bucket": "s3://backups"}');
 
@@ -26,7 +26,7 @@ describe("ScheduleCodec", () => {
     it("should_encode_create_with_empty_payload", () => {
       // Arrange/Act
       const encoded = ScheduleCodec.encodeCreate(
-        "schedule://test/job",
+        "schedule://test/jobs/job/run",
         "*/5 * * * *",
         new Uint8Array(0),
       );
@@ -66,7 +66,7 @@ describe("ScheduleCodec", () => {
   describe("CANCEL encoding", () => {
     it("should_encode_cancel_with_route", () => {
       // Arrange
-      const route = "schedule://acme/tasks/nightly_backup";
+      const route = "schedule://acme/tasks/nightly_backup/run";
 
       // Act
       const encoded = ScheduleCodec.encodeCancel(route);
@@ -101,7 +101,7 @@ describe("ScheduleCodec", () => {
       writer.writeU64BE(1n); // totalCount = 1
       // Entry 1
       writer.writeU8(1); // hasEntry = 1
-      writer.writeString("schedule://acme/job1");
+      writer.writeString("schedule://acme/jobs/job1/run");
       writer.writeString("0 0 * * *");
       writer.writeU32BE(testData("payload1").length);
       writer.writeBytes(testData("payload1"));
@@ -116,7 +116,7 @@ describe("ScheduleCodec", () => {
       // Assert
       expect(decoded.totalCount).toBe(1n);
       expect(decoded.entries).toHaveLength(1);
-      expect(decoded.entries[0].route).toBe("schedule://acme/job1");
+      expect(decoded.entries[0].route).toBe("schedule://acme/jobs/job1/run");
       expect(decoded.entries[0].cron).toBe("0 0 * * *");
       expect(decoded.entries[0].payload).toEqual(testData("payload1"));
     });
@@ -140,7 +140,7 @@ describe("ScheduleCodec", () => {
   describe("SUBSCRIBE encoding", () => {
     it("should_encode_subscribe_with_pattern", () => {
       // Arrange
-      const pattern = "schedule://acme/tasks/*";
+      const pattern = "schedule://acme/tasks/nightly_backup/run";
 
       // Act
       const encoded = ScheduleCodec.encodeSubscribe(pattern);
@@ -164,6 +164,12 @@ describe("ScheduleCodec", () => {
       // Assert
       expect(decoded.subId).toBe(444n);
     });
+
+    it("should_reject_subscribe_response_without_sub_id", () => {
+      expect(() =>
+        ScheduleCodec.decodeSubscribeResponse(new Uint8Array([0])),
+      ).toThrow("missing subscription_id");
+    });
   });
 
   describe("NOTIFY decoding", () => {
@@ -183,19 +189,14 @@ describe("ScheduleCodec", () => {
       expect(decoded.payload).toEqual(testData('{"execution_id": "exec_123"}'));
     });
 
-    it("should_decode_schedule_fire_notification_without_sub_id", () => {
-      // Arrange
+    it("should_reject_schedule_fire_notification_without_sub_id", () => {
       const writer = new BufferWriter(256);
       writer.writeU32BE(testData('{"execution_id": "exec_456"}').length);
       writer.writeBytes(testData('{"execution_id": "exec_456"}'));
-      const payload = writer.getBuffer();
 
-      // Act
-      const decoded = ScheduleCodec.decodeNotification(payload);
-
-      // Assert
-      expect(decoded.subId).toBeUndefined();
-      expect(decoded.payload).toEqual(testData('{"execution_id": "exec_456"}'));
+      expect(() =>
+        ScheduleCodec.decodeNotification(writer.getBuffer()),
+      ).toThrow("payload truncated");
     });
   });
 
@@ -211,7 +212,7 @@ describe("ScheduleCodec", () => {
 
       for (const cron of cronExpressions) {
         const encoded = ScheduleCodec.encodeCreate(
-          "schedule://test/job",
+          "schedule://test/jobs/job/run",
           cron,
           new Uint8Array(0),
         );

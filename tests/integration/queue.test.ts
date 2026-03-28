@@ -104,6 +104,23 @@ describe("Queue integration", () => {
       expect(items1.length + items2.length).toBe(2);
     });
 
+    it("should long poll when waitSeconds is provided", async () => {
+      const consumer = new TestFixture(transport, authMode);
+      const producer = new TestFixture(transport, authMode);
+      await consumer.connectOrFail();
+      await producer.connectOrFail();
+
+      const route = consumer.uniqueRoute("queue");
+      const pendingReserve = consumer.client().queue().reserve(route, 30, 1, 2);
+
+      await sleep(250);
+      await producer.client().queue().enqueue(route, b("late-msg"));
+
+      const items = await pendingReserve;
+      expect(items).toHaveLength(1);
+      expect(Buffer.from(items[0].body).toString()).toBe("late-msg");
+    });
+
     it("should handle reserve with zero limit", async () => {
       const f = new TestFixture(transport, authMode);
       await f.connectOrFail();

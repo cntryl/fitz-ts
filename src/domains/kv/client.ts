@@ -5,29 +5,31 @@
 import { DomainClient } from "../base";
 import { KvCodec } from "./codec";
 import { KvTransaction } from "./transaction";
-import { KvBeginOptions, KvStatus, TxMode } from "./types";
+import { KvBeginOptions, KvStatus } from "./types";
 import { MSG_KV_BEGIN } from "../../frame/types";
 import { KvError } from "../../core/errors";
 
 function isValidKvRoute(route: string): boolean {
-  const match = /^kv:\/\/([^/]+)\/([^/]+)\/([^/]+)$/.exec(route);
+  const match = /^(?:kv:\/\/)?([^/]+)\/([^/]+)\/([^/]+)$/.exec(route);
   return match !== null;
 }
 
 export class KvClient extends DomainClient {
-  async begin(
-    route: string,
-    mode: TxMode = "ReadWrite",
-    options: KvBeginOptions = {},
-  ): Promise<KvTransaction> {
+  async begin(route: string, options: KvBeginOptions): Promise<KvTransaction> {
     if (!isValidKvRoute(route)) {
       throw new KvError(`Invalid route: ${route}`, "INVALID_ROUTE");
+    }
+    if (!options?.durability) {
+      throw new KvError(
+        "BEGIN requires explicit durability",
+        "MISSING_DURABILITY",
+      );
     }
 
     const payload = KvCodec.encodeBegin(
       route,
-      mode,
-      options.durability ?? "Sync",
+      options.mode ?? "ReadWrite",
+      options.durability,
     );
     const response = await this.requestFrame(MSG_KV_BEGIN, payload);
     const decoded = KvCodec.decodeBeginResponse(response);

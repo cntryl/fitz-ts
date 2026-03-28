@@ -24,13 +24,30 @@ export interface StreamMetadata {
   recordCount: bigint;
 }
 
+export type StreamCommitMode = "Buffered" | "Sync";
+
+export interface StreamCommitPayload {
+  event?: string;
+  first_resource_offset?: number;
+  last_resource_offset?: number;
+  first_area_offset?: number;
+  last_area_offset?: number;
+  first_realm_offset?: number;
+  last_realm_offset?: number;
+  batch_size?: number;
+}
+
 export interface StreamCommitNotification {
   route: string;
   event?: string;
   firstResourceOffset?: bigint;
   lastResourceOffset?: bigint;
+  firstAreaOffset?: bigint;
+  lastAreaOffset?: bigint;
+  firstRealmOffset?: bigint;
+  lastRealmOffset?: bigint;
   batchSize?: number;
-  payload: unknown;
+  payload: StreamCommitPayload;
 }
 
 export type StreamCommitHandler = (
@@ -63,7 +80,7 @@ export interface StreamSession {
   /**
    * Commit the write session and make appended records durable.
    */
-  commit(signal?: AbortSignal): Promise<void>;
+  commit(mode: StreamCommitMode, signal?: AbortSignal): Promise<void>;
 
   /**
    * Roll back and discard uncommitted appends.

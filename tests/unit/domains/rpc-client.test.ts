@@ -2,7 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import { ConnectionState } from "../../../src/core/types";
 import { ConnectionError } from "../../../src/core/errors";
-import { MSG_RPC_REQUEST } from "../../../src/frame/types";
+import { MSG_RPC_REQUEST, MSG_RPC_RESPONSE } from "../../../src/frame/types";
 import { RpcClient } from "../../../src/domains/rpc/client";
 import { RpcCodec } from "../../../src/domains/rpc/codec";
 import type { Connection } from "../../../src/client/connection";
@@ -12,15 +12,17 @@ class FakeRpcConnection {
     number,
     (payload: Uint8Array) => void
   >();
+  public lastRequest: { messageType: number; payload: Uint8Array } | undefined;
   public sendCalls: Array<{ messageType: number; payload: Uint8Array }> = [];
   public lastSignal: AbortSignal | undefined;
   private state = ConnectionState.Authenticated;
 
   async request(
     messageType: number,
-    _payload: Uint8Array,
+    payload: Uint8Array,
     signal?: AbortSignal,
   ): Promise<Uint8Array> {
+    this.lastRequest = { messageType, payload };
     this.lastSignal = signal;
     if (signal?.aborted) {
       const error = new Error("The operation was aborted");
@@ -122,5 +124,44 @@ describe("RpcClient", () => {
       }),
     ).rejects.toMatchObject({ name: "AbortError" });
     expect(connection.lastSignal).toBe(controller.signal);
+  });
+
+  it("delivers a terminal RPC response frame that also carries a body", async () => {
+    const connection = new FakeRpcConnection();
+    const client = new RpcClient(connection as unknown as Connection);
+
+    const iterator = await client.call(
+      "rpc://realm/area/method",
+      new Uint8Array([1]),
+    );
+
+    const request = connection.lastRequest;
+    if (!request) {
+      throw new Error("Expected RPC request payload to be recorded");
+    }
+
+    const decoded = RpcCodec.decodeInboundRequest(request.payload);
+    const responseHandler =
+      connection.notificationHandlers.get(MSG_RPC_RESPONSE);
+    expect(responseHandler).toBeTypeOf("function");
+
+    if (!responseHandler) {
+      throw new Error("Expected RPC response handler to be registered");
+    }
+
+    responseHandler(
+      RpcCodec.encodeResponse(
+        decoded.correlationId,
+        0n,
+        new Uint8Array([7, 8, 9]),
+        true,
+      ),
+    );
+
+    await expect(iterator.next()).resolves.toMatchObject({
+      done: false,
+      value: { body: new Uint8Array([7, 8, 9]), sequence: 0n },
+    });
+    await expect(iterator.next()).resolves.toMatchObject({ done: true });
   });
 });

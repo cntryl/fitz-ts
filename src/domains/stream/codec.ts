@@ -3,8 +3,13 @@
  * Per CLIENT_SPEC.md and fitz-go/internal/domains/stream/protocol.go
  */
 
-import { BufferWriter, BufferReader } from "../../core/buffer";
-import { StreamRecord, StreamMetadata } from "./types";
+import { BufferWriter, BufferReader, utf8Decoder } from "../../core/buffer";
+import {
+  StreamRecord,
+  StreamMetadata,
+  StreamCommitMode,
+  StreamCommitPayload,
+} from "./types";
 
 export class StreamCodec {
   /**
@@ -85,10 +90,10 @@ export class StreamCodec {
    * Encode COMMIT request
    * Payload: [session_id: u64][mode: u8]
    */
-  static encodeCommit(sessionId: bigint, mode: number = 0): Uint8Array {
+  static encodeCommit(sessionId: bigint, mode: StreamCommitMode): Uint8Array {
     const writer = new BufferWriter(64);
     writer.writeU64BE(sessionId);
-    writer.writeU8(mode);
+    writer.writeU8(mode === "Sync" ? 1 : 0);
     return writer.getBuffer();
   }
 
@@ -277,15 +282,21 @@ export class StreamCodec {
     subId: bigint;
     route: string;
     rawPayload: Uint8Array;
-    parsedPayload: unknown;
+    parsedPayload: StreamCommitPayload;
   } {
     const reader = new BufferReader(payload);
     const subId = reader.readU64BE();
     const route = reader.readRoute();
     const rawPayload = reader.readBytes(reader.readU32BE());
-    let parsedPayload: unknown = undefined;
+    let parsedPayload: StreamCommitPayload = {};
     if (rawPayload.length > 0) {
-      parsedPayload = rawPayload;
+      try {
+        parsedPayload = JSON.parse(
+          utf8Decoder.decode(rawPayload),
+        ) as StreamCommitPayload;
+      } catch {
+        parsedPayload = {};
+      }
     }
     return {
       subId,
