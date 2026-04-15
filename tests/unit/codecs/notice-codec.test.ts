@@ -81,12 +81,12 @@ describe("NoticeCodec", () => {
   });
 
   describe("UNSUBSCRIBE encoding", () => {
-    it("should_encode_unsubscribe_with_pattern", () => {
+    it("should_encode_unsubscribe_with_sub_id", () => {
       // Arrange
-      const pattern = "notice://acme/alerts/*";
+      const subId = 42n;
 
       // Act
-      const encoded = NoticeCodec.encodeUnsubscribe(pattern);
+      const encoded = NoticeCodec.encodeUnsubscribe(subId);
 
       // Assert
       expect(encoded).toBeInstanceOf(Uint8Array);

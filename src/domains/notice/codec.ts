@@ -56,11 +56,11 @@ export class NoticeCodec {
 
   /**
    * Encode UNSUBSCRIBE request
-   * Payload: [string pattern]
+   * Payload: [u64 subscription_id]
    */
-  static encodeUnsubscribe(pattern: string): Uint8Array {
+  static encodeUnsubscribe(subId: bigint): Uint8Array {
     const writer = new BufferWriter(64);
-    writer.writeRoute(pattern);
+    writer.writeU64BE(subId);
     return writer.getBuffer();
   }
 

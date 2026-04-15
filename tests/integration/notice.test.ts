@@ -68,6 +68,38 @@ describe("Notice integration", () => {
       expect(count).toBe(2);
     });
 
+    it("should fan out to local subscribers on the same route", async () => {
+      const f = new TestFixture(transport, authMode);
+      await f.connectOrFail();
+
+      const route = f.uniqueRoute("notice");
+      const received: string[] = [];
+
+      const subOne = await f.client().notice().subscribe(route, async (msg) => {
+        received.push(`one:${Buffer.from(msg.body).toString()}`);
+      });
+      const subTwo = await f.client().notice().subscribe(route, async (msg) => {
+        received.push(`two:${Buffer.from(msg.body).toString()}`);
+      });
+
+      await f.client().notice().publish(route, b("local-fanout"));
+      await sleep(500);
+
+      expect(received).toEqual(["one:local-fanout", "two:local-fanout"]);
+
+      await subOne.unsubscribe();
+      await f.client().notice().publish(route, b("after-unsub"));
+      await sleep(500);
+
+      expect(received).toEqual([
+        "one:local-fanout",
+        "two:local-fanout",
+        "two:after-unsub",
+      ]);
+
+      await subTwo.unsubscribe();
+    });
+
     it("should succeed when publishing with no subscribers", async () => {
       const f = new TestFixture(transport, authMode);
       await f.connectOrFail();

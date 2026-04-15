@@ -103,7 +103,7 @@ export class NoticeClient extends DomainClient {
     }
 
     subscription.handlers.set(handlerId, handler);
-    return new NoticeSubscription(subId, pattern, async () => {
+    return new NoticeSubscription(subId, pattern, async (_subId: bigint) => {
       await this.unsubscribe(pattern, handlerId);
     });
   }
@@ -121,7 +121,7 @@ export class NoticeClient extends DomainClient {
 
     this.subscriptionsByPattern.delete(pattern);
     this.patternsBySubId.delete(subscription.subId);
-    const payload = NoticeCodec.encodeUnsubscribe(pattern);
+    const payload = NoticeCodec.encodeUnsubscribe(subscription.subId);
     await this.requestFrame(MSG_NOTICE_UNSUBSCRIBE, payload);
   }
 
