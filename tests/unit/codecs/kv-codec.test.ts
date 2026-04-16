@@ -3,7 +3,7 @@
  * Tests encoding and decoding of all KV protocol messages
  */
 
-import { describe, it, expect } from "vitest";
+import { describe, it, expect } from "vite-plus/test";
 import { KvCodec } from "../../../src/domains/kv/codec";
 import { BufferReader, BufferWriter } from "../../../src/core/buffer";
 import {

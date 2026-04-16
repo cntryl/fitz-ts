@@ -1,4 +1,4 @@
-import { expect, onTestFinished } from "vitest";
+import { expect, onTestFinished } from "vite-plus/test";
 
 import { Client } from "../../../src/client/client";
 import type { ClientConfig } from "../../../src/core/types";

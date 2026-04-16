@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vite-plus/test";
 
 import { sleep } from "./helpers";
 import { TestFixture } from "./fixture/fixture";
@@ -75,12 +75,18 @@ describe("Notice integration", () => {
       const route = f.uniqueRoute("notice");
       const received: string[] = [];
 
-      const subOne = await f.client().notice().subscribe(route, async (msg) => {
-        received.push(`one:${Buffer.from(msg.body).toString()}`);
-      });
-      const subTwo = await f.client().notice().subscribe(route, async (msg) => {
-        received.push(`two:${Buffer.from(msg.body).toString()}`);
-      });
+      const subOne = await f
+        .client()
+        .notice()
+        .subscribe(route, async (msg) => {
+          received.push(`one:${Buffer.from(msg.body).toString()}`);
+        });
+      const subTwo = await f
+        .client()
+        .notice()
+        .subscribe(route, async (msg) => {
+          received.push(`two:${Buffer.from(msg.body).toString()}`);
+        });
 
       await f.client().notice().publish(route, b("local-fanout"));
       await sleep(500);
@@ -91,11 +97,7 @@ describe("Notice integration", () => {
       await f.client().notice().publish(route, b("after-unsub"));
       await sleep(500);
 
-      expect(received).toEqual([
-        "one:local-fanout",
-        "two:local-fanout",
-        "two:after-unsub",
-      ]);
+      expect(received).toEqual(["one:local-fanout", "two:local-fanout", "two:after-unsub"]);
 
       await subTwo.unsubscribe();
     });

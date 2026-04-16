@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vite-plus/test";
 
 import { Multiplexer } from "../../../src/client/multiplexer";
 import type { FitzMeter, FitzSpan, FitzTracer } from "../../../src/core/types";

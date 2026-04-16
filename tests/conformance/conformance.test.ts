@@ -16,7 +16,7 @@
  *   npm run test:conformance
  *   CONFORMANCE_TRANSPORT=tcp CONFORMANCE_AUTH_MODE=valid_jwt npm run test:conformance
  */
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vite-plus/test";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 
@@ -657,10 +657,10 @@ describe(`Fitz conformance â€” fitz-ts [transport=${TRANSPORT}, auth=${AUTH
       try {
         await withClient({}, async (client) => {
           const route = uniqueRoute("stream");
-          const session = await client.stream().begin(route, 0n);
-          await session.append(Uint8Array.of(10));
-          await session.append(Uint8Array.of(20));
-          await session.append(Uint8Array.of(30));
+          const session = await client.stream().begin(route);
+          await session.append(0n, Uint8Array.of(10));
+          await session.append(1n, Uint8Array.of(20));
+          await session.append(2n, Uint8Array.of(30));
           await session.commit("Sync");
           evidence.push("stream session appended 3 records");
 
@@ -706,9 +706,9 @@ describe(`Fitz conformance â€” fitz-ts [transport=${TRANSPORT}, auth=${AUTH
 
       await withClient({}, async (client) => {
         const route = uniqueRoute("stream");
-        const session = await client.stream().begin(route, 0n);
-        await session.append(b("first"));
-        await session.append(b("last"));
+        const session = await client.stream().begin(route);
+        await session.append(0n, b("first"));
+        await session.append(1n, b("last"));
         await session.commit("Sync");
         evidence.push("stream session committed");
 
@@ -738,22 +738,23 @@ describe(`Fitz conformance â€” fitz-ts [transport=${TRANSPORT}, auth=${AUTH
       await withClient({}, async (client) => {
         const route = uniqueRoute("stream");
 
-        // begin() with a wrong expected offset â†’ server rejects it
-        const session = await client.stream().begin(route, 0n);
-        await session.append(b("record-1"));
+        // append() with a wrong expected offset → server rejects it
+        const session = await client.stream().begin(route);
+        await session.append(0n, b("record-1"));
         await session.commit("Sync");
         evidence.push("written first record at offset 0");
 
         let caught: unknown;
         try {
-          // Expected offset 0 again, but stream is now at >0 â€” should fail
-          await client.stream().begin(route, 0n);
+          // Expected offset 0 again, but stream is now at >0 — should fail
+          const wrongSession = await client.stream().begin(route);
+          await wrongSession.append(0n, b("record-2"));
         } catch (err) {
           caught = err;
         }
 
         expect(caught).toBeTruthy();
-        evidence.push(`begin with wrong offset threw: ${(caught as Error).constructor.name}`);
+        evidence.push(`append with wrong offset threw: ${(caught as Error).constructor.name}`);
         evidence.push("stream error surfaced correctly");
 
         // Client must remain usable (no resource leak)

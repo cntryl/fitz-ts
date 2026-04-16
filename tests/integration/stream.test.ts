@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
 
 import { TestFixture } from "./fixture/fixture";
 import { runWithBothTransports } from "./fixture/transport";
@@ -11,9 +11,9 @@ describe("Stream integration", () => {
       const f = new TestFixture(transport, authMode);
       await f.connectOrFail();
 
-      const session = await f.client().stream().begin(f.uniqueRoute("stream"), 0n);
-      const offset1 = await session.append(b("record-1"));
-      const offset2 = await session.append(b("record-2"));
+      const session = await f.client().stream().begin(f.uniqueRoute("stream"));
+      const offset1 = await session.append(0n, b("record-1"));
+      const offset2 = await session.append(offset1 + 1n, b("record-2"));
       await session.commit("Sync");
 
       expect(offset1).toBeGreaterThanOrEqual(0n);
@@ -25,10 +25,10 @@ describe("Stream integration", () => {
       await f.connectOrFail();
 
       const route = f.uniqueRoute("stream");
-      const session = await f.client().stream().begin(route, 0n);
-      await session.append(Uint8Array.of(0));
-      await session.append(Uint8Array.of(1));
-      await session.append(Uint8Array.of(2));
+      const session = await f.client().stream().begin(route);
+      await session.append(0n, Uint8Array.of(0));
+      await session.append(1n, Uint8Array.of(1));
+      await session.append(2n, Uint8Array.of(2));
       await session.commit("Sync");
 
       const records = await f.client().stream().read(route, 0n, 10);
@@ -38,16 +38,17 @@ describe("Stream integration", () => {
       }
     });
 
-    it("should reject begin when expected offset is mismatched", async () => {
+    it("should reject append when expected offset is mismatched", async () => {
       const f = new TestFixture(transport, authMode);
       await f.connectOrFail();
 
       const route = f.uniqueRoute("stream");
-      const session = await f.client().stream().begin(route, 0n);
-      await session.append(b("first"));
+      const session = await f.client().stream().begin(route);
+      await session.append(0n, b("first"));
       await session.commit("Sync");
 
-      await expect(f.client().stream().begin(route, 99999n)).rejects.toBeTruthy();
+      const wrongSession = await f.client().stream().begin(route);
+      await expect(wrongSession.append(0n, b("second"))).rejects.toBeTruthy();
     });
 
     it("should discard uncommitted appends on rollback", async () => {
@@ -55,8 +56,8 @@ describe("Stream integration", () => {
       await f.connectOrFail();
 
       const route = f.uniqueRoute("stream");
-      const session = await f.client().stream().begin(route, 0n);
-      await session.append(b("ephemeral"));
+      const session = await f.client().stream().begin(route);
+      await session.append(0n, b("ephemeral"));
       await session.rollback();
 
       const records = await f.client().stream().read(route, 0n, 10);
@@ -68,9 +69,9 @@ describe("Stream integration", () => {
       await f.connectOrFail();
 
       const route = f.uniqueRoute("stream");
-      const session = await f.client().stream().begin(route, 0n);
-      await session.append(b("first"));
-      await session.append(b("last-one"));
+      const session = await f.client().stream().begin(route);
+      await session.append(0n, b("first"));
+      await session.append(1n, b("last-one"));
       await session.commit("Sync");
 
       const record = await f.client().stream().peek(route);
@@ -87,8 +88,8 @@ describe("Stream integration", () => {
       await f.connectOrFail();
 
       const route = f.uniqueRoute("stream");
-      const session = await f.client().stream().begin(route, 0n);
-      await session.append(b("data"));
+      const session = await f.client().stream().begin(route);
+      await session.append(0n, b("data"));
       await session.commit("Sync");
 
       const metadata = await f.client().stream().metadata(route);
@@ -100,8 +101,8 @@ describe("Stream integration", () => {
       await f.connectOrFail();
 
       const route = f.uniqueRoute("stream");
-      const session = await f.client().stream().begin(route, 0n);
-      await session.append(b("only"));
+      const session = await f.client().stream().begin(route);
+      await session.append(0n, b("only"));
       await session.commit("Sync");
 
       const read = f.client().stream().read(route, 999999n, 10);
@@ -146,8 +147,8 @@ describe("Stream integration", () => {
           });
       });
 
-      const session = await f.client().stream().begin(route, 0n);
-      await session.append(b("notify"));
+      const session = await f.client().stream().begin(route);
+      await session.append(0n, b("notify"));
       await session.commit("Sync");
 
       await expect(notification).resolves.toMatchObject({

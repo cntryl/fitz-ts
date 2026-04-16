@@ -114,10 +114,12 @@ for tarball consumer verification.
 
 Tooling is otherwise direct:
 
-- `oxlint` for linting
-- `oxfmt` for formatting
-- `vitest` for unit, integration, and conformance tests
-- `rolldown` for JS bundle output
+- `vp check` for combined format, lint, and type checks
+- `vp fmt` for formatting
+- `vp lint` for linting
+- `vp test` for unit, integration, and conformance tests
+- `vp pack` for JS bundle output
+- `tsc` for declaration emit
 - `tsc` for typechecking and declaration emit
 
 Published artifacts are smoke-tested from the packed tarball in both ESM and

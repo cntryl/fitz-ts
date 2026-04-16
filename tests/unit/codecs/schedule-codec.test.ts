@@ -2,7 +2,7 @@
  * Schedule Codec unit tests
  */
 
-import { describe, it, expect } from "vitest";
+import { describe, it, expect } from "vite-plus/test";
 import { ScheduleCodec } from "../../../src/domains/schedule/codec";
 import { BufferWriter } from "../../../src/core/buffer";
 import { testData } from "../helpers/test-utils";

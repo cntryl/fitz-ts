@@ -128,7 +128,7 @@ const tx = await kvClient.begin(route);
 await tx.put(key, value);
 
 // Stream Session
-const session = await streamClient.begin(route, expectedOffset);
+const session = await streamClient.begin(route);
 await session.append(records);
 
 // Lease

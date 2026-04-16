@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
 
 import { sleep, waitFor } from "./helpers";
 import { TestFixture } from "./fixture/fixture";
@@ -171,7 +171,10 @@ describe("Queue integration", () => {
 
       await expect(staleLeaseItems[0].complete()).rejects.toBeTruthy();
       if (refreshedLeaseItem) {
-        await refreshedLeaseItem.complete().catch(() => undefined);
+        const refreshedQueueItem = refreshedLeaseItem as {
+          complete(signal?: AbortSignal): Promise<void>;
+        };
+        await refreshedQueueItem.complete().catch(() => undefined);
       }
     });
 

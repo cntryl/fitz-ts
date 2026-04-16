@@ -2,7 +2,7 @@
  * RPC Codec unit tests
  */
 
-import { describe, it, expect, vi, afterEach } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vite-plus/test";
 import { RpcCodec } from "../../../src/domains/rpc/codec";
 import { BufferWriter } from "../../../src/core/buffer";
 import { ProtocolError } from "../../../src/core/errors";
@@ -101,6 +101,20 @@ describe("RpcCodec", () => {
 
       // Assert
       expect(decoded.status).toBe(0);
+    });
+  });
+
+  describe("error body decoding", () => {
+    it("should_decode_rpc_error_body", () => {
+      const writer = new BufferWriter(64);
+      writer.writeU8(1);
+      writer.writeU32BE(6002);
+      writer.writeString("Worker disconnected or unregistered");
+
+      expect(RpcCodec.decodeErrorBody(writer.getBuffer())).toEqual({
+        code: 6002,
+        message: "Worker disconnected or unregistered",
+      });
     });
   });
 

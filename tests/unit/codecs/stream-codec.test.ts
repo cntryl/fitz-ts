@@ -2,29 +2,132 @@
  * Stream Codec unit tests
  */
 
-import { describe, it, expect } from "vitest";
+import { describe, it, expect } from "vite-plus/test";
 import { StreamCodec } from "../../../src/domains/stream/codec";
 import { BufferWriter } from "../../../src/core/buffer";
 import { testData } from "../helpers/test-utils";
 
+function writeOptionalU64(writer: BufferWriter, value: bigint | undefined): void {
+  if (value === undefined) {
+    writer.writeU8(0);
+    return;
+  }
+
+  writer.writeU8(1);
+  writer.writeU64BE(value);
+}
+
+function writeOptionalBytes(writer: BufferWriter, value: Uint8Array | undefined): void {
+  if (!value) {
+    writer.writeU8(0);
+    return;
+  }
+
+  writer.writeU8(1);
+  writer.writeU32BE(value.length);
+  writer.writeBytes(value);
+}
+
+function encodeStreamRecord(options: {
+  offset: bigint;
+  areaOffset?: bigint;
+  realmOffset?: bigint;
+  body: Uint8Array;
+  metadata?: Uint8Array;
+  timestamp: bigint;
+}): Uint8Array {
+  const writer = new BufferWriter(256);
+  writer.writeU64BE(options.offset);
+  writeOptionalU64(writer, options.areaOffset);
+  writeOptionalU64(writer, options.realmOffset);
+  writer.writeU32BE(options.body.length);
+  writer.writeBytes(options.body);
+  writeOptionalBytes(writer, options.metadata);
+  writer.writeU64BE(options.timestamp);
+  return writer.getBuffer();
+}
+
+function encodeReadResponse(
+  records: Uint8Array[],
+  cursor: {
+    lastResourceOffset: bigint;
+    lastAreaOffset?: bigint;
+    lastRealmOffset?: bigint;
+    hasMore: boolean;
+  },
+): Uint8Array {
+  const data = new BufferWriter(512);
+  data.writeU32BE(records.length);
+  for (const record of records) {
+    data.writeBytes(record);
+  }
+  data.writeU64BE(cursor.lastResourceOffset);
+  writeOptionalU64(data, cursor.lastAreaOffset);
+  writeOptionalU64(data, cursor.lastRealmOffset);
+  data.writeU8(cursor.hasMore ? 1 : 0);
+
+  const writer = new BufferWriter(560);
+  writer.writeU8(0);
+  writer.writeU8(0);
+  writer.writeU32BE(data.getLength());
+  writer.writeBytes(data.getBuffer());
+  return writer.getBuffer();
+}
+
+function encodeLastResponse(record: Uint8Array): Uint8Array {
+  const writer = new BufferWriter(320);
+  writer.writeU8(0);
+  writer.writeU8(0);
+  writer.writeU32BE(record.length);
+  writer.writeBytes(record);
+  return writer.getBuffer();
+}
+
+function encodeMetadataResponse(metadata: {
+  firstResourceOffset?: bigint;
+  lastResourceOffset?: bigint;
+  resourceCount: bigint;
+  maxBatchEvents: bigint;
+  maxBatchBytes: bigint;
+  ttlSeconds?: bigint;
+  areaWatermark: bigint;
+  realmWatermark: bigint;
+}): Uint8Array {
+  const data = new BufferWriter(256);
+  writeOptionalU64(data, metadata.firstResourceOffset);
+  writeOptionalU64(data, metadata.lastResourceOffset);
+  data.writeU64BE(metadata.resourceCount);
+  data.writeU64BE(metadata.maxBatchEvents);
+  data.writeU64BE(metadata.maxBatchBytes);
+  writeOptionalU64(data, metadata.ttlSeconds);
+  data.writeU64BE(metadata.areaWatermark);
+  data.writeU64BE(metadata.realmWatermark);
+
+  const writer = new BufferWriter(320);
+  writer.writeU8(0);
+  writer.writeU8(0);
+  writer.writeU32BE(data.getLength());
+  writer.writeBytes(data.getBuffer());
+  return writer.getBuffer();
+}
+
 describe("StreamCodec", () => {
   describe("BEGIN encoding", () => {
-    it("should_encode_begin_with_route_and_offset", () => {
+    it("should_encode_begin_with_route", () => {
       // Arrange
       const route = "stream://acme/events/orders";
-      const expectedOffset = 100n;
 
       // Act
-      const encoded = StreamCodec.encodeBegin(route, expectedOffset);
+      const encoded = StreamCodec.encodeBegin(route);
 
       // Assert
       expect(encoded).toBeInstanceOf(Uint8Array);
       expect(encoded.length).toBeGreaterThan(0);
     });
 
-    it("should_encode_begin_with_zero_offset", () => {
+    it("should_encode_begin_with_empty_metadata", () => {
       // Arrange/Act
-      const encoded = StreamCodec.encodeBegin("stream://test/data", 0n);
+      const encoded = StreamCodec.encodeBegin("stream://test/data");
 
       // Assert
       expect(encoded).toBeInstanceOf(Uint8Array);
@@ -65,10 +168,11 @@ describe("StreamCodec", () => {
     it("should_encode_append_with_records", () => {
       // Arrange
       const sessionId = 456n;
+      const expectedOffset = 100n;
       const body = testData("record1");
 
       // Act
-      const encoded = StreamCodec.encodeAppend(sessionId, body);
+      const encoded = StreamCodec.encodeAppend(sessionId, expectedOffset, body);
 
       // Assert
       expect(encoded).toBeInstanceOf(Uint8Array);
@@ -77,7 +181,7 @@ describe("StreamCodec", () => {
 
     it("should_encode_append_with_empty_records", () => {
       // Arrange/Act
-      const encoded = StreamCodec.encodeAppend(456n, new Uint8Array(0));
+      const encoded = StreamCodec.encodeAppend(456n, 0n, new Uint8Array(0));
 
       // Assert
       expect(encoded).toBeInstanceOf(Uint8Array);
@@ -114,21 +218,32 @@ describe("StreamCodec", () => {
   describe("READ decoding", () => {
     it("should_decode_read_response_with_records", () => {
       // Arrange
-      const data = new BufferWriter(256);
-      data.writeU32BE(2); // count
-      data.writeU64BE(100n); // offset
-      data.writeU32BE(testData("record1").length);
-      data.writeBytes(testData("record1"));
-      data.writeU64BE(101n); // offset
-      data.writeU32BE(testData("record2").length);
-      data.writeBytes(testData("record2"));
-
-      const writer = new BufferWriter(320);
-      writer.writeU8(0); // status
-      writer.writeU8(0); // has_session_id = 0
-      writer.writeU32BE(data.getLength());
-      writer.writeBytes(data.getBuffer());
-      const response = writer.getBuffer();
+      const response = encodeReadResponse(
+        [
+          encodeStreamRecord({
+            offset: 100n,
+            areaOffset: 200n,
+            realmOffset: 300n,
+            body: testData("record1"),
+            metadata: testData("meta1"),
+            timestamp: 111n,
+          }),
+          encodeStreamRecord({
+            offset: 101n,
+            areaOffset: 201n,
+            realmOffset: 301n,
+            body: testData("record2"),
+            metadata: testData("meta2"),
+            timestamp: 222n,
+          }),
+        ],
+        {
+          lastResourceOffset: 101n,
+          lastAreaOffset: 201n,
+          lastRealmOffset: 301n,
+          hasMore: false,
+        },
+      );
 
       // Act
       const decoded = StreamCodec.decodeReadResponse(response);
@@ -138,25 +253,72 @@ describe("StreamCodec", () => {
       expect(decoded.records).toHaveLength(2);
       expect(decoded.records[0].offset).toBe(100n);
       expect(decoded.records[1].offset).toBe(101n);
+      expect(decoded.records[0].timestamp).toBe(111n);
+      expect(Buffer.from(decoded.records[0].body).toString()).toBe("record1");
     });
 
     it("should_decode_read_response_empty", () => {
       // Arrange
-      const data = new BufferWriter(8);
-      data.writeU32BE(0); // count
-
-      const writer = new BufferWriter(16);
-      writer.writeU8(0); // status
-      writer.writeU8(0); // has_session_id = 0
-      writer.writeU32BE(data.getLength());
-      writer.writeBytes(data.getBuffer());
-      const response = writer.getBuffer();
+      const response = encodeReadResponse([], {
+        lastResourceOffset: 0n,
+        hasMore: false,
+      });
 
       // Act
       const decoded = StreamCodec.decodeReadResponse(response);
 
       // Assert
       expect(decoded.records).toHaveLength(0);
+    });
+  });
+
+  describe("LAST decoding", () => {
+    it("should_decode_last_response_with_record", () => {
+      // Arrange
+      const response = encodeLastResponse(
+        encodeStreamRecord({
+          offset: 500n,
+          areaOffset: 501n,
+          realmOffset: 502n,
+          body: testData("last-record"),
+          metadata: undefined,
+          timestamp: 999n,
+        }),
+      );
+
+      // Act
+      const decoded = StreamCodec.decodeLastResponse(response);
+
+      // Assert
+      expect(decoded.status).toBe(0);
+      expect(decoded.record?.offset).toBe(500n);
+      expect(decoded.record?.timestamp).toBe(999n);
+      expect(Buffer.from(decoded.record?.body ?? new Uint8Array()).toString()).toBe("last-record");
+    });
+  });
+
+  describe("METADATA decoding", () => {
+    it("should_decode_metadata_response_with_counts", () => {
+      // Arrange
+      const response = encodeMetadataResponse({
+        firstResourceOffset: 10n,
+        lastResourceOffset: 20n,
+        resourceCount: 3n,
+        maxBatchEvents: 1000n,
+        maxBatchBytes: 4096n,
+        ttlSeconds: 60n,
+        areaWatermark: 30n,
+        realmWatermark: 40n,
+      });
+
+      // Act
+      const decoded = StreamCodec.decodeMetadataResponse(response);
+
+      // Assert
+      expect(decoded.status).toBe(0);
+      expect(decoded.metadata?.firstOffset).toBe(10n);
+      expect(decoded.metadata?.lastOffset).toBe(20n);
+      expect(decoded.metadata?.recordCount).toBe(3n);
     });
   });
 

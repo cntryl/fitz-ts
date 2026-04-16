@@ -9,16 +9,11 @@ import { StreamRecord, StreamMetadata, StreamCommitMode, StreamCommitPayload } f
 export class StreamCodec {
   /**
    * Encode BEGIN request
-   * Payload: [route: string][expected_offset: u64][has_ingest_metadata: u8][ingest_metadata?: bytes]
+   * Payload: [route: string][has_ingest_metadata: u8][ingest_metadata?: bytes]
    */
-  static encodeBegin(
-    route: string,
-    expectedOffset: bigint,
-    ingestMetadata?: Uint8Array,
-  ): Uint8Array {
+  static encodeBegin(route: string, ingestMetadata?: Uint8Array): Uint8Array {
     const writer = new BufferWriter(256);
     writer.writeRoute(route);
-    writer.writeU64BE(expectedOffset);
     if (ingestMetadata && ingestMetadata.length > 0) {
       writer.writeU8(1);
       writer.writeU32BE(ingestMetadata.length);
@@ -43,11 +38,17 @@ export class StreamCodec {
 
   /**
    * Encode APPEND request
-   * Payload: [session_id: u64][body: bytes][has_metadata: u8][metadata?: bytes]
+   * Payload: [session_id: u64][expected_offset: u64][body: bytes][has_metadata: u8][metadata?: bytes]
    */
-  static encodeAppend(sessionId: bigint, body: Uint8Array, metadata?: Uint8Array): Uint8Array {
+  static encodeAppend(
+    sessionId: bigint,
+    expectedOffset: bigint,
+    body: Uint8Array,
+    metadata?: Uint8Array,
+  ): Uint8Array {
     const writer = new BufferWriter(512);
     writer.writeU64BE(sessionId);
+    writer.writeU64BE(expectedOffset);
     writer.writeU32BE(body.length);
     writer.writeBytes(body);
     if (metadata && metadata.length > 0) {
@@ -155,15 +156,15 @@ export class StreamCodec {
     }
 
     const reader = new BufferReader(decoded.data);
+    if (reader.remainingBytes() < 4) {
+      return { status: decoded.status, records: [] };
+    }
+
     const count = reader.readU32BE();
     const records: StreamRecord[] = [];
 
     for (let i = 0; i < count; i++) {
-      const offset = reader.readU64BE();
-      const bodyLen = reader.readU32BE();
-      const body = reader.readBytes(bodyLen);
-
-      records.push({ offset, timestamp: 0n, body });
+      records.push(this.decodeStreamRecord(reader));
     }
 
     return { status: decoded.status, records };
@@ -193,11 +194,9 @@ export class StreamCodec {
     }
 
     const reader = new BufferReader(decoded.data);
-    const offset = reader.readU64BE();
-    const bodyLen = reader.readU32BE();
-    const body = reader.readBytes(bodyLen);
+    const record = this.decodeStreamRecord(reader);
 
-    return { status: decoded.status, record: { offset, timestamp: 0n, body } };
+    return { status: decoded.status, record };
   }
 
   /**
@@ -224,13 +223,27 @@ export class StreamCodec {
     }
 
     const reader = new BufferReader(decoded.data);
-    const firstOffset = reader.readU64BE();
-    const lastOffset = reader.readU64BE();
+    const firstResourceOffset = reader.readOptionalU64();
+    const lastResourceOffset = reader.readOptionalU64();
     const recordCount = reader.readU64BE();
+    const maxBatchEvents = reader.readU64BE();
+    const maxBatchBytes = reader.readU64BE();
+    const ttlSeconds = reader.readOptionalU64();
+    const areaWatermark = reader.readU64BE();
+    const realmWatermark = reader.readU64BE();
 
     return {
       status: decoded.status,
-      metadata: { firstOffset, lastOffset, recordCount },
+      metadata: {
+        firstOffset: firstResourceOffset ?? 0n,
+        lastOffset: lastResourceOffset ?? 0n,
+        recordCount,
+        maxBatchEvents,
+        maxBatchBytes,
+        ttlSeconds,
+        areaWatermark,
+        realmWatermark,
+      },
     };
   }
 
@@ -293,6 +306,34 @@ export class StreamCodec {
       rawPayload,
       parsedPayload,
     };
+  }
+
+  private static decodeStreamRecord(reader: BufferReader): StreamRecord {
+    const offset = reader.readU64BE();
+    const areaOffset = reader.readOptionalU64();
+    const realmOffset = reader.readOptionalU64();
+    const body = reader.readBytes(reader.readU32BE());
+    const metadata = this.readOptionalBytes(reader);
+    const timestamp = reader.readU64BE();
+
+    return {
+      offset,
+      timestamp,
+      body,
+      areaOffset,
+      realmOffset,
+      metadata,
+    };
+  }
+
+  private static readOptionalBytes(reader: BufferReader): Uint8Array | undefined {
+    const hasValue = reader.readU8();
+    if (hasValue !== 1) {
+      return undefined;
+    }
+
+    const length = reader.readU32BE();
+    return reader.readBytes(length);
   }
 
   private static decodeWrappedResponse(payload: Uint8Array): {

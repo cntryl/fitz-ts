@@ -27,10 +27,10 @@ export class StreamSessionImpl implements StreamSession {
    * Append a record to the stream.
    * Returns the assigned offset
    */
-  async append(body: Uint8Array, signal?: AbortSignal): Promise<bigint> {
+  async append(expectedOffset: bigint, body: Uint8Array, signal?: AbortSignal): Promise<bigint> {
     this.ensureOpen();
 
-    const payload = StreamCodec.encodeAppend(this.sessionId, body);
+    const payload = StreamCodec.encodeAppend(this.sessionId, expectedOffset, body);
     const response = await this.connection.request(MSG_STREAM_APPEND, payload, signal);
     const decoded = StreamCodec.decodeAppendResponse(response);
 

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
 
 import { ConnectionError } from "../../../src/core/errors";
 import { MSG_STREAM_APPEND, MSG_STREAM_BEGIN } from "../../../src/frame/types";
@@ -64,10 +64,10 @@ describe("StreamClient", () => {
     const connection = new FakeStreamConnection();
     const client = new StreamClient(connection as unknown as Connection);
 
-    const session = await client.begin("stream://realm/area/resource", 0n);
+    const session = await client.begin("stream://realm/area/resource");
     connection.disconnect();
 
-    await expect(session.append(new Uint8Array([1]))).rejects.toMatchObject({
+    await expect(session.append(0n, new Uint8Array([1]))).rejects.toMatchObject({
       code: "STREAM_SESSION_CLOSED",
     });
   });
@@ -76,9 +76,9 @@ describe("StreamClient", () => {
     const connection = new FakeStreamConnection();
     const client = new StreamClient(connection as unknown as Connection);
 
-    const session = await client.begin("stream://realm/area/resource", 0n);
+    const session = await client.begin("stream://realm/area/resource");
     const controller = new AbortController();
-    const pending = session.append(new Uint8Array([1]), controller.signal);
+    const pending = session.append(0n, new Uint8Array([1]), controller.signal);
 
     await Promise.resolve();
     controller.abort();

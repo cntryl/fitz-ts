@@ -44,9 +44,6 @@ const rootConfigFiles = new Set([
   "package.json",
   "tsconfig.json",
   "vite.config.ts",
-  "vitest.conformance.config.ts",
-  "vitest.integration.config.ts",
-  "vitest.unit.config.ts",
 ]);
 
 function unique(values) {

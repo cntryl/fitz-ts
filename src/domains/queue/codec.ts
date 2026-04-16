@@ -2,7 +2,7 @@
  * Queue domain codec for encoding and decoding protocol messages.
  */
 
-import { BufferWriter, BufferReader } from "../../core/buffer";
+import { BufferWriter, BufferReader, utf8Decoder } from "../../core/buffer";
 import {
   QueueEnqueueResponse,
   QueueReserveResponse,
@@ -41,8 +41,12 @@ export class QueueCodec {
   static decodeEnqueueResponse(payload: Uint8Array): QueueEnqueueResponse {
     const reader = new BufferReader(payload);
     const status = reader.readU8();
+    if (status !== 0) {
+      return { status, ...this.decodeErrorResponse(reader) };
+    }
+
     let messageId: bigint | undefined;
-    if (!reader.isEOF()) {
+    if (reader.remainingBytes() >= 8) {
       messageId = reader.readU64BE();
     }
     return { status, messageId };
@@ -50,14 +54,11 @@ export class QueueCodec {
 
   /**
    * Encode RESERVE request.
-   * Payload: [route: string][lease_seconds: u64][has_batch_size: u8][batch_size: u32][has_wait_seconds: u8][wait_seconds: u64]
+   * Payload: [route: string][lease_seconds: u64][has_batch_size: u8][batch_size: u32]
+   *
+   * Long polling is handled client-side by QueueClient.reserve().
    */
-  static encodeReserve(
-    route: string,
-    leaseSeconds: number,
-    batchSize?: number,
-    waitSeconds?: number,
-  ): Uint8Array {
+  static encodeReserve(route: string, leaseSeconds: number, batchSize?: number): Uint8Array {
     const writer = new BufferWriter(256);
     writer.writeRoute(route);
     writer.writeU64BE(BigInt(leaseSeconds));
@@ -66,12 +67,6 @@ export class QueueCodec {
     writer.writeU8(hasBatchSize);
     if (hasBatchSize && batchSize !== undefined) {
       writer.writeU32BE(batchSize);
-    }
-
-    const hasWaitSeconds = waitSeconds !== undefined && waitSeconds > 0 ? 1 : 0;
-    writer.writeU8(hasWaitSeconds);
-    if (hasWaitSeconds && waitSeconds !== undefined) {
-      writer.writeU64BE(BigInt(waitSeconds));
     }
 
     return writer.getBuffer();
@@ -85,7 +80,11 @@ export class QueueCodec {
     const reader = new BufferReader(payload);
     const status = reader.readU8();
 
-    if (reader.isEOF()) {
+    if (status !== 0) {
+      return { status, ...this.decodeErrorResponse(reader) };
+    }
+
+    if (reader.isEOF() || reader.remainingBytes() < 4) {
       return { status, items: [] };
     }
 
@@ -123,6 +122,10 @@ export class QueueCodec {
   static decodeCompleteResponse(payload: Uint8Array): QueueCompleteResponse {
     const reader = new BufferReader(payload);
     const status = reader.readU8();
+    if (status !== 0) {
+      return { status, ...this.decodeErrorResponse(reader) };
+    }
+
     return { status };
   }
 
@@ -151,6 +154,10 @@ export class QueueCodec {
   static decodeExtendResponse(payload: Uint8Array): QueueExtendResponse {
     const reader = new BufferReader(payload);
     const status = reader.readU8();
+    if (status !== 0) {
+      return { status, ...this.decodeErrorResponse(reader) };
+    }
+
     return { status };
   }
 
@@ -171,16 +178,26 @@ export class QueueCodec {
   static decodeSubscribeResponse(payload: Uint8Array): QueueSubscribeResponse {
     const reader = new BufferReader(payload);
     const status = reader.readU8();
-    if (status !== 0 || reader.isEOF()) {
+    if (status !== 0) {
+      return { status, ...this.decodeErrorResponse(reader) };
+    }
+
+    if (reader.remainingBytes() === 8) {
+      return { status, subId: reader.readU64BE() };
+    }
+
+    if (reader.remainingBytes() >= 9) {
+      const hasSubId = reader.readU8();
+      if (hasSubId === 1 && reader.remainingBytes() >= 8) {
+        return { status, subId: reader.readU64BE() };
+      }
+    }
+
+    if (reader.isEOF()) {
       return { status };
     }
 
-    const hasSubId = reader.readU8();
-    if (hasSubId !== 1 || reader.isEOF()) {
-      return { status };
-    }
-
-    return { status, subId: reader.readU64BE() };
+    return { status };
   }
 
   /**
@@ -200,6 +217,10 @@ export class QueueCodec {
   static decodeUnsubscribeResponse(payload: Uint8Array): QueueUnsubscribeResponse {
     const reader = new BufferReader(payload);
     const status = reader.readU8();
+    if (status !== 0) {
+      return { status, ...this.decodeErrorResponse(reader) };
+    }
+
     return { status };
   }
 
@@ -214,10 +235,27 @@ export class QueueCodec {
     const reader = new BufferReader(payload);
     const subId = reader.readU64BE();
     const route = reader.readRoute();
-    if (!reader.isEOF()) {
-      const payloadLen = reader.readU32BE();
-      reader.readBytes(payloadLen);
-    }
+
     return { subId, route };
+  }
+
+  private static decodeErrorResponse(reader: BufferReader): {
+    errorCode?: number;
+    errorMessage?: string;
+  } {
+    if (reader.remainingBytes() === 1) {
+      return { errorCode: reader.readU8() };
+    }
+
+    if (reader.remainingBytes() >= 4) {
+      const messageLength = reader.readU32BE();
+      if (messageLength <= reader.remainingBytes()) {
+        return {
+          errorMessage: utf8Decoder.decode(reader.readBytes(messageLength)),
+        };
+      }
+    }
+
+    return {};
   }
 }

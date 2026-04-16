@@ -2,7 +2,7 @@
  * Lease Codec unit tests
  */
 
-import { describe, it, expect } from "vitest";
+import { describe, it, expect } from "vite-plus/test";
 import { LeaseCodec } from "../../../src/domains/lease/codec";
 import { BufferWriter } from "../../../src/core/buffer";
 import { ProtocolError } from "../../../src/core/errors";

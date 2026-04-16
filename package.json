@@ -39,20 +39,30 @@
     "access": "public"
   },
   "scripts": {
-    "build": "rolldown src/index.ts --file dist/index.mjs --format esm --platform node --sourcemap --external ws --clean-dir --tsconfig tsconfig.json && rolldown src/index.ts --file dist/index.cjs --format cjs --platform node --sourcemap --external ws --tsconfig tsconfig.json && tsc -p tsconfig.build.json && node ./scripts/fix-dts-imports.js",
-    "test": "vitest run --config vitest.unit.config.ts && vitest run --config vitest.integration.config.ts && vitest run --config vitest.conformance.config.ts --reporter=verbose",
-    "bench": "vitest bench --run",
-    "lint": "oxlint . --deny-warnings",
-    "fmt": "oxfmt ."
+    "build": "vp pack && tsc -p tsconfig.build.json && node ./scripts/fix-dts-imports.js",
+    "pack:smoke": "node ./scripts/pack-smoke.js",
+    "test": "npm run test:unit && npm run test:integration && npm run test:conformance",
+    "test:unit": "vp test run --project unit",
+    "test:integration": "vp test run --project integration",
+    "test:conformance": "vp test run --project conformance --reporter=verbose",
+    "verify:fast": "npm run fmt:check && npm run lint && npm run build && npm run test:unit",
+    "verify": "npm run verify:fast && npm run test:integration && npm run test:conformance",
+    "bench": "vp test bench --run",
+    "lint": "vp lint . --deny-warnings",
+    "fmt": "vp fmt .",
+    "fmt:check": "vp fmt --check",
+    "prepare": "vp config"
   },
   "devDependencies": {
-    "@types/node": "^25.5.0",
-    "oxfmt": "^0.42.0",
-    "oxlint": "^1.57.0",
-    "rolldown": "^1.0.0-rc.12",
+    "@types/node": "^25.6.0",
     "typescript": "^6.0.2",
-    "vitest": "^4.1.2",
+    "vite-plus": "latest",
+    "vitest": "npm:@voidzero-dev/vite-plus-test@latest",
     "ws": "^8.20.0"
+  },
+  "overrides": {
+    "vite": "npm:@voidzero-dev/vite-plus-core@latest",
+    "vitest": "npm:@voidzero-dev/vite-plus-test@latest"
   },
   "engines": {
     "node": ">=20.19.0"

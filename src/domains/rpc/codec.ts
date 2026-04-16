@@ -167,6 +167,29 @@ export class RpcCodec {
   }
 
   /**
+   * Decode a standard RPC error body.
+   * Format: [u8 status=1][u32 error_code][string message]
+   */
+  static decodeErrorBody(payload: Uint8Array): { code: number; message: string } | null {
+    if (payload.length < 5) {
+      return null;
+    }
+
+    const reader = new BufferReader(payload);
+    if (reader.readU8() !== 1) {
+      return null;
+    }
+
+    const code = reader.readU32BE();
+    const message = reader.readString();
+    if (!reader.isEOF()) {
+      return null;
+    }
+
+    return { code, message };
+  }
+
+  /**
    * Decode incoming RPC_REQUEST (302) for worker mode
    * Payload: [u32 corrLen=16][16 bytes correlation_id][string route][string reply_route][bytes body]
    */

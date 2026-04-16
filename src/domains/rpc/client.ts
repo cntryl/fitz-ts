@@ -389,6 +389,12 @@ export class RpcClient extends DomainClient {
       return;
     }
 
+    const terminalError = RpcCodec.decodeErrorBody(body);
+    if (terminalError?.code === 6002) {
+      this.pendingRpcs.delete(key);
+      return;
+    }
+
     if (streamEnd) {
       if (body.length > 0) {
         iterator.push({ body, sequence });

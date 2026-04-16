@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
 
 import { waitFor } from "./helpers";
 import { TestFixture } from "./fixture/fixture";
@@ -100,7 +100,8 @@ describe("Lease integration", () => {
       if (!reacquired) {
         throw new Error("lease was not reacquired after ttl expiry");
       }
-      expect(reacquired.getExpiry()).toBeGreaterThan(BigInt(Math.floor(Date.now() / 1000)));
+      const reacquiredLease = reacquired as { getExpiry(): bigint };
+      expect(reacquiredLease.getExpiry()).toBeGreaterThan(BigInt(Math.floor(Date.now() / 1000)));
     });
 
     it("should query lease status for an existing lease", async () => {

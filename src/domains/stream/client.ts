@@ -2,8 +2,8 @@
  * Stream domain client for append-only log operations.
  *
  * Stream uses session-based transactional semantics:
- * 1. `begin()` starts a write session with `expectedOffset` (OCC)
- * 2. `append()` on the session adds records
+ * 1. `begin()` starts a write session
+ * 2. `append(expectedOffset, ...)` on the session adds records with OCC
  * 3. `commit()` or `rollback()` finalizes the session
  */
 
@@ -70,11 +70,11 @@ export class StreamClient extends DomainClient {
   /**
    * Begin a write session on the stream.
    * @param route Stream route (e.g., "stream://realm/area/events")
-   * @param expectedOffset Client's view of the next offset (OCC - optimistic concurrency control)
+   * @param ingestMetadata Optional ingest metadata to send with begin
    * @returns StreamSession for append/commit/rollback
    */
-  async begin(route: string, expectedOffset: bigint): Promise<StreamSession> {
-    const payload = StreamCodec.encodeBegin(route, expectedOffset);
+  async begin(route: string, ingestMetadata?: Uint8Array): Promise<StreamSession> {
+    const payload = StreamCodec.encodeBegin(route, ingestMetadata);
     const response = await this.requestFrame(MSG_STREAM_BEGIN, payload);
     const decoded = StreamCodec.decodeBeginResponse(response);
 

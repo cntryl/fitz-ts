@@ -2,7 +2,7 @@
  * Stream domain type definitions
  * Stream uses session-based transactional semantics:
  * 1. Begin() returns a session with server-assigned sessionID
- * 2. Append() on session (no offset tracking needed)
+ * 2. Append(expectedOffset, ...) on session validates optimistic concurrency
  * 3. Commit() or Rollback() to finalize
  */
 
@@ -13,6 +13,9 @@ export interface StreamRecord {
   offset: bigint;
   timestamp: bigint;
   body: Uint8Array;
+  areaOffset?: bigint;
+  realmOffset?: bigint;
+  metadata?: Uint8Array;
 }
 
 /**
@@ -22,6 +25,11 @@ export interface StreamMetadata {
   firstOffset: bigint;
   lastOffset: bigint;
   recordCount: bigint;
+  maxBatchEvents?: bigint;
+  maxBatchBytes?: bigint;
+  ttlSeconds?: bigint;
+  areaWatermark?: bigint;
+  realmWatermark?: bigint;
 }
 
 export type StreamCommitMode = "Buffered" | "Sync";
@@ -73,7 +81,7 @@ export interface StreamSession {
    * Append a record to the stream.
    * Returns the assigned offset
    */
-  append(body: Uint8Array, signal?: AbortSignal): Promise<bigint>;
+  append(expectedOffset: bigint, body: Uint8Array, signal?: AbortSignal): Promise<bigint>;
 
   /**
    * Commit the write session and make appended records durable.

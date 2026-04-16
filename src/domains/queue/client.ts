@@ -65,7 +65,7 @@ export class QueueClient extends DomainClient {
     const payload = QueueCodec.encodeEnqueue(route, body, options);
     const response = await this.requestFrame(MSG_QUEUE_ENQUEUE, payload);
     const decoded = QueueCodec.decodeEnqueueResponse(response);
-    this.checkStatus(decoded.status, "ENQUEUE");
+    this.checkStatus(decoded, "ENQUEUE");
 
     if (decoded.messageId === undefined) {
       throw new QueueError("ENQUEUE response missing messageId", "MISSING_MESSAGE_ID");
@@ -81,10 +81,10 @@ export class QueueClient extends DomainClient {
     waitSeconds: number = 0,
   ): Promise<QueueItem[]> {
     if (waitSeconds <= 0) {
-      return this.reserveOnce(route, leaseSeconds, batchSize, 0);
+      return this.reserveOnce(route, leaseSeconds, batchSize);
     }
 
-    let items = await this.reserveOnce(route, leaseSeconds, batchSize, 0);
+    let items = await this.reserveOnce(route, leaseSeconds, batchSize);
     if (items.length > 0) {
       return items;
     }
@@ -106,7 +106,7 @@ export class QueueClient extends DomainClient {
 
     try {
       while (true) {
-        items = await this.reserveOnce(route, leaseSeconds, batchSize, 0);
+        items = await this.reserveOnce(route, leaseSeconds, batchSize);
         if (items.length > 0) {
           return items;
         }
@@ -143,12 +143,11 @@ export class QueueClient extends DomainClient {
     route: string,
     leaseSeconds: number,
     batchSize: number,
-    waitSeconds: number,
   ): Promise<QueueItem[]> {
-    const payload = QueueCodec.encodeReserve(route, leaseSeconds, batchSize, waitSeconds);
+    const payload = QueueCodec.encodeReserve(route, leaseSeconds, batchSize);
     const response = await this.requestFrame(MSG_QUEUE_RESERVE, payload);
     const decoded = QueueCodec.decodeReserveResponse(response);
-    this.checkStatus(decoded.status, "RESERVE");
+    this.checkStatus(decoded, "RESERVE");
 
     return (decoded.items ?? []).map(
       (item) => new QueueItem(item.id, item.token, item.body, route, this.connection),
@@ -167,10 +166,10 @@ export class QueueClient extends DomainClient {
   }
 
   private async subscribeWire(pattern: string): Promise<bigint> {
-    const payload = QueueCodec.encodeSubscribe(pattern);
+    const payload = QueueCodec.encodeSubscribe(this.wireWatchPattern(pattern));
     const response = await this.requestFrame(MSG_QUEUE_SUBSCRIBE, payload);
     const decoded = QueueCodec.decodeSubscribeResponse(response);
-    this.checkStatus(decoded.status, "SUBSCRIBE");
+    this.checkStatus(decoded, "SUBSCRIBE");
 
     if (decoded.subId === undefined) {
       throw new QueueError("SUBSCRIBE response missing subId", "MISSING_SUB_ID");
@@ -212,10 +211,10 @@ export class QueueClient extends DomainClient {
 
     this.subscriptionsByPattern.delete(pattern);
     this.patternsBySubId.delete(subscription.subId);
-    const payload = QueueCodec.encodeUnsubscribe(pattern);
+    const payload = QueueCodec.encodeUnsubscribe(this.wireWatchPattern(pattern));
     const response = await this.requestFrame(MSG_QUEUE_UNSUBSCRIBE, payload);
     const decoded = QueueCodec.decodeUnsubscribeResponse(response);
-    this.checkStatus(decoded.status, "UNSUBSCRIBE");
+    this.checkStatus(decoded, "UNSUBSCRIBE");
   }
 
   private initNotificationHandler(): void {
@@ -237,7 +236,7 @@ export class QueueClient extends DomainClient {
           return;
         }
 
-        const notification: AvailabilityNotification = { route };
+        const notification: AvailabilityNotification = { route: this.publicQueueRoute(route) };
         for (const handler of subscription.handlers.values()) {
           this.connection.dispatchAsyncHandler(async () => {
             await handler(notification);
@@ -249,11 +248,31 @@ export class QueueClient extends DomainClient {
     });
   }
 
-  private checkStatus(status: number, operation: string): void {
-    if (status === QueueStatus.Ok) {
+  private wireWatchPattern(pattern: string): string {
+    if (pattern.endsWith("/ready")) {
+      return pattern;
+    }
+
+    return `${pattern}/ready`;
+  }
+
+  private publicQueueRoute(route: string): string {
+    if (!route.endsWith("/ready")) {
+      return route;
+    }
+
+    return route.slice(0, -"/ready".length);
+  }
+
+  private checkStatus(
+    response: { status: number; errorCode?: number; errorMessage?: string },
+    operation: string,
+  ): void {
+    if (response.status === QueueStatus.Ok) {
       return;
     }
 
+    const errorCode = response.errorCode ?? response.status;
     const statusNames: Record<number, string> = {
       [QueueStatus.QueueNotFound]: "QueueNotFound",
       [QueueStatus.MessageNotFound]: "MessageNotFound",
@@ -262,11 +281,10 @@ export class QueueClient extends DomainClient {
       [QueueStatus.InvalidDelay]: "InvalidDelay",
     };
 
-    throw new QueueError(
-      `${operation} failed: ${statusNames[status] ?? `Unknown(${status})`}`,
-      operation,
-      status,
-    );
+    const statusName = statusNames[errorCode] ?? `Unknown(${errorCode})`;
+    const reason = response.errorMessage ?? statusName;
+
+    throw new QueueError(`${operation} failed: ${reason}`, statusName, errorCode);
   }
 }
 

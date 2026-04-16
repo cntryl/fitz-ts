@@ -38,8 +38,10 @@ export class QueueItem {
     const decoded = QueueCodec.decodeExtendResponse(response);
 
     if (decoded.status !== QueueStatus.Ok) {
-      const statusName = QueueStatus[decoded.status] || `Unknown(${decoded.status})`;
-      throw new QueueError(`EXTEND failed: ${statusName}`, statusName, decoded.status);
+      const errorCode = decoded.errorCode ?? decoded.status;
+      const statusName = QueueStatus[errorCode] || `Unknown(${errorCode})`;
+      const reason = decoded.errorMessage ?? statusName;
+      throw new QueueError(`EXTEND failed: ${reason}`, statusName, errorCode);
     }
   }
 
@@ -52,8 +54,10 @@ export class QueueItem {
     const decoded = QueueCodec.decodeCompleteResponse(response);
 
     if (decoded.status !== QueueStatus.Ok) {
-      const statusName = QueueStatus[decoded.status] || `Unknown(${decoded.status})`;
-      throw new QueueError(`COMPLETE failed: ${statusName}`, statusName, decoded.status);
+      const errorCode = decoded.errorCode ?? decoded.status;
+      const statusName = QueueStatus[errorCode] || `Unknown(${errorCode})`;
+      const reason = decoded.errorMessage ?? statusName;
+      throw new QueueError(`COMPLETE failed: ${reason}`, statusName, errorCode);
     }
   }
 
@@ -67,8 +71,10 @@ export class QueueItem {
     const decoded = QueueCodec.decodeCompleteResponse(response);
 
     if (decoded.status !== QueueStatus.Ok) {
-      const statusName = QueueStatus[decoded.status] || `Unknown(${decoded.status})`;
-      throw new QueueError(`COMPLETE failed: ${statusName}`, statusName, decoded.status);
+      const errorCode = decoded.errorCode ?? decoded.status;
+      const statusName = QueueStatus[errorCode] || `Unknown(${errorCode})`;
+      const reason = decoded.errorMessage ?? statusName;
+      throw new QueueError(`COMPLETE failed: ${reason}`, statusName, errorCode);
     }
   }
 }
@@ -134,6 +140,8 @@ export interface EnqueueOptions {
 export interface QueueEnqueueResponse {
   status: number;
   messageId?: bigint;
+  errorCode?: number;
+  errorMessage?: string;
 }
 
 export interface QueueReserveResponse {
@@ -144,21 +152,31 @@ export interface QueueReserveResponse {
     body: Uint8Array;
   }>;
   cursor?: Uint8Array;
+  errorCode?: number;
+  errorMessage?: string;
 }
 
 export interface QueueExtendResponse {
   status: number;
+  errorCode?: number;
+  errorMessage?: string;
 }
 
 export interface QueueCompleteResponse {
   status: number;
+  errorCode?: number;
+  errorMessage?: string;
 }
 
 export interface QueueSubscribeResponse {
   status: number;
   subId?: bigint;
+  errorCode?: number;
+  errorMessage?: string;
 }
 
 export interface QueueUnsubscribeResponse {
   status: number;
+  errorCode?: number;
+  errorMessage?: string;
 }

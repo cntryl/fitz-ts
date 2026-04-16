@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
 
 import type { Connection } from "../../../src/client/connection";
 import { BufferWriter } from "../../../src/core/buffer";
@@ -98,6 +98,13 @@ function encodeOptionalSubIdResponse(subId: bigint): Uint8Array {
   return writer.getBuffer();
 }
 
+function encodeQueueSubIdResponse(subId: bigint): Uint8Array {
+  const writer = new BufferWriter(16);
+  writer.writeU8(0);
+  writer.writeU64BE(subId);
+  return writer.getBuffer();
+}
+
 function encodeLeaseSubscribeResponse(subId: bigint): Uint8Array {
   const writer = new BufferWriter(16);
   writer.writeU8(0);
@@ -160,10 +167,10 @@ describe("Subscription Multiplexing", () => {
     const secondRoutes: string[] = [];
     const pattern = "notice://realm/area/resource";
 
-    const first = await client.subscribe(pattern, (msg) => {
+    const first = await client.subscribe(pattern, async (msg) => {
       firstRoutes.push(msg.route);
     });
-    const second = await client.subscribe(pattern, (msg) => {
+    const second = await client.subscribe(pattern, async (msg) => {
       secondRoutes.push(msg.route);
     });
 
@@ -199,7 +206,7 @@ describe("Subscription Multiplexing", () => {
 
   it("queue client keeps one wire subscription per pattern", async () => {
     const connection = new FakeSubscriptionConnection([
-      [MSG_QUEUE_SUBSCRIBE, encodeOptionalSubIdResponse(21n)],
+      [MSG_QUEUE_SUBSCRIBE, encodeQueueSubIdResponse(21n)],
       [MSG_QUEUE_UNSUBSCRIBE, encodeStatusOnlyResponse()],
     ]);
     const client = new QueueClient(connection as unknown as Connection);
@@ -207,10 +214,10 @@ describe("Subscription Multiplexing", () => {
     const secondRoutes: string[] = [];
     const pattern = "queue://realm/area/resource";
 
-    const first = await client.subscribe(pattern, (notification) => {
+    const first = await client.subscribe(pattern, async (notification) => {
       firstRoutes.push(notification.route);
     });
-    const second = await client.subscribe(pattern, (notification) => {
+    const second = await client.subscribe(pattern, async (notification) => {
       secondRoutes.push(notification.route);
     });
 
@@ -245,10 +252,10 @@ describe("Subscription Multiplexing", () => {
     const secondRoutes: string[] = [];
     const pattern = "lease://realm/area/resource";
 
-    const first = await client.subscribe(pattern, (notification) => {
+    const first = await client.subscribe(pattern, async (notification) => {
       firstRoutes.push(notification.route);
     });
-    const second = await client.subscribe(pattern, (notification) => {
+    const second = await client.subscribe(pattern, async (notification) => {
       secondRoutes.push(notification.route);
     });
 
@@ -283,10 +290,10 @@ describe("Subscription Multiplexing", () => {
     const secondPayloads: string[] = [];
     const pattern = "schedule://realm/area/resource/run";
 
-    const first = await client.subscribe(pattern, (notification) => {
+    const first = await client.subscribe(pattern, async (notification) => {
       firstPayloads.push(Buffer.from(notification.payload).toString());
     });
-    const second = await client.subscribe(pattern, (notification) => {
+    const second = await client.subscribe(pattern, async (notification) => {
       secondPayloads.push(Buffer.from(notification.payload).toString());
     });
 
@@ -334,7 +341,7 @@ describe("Subscription Multiplexing", () => {
     const secondRoutes: string[] = [];
     const pattern = "stream://realm/area/resource";
 
-    const first = await client.subscribe(pattern, (notification) => {
+    const first = await client.subscribe(pattern, async (notification) => {
       firstNotifications.push({
         route: notification.route,
         event: notification.event,
@@ -344,7 +351,7 @@ describe("Subscription Multiplexing", () => {
         batchSize: notification.batchSize,
       });
     });
-    const second = await client.subscribe(pattern, (notification) => {
+    const second = await client.subscribe(pattern, async (notification) => {
       secondRoutes.push(notification.route);
     });
 

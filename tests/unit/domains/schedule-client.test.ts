@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
 
 import type { Connection } from "../../../src/client/connection";
 import { ScheduleClient } from "../../../src/domains/schedule/client";

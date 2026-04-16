@@ -2,7 +2,7 @@
  * Queue Codec unit tests
  */
 
-import { describe, it, expect } from "vitest";
+import { describe, it, expect } from "vite-plus/test";
 import { QueueCodec } from "../../../src/domains/queue/codec";
 import { BufferWriter } from "../../../src/core/buffer";
 import { testData } from "../helpers/test-utils";
@@ -88,9 +88,27 @@ describe("QueueCodec", () => {
       expect(items[0].token).toBe(777n);
     });
 
+    it("should_decode_reserve_error_response_with_error_code", () => {
+      // Arrange
+      const writer = new BufferWriter(8);
+      writer.writeU8(1); // status = error
+      writer.writeU8(4); // QueueNotFound
+      const response = writer.getBuffer();
+
+      // Act
+      const decoded = QueueCodec.decodeReserveResponse(response);
+
+      // Assert
+      expect(decoded.status).toBe(1);
+      expect(decoded.errorCode).toBe(4);
+    });
+
     it("should_decode_reserve_response_no_item", () => {
       // Arrange
-      const response = new Uint8Array([0]); // status, no items
+      const writer = new BufferWriter(8);
+      writer.writeU8(0); // status
+      writer.writeU32BE(0); // leaseCount = 0
+      const response = writer.getBuffer();
 
       // Act
       const decoded = QueueCodec.decodeReserveResponse(response);
@@ -150,7 +168,6 @@ describe("QueueCodec", () => {
       // Arrange
       const writer = new BufferWriter(16);
       writer.writeU8(0); // status
-      writer.writeU8(1); // has_sub_id
       writer.writeU64BE(555n); // subId
       const response = writer.getBuffer();
 

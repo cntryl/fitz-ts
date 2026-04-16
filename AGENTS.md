@@ -2,13 +2,14 @@
 
 ## Toolchain
 
-This repo uses direct tools instead of a wrapper toolchain:
+This repo uses Vite+ and npm script aliases. Use the package.json scripts as the source of truth.
 
-- `tsc` for typechecking and declaration emit
-- `vitest` for unit, integration, conformance, and benchmark runs
-- `rolldown` for JS bundle output
-- `oxlint` for linting
-- `oxfmt` for formatting
+- `vp check` for combined format, lint, and type checks
+- `vp fmt` for formatting
+- `vp lint` for linting
+- `vp test` for unit, integration, and conformance tests
+- `vp pack` for JS bundle output
+- `tsc` for declaration emit
 
 Use the `package.json` scripts as the source of truth.
 
@@ -17,11 +18,14 @@ Use the `package.json` scripts as the source of truth.
 - `npm run verify:fast`
 - `npm run verify`
 - `npm run build`
+- `npm run test`
 - `npm run test:unit`
 - `npm run test:integration`
 - `npm run test:conformance`
+- `npm run pack:smoke`
 - `npm run bench`
 - `npm run lint`
+- `npm run fmt`
 - `npm run fmt:check`
 
 ## Review Checklist
