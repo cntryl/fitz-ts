@@ -109,7 +109,7 @@ docker compose -f ../fitz-go/compose.yml down --volumes
 The conformance harness writes JSON results to `artifacts/conformance-results.json` by default.
 
 The repo keeps one custom verification script:
-[`scripts/pack-smoke.js`](/D:/repos/cntryl/fitz-workspace/fitz-ts/scripts/pack-smoke.js)
+[`scripts/pack-smoke.js`](scripts/pack-smoke.js)
 for tarball consumer verification.
 
 Tooling is otherwise direct:
@@ -136,16 +136,20 @@ CommonJS consumer fixtures before release.
 
 Broker-backed connection hardening coverage now includes automatic reconnect subscription replay and token-provider replay checks in `tests/integration/connection.test.ts`.
 
-## Canonical Spec
+## Canonical Docs
 
 `fitz-ts` follows the canonical Fitz client docs in the server repo:
 
 - [`../fitz/docs/clients/CLIENT_SPEC.md`](../fitz/docs/clients/CLIENT_SPEC.md)
 - [`../fitz/docs/clients/CLIENT_ACCEPTANCE_CRITERIA.md`](../fitz/docs/clients/CLIENT_ACCEPTANCE_CRITERIA.md)
 - [`../fitz/docs/clients/CLIENT_IMPLEMENTATION_GUIDE.md`](../fitz/docs/clients/CLIENT_IMPLEMENTATION_GUIDE.md)
+- [`../fitz/docs/clients/CONNECTION_FLOW.md`](../fitz/docs/clients/CONNECTION_FLOW.md)
 
-## Additional Documentation
+## Documentation
 
+- [`docs/README.md`](docs/README.md)
 - [`docs/OPERATIONS.md`](docs/OPERATIONS.md)
 - [`docs/PUBLIC_CONTRACT.md`](docs/PUBLIC_CONTRACT.md)
+- [`CLIENT_SPEC.md`](CLIENT_SPEC.md)
+- [`CLIENT_ACCEPTANCE_CRITERIA.md`](CLIENT_ACCEPTANCE_CRITERIA.md)
 - [`CHANGELOG.md`](CHANGELOG.md)
