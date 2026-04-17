@@ -12,6 +12,7 @@ import {
   MSG_LEASE_UNSUBSCRIBE,
 } from "../../frame/types";
 import { DomainClient } from "../base";
+import { isRouteShape } from "../_routes";
 import { LeaseCodec } from "./codec";
 import { ChangeHandler, ChangeNotification, Lease, LeaseInfo, LeaseSubscription } from "./types";
 
@@ -55,6 +56,7 @@ export class LeaseClient extends DomainClient {
   }
 
   async acquire(route: string, ttlSecs: number): Promise<Lease> {
+    assertExactLeaseRoute(route);
     const payload = LeaseCodec.encodeAcquire(route, ttlSecs);
     const response = await this.requestFrame(MSG_LEASE_ACQUIRE, payload);
     const decoded = LeaseCodec.decodeAcquireResponse(response);
@@ -68,6 +70,7 @@ export class LeaseClient extends DomainClient {
   }
 
   async query(route: string): Promise<LeaseInfo> {
+    assertExactLeaseRoute(route);
     const payload = LeaseCodec.encodeQuery(route);
     const response = await this.requestFrame(MSG_LEASE_QUERY, payload);
     const decoded = LeaseCodec.decodeQueryResponse(response);
@@ -83,6 +86,7 @@ export class LeaseClient extends DomainClient {
   }
 
   async subscribe(pattern: string, handler: ChangeHandler): Promise<LeaseSubscription> {
+    assertExactLeaseRoute(pattern);
     this.initNotifyHandler();
     const existing = this.subscriptionsByPattern.get(pattern);
     if (existing) {
@@ -174,3 +178,12 @@ export class LeaseClient extends DomainClient {
 }
 
 export * from "./types";
+
+function assertExactLeaseRoute(route: string): void {
+  if (!isRouteShape(route, "lease", 3)) {
+    throw new LeaseError(
+      `Invalid lease route: ${route} (expected lease://{realm}/{area}/{resource}, no empty segments or wildcards)`,
+      "INVALID_ROUTE",
+    );
+  }
+}

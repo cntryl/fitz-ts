@@ -8,16 +8,15 @@ import { KvTransaction } from "./transaction";
 import { KvBeginOptions, KvStatus } from "./types";
 import { MSG_KV_BEGIN } from "../../frame/types";
 import { KvError } from "../../core/errors";
-
-function isValidKvRoute(route: string): boolean {
-  const match = /^(?:kv:\/\/)?([^/]+)\/([^/]+)\/([^/]+)$/.exec(route);
-  return match !== null;
-}
+import { isRouteShape } from "../_routes";
 
 export class KvClient extends DomainClient {
   async begin(route: string, options: KvBeginOptions): Promise<KvTransaction> {
-    if (!isValidKvRoute(route)) {
-      throw new KvError(`Invalid route: ${route}`, "INVALID_ROUTE");
+    if (!isRouteShape(route, "kv", 3, { allowBareRoute: true })) {
+      throw new KvError(
+        `Invalid kv route: ${route} (expected kv://{realm}/{area}/{resource} or {realm}/{area}/{resource}, no empty segments or wildcards)`,
+        "INVALID_ROUTE",
+      );
     }
     if (!options?.durability) {
       throw new KvError("BEGIN requires explicit durability", "MISSING_DURABILITY");

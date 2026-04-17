@@ -12,6 +12,7 @@ import {
   MSG_QUEUE_UNSUBSCRIBE,
 } from "../../frame/types";
 import { DomainClient } from "../base";
+import { isRouteShape, isSelectorRouteShape } from "../_routes";
 import { QueueCodec } from "./codec";
 import {
   AvailabilityHandler,
@@ -62,6 +63,7 @@ export class QueueClient extends DomainClient {
   }
 
   async enqueue(route: string, body: Uint8Array, options?: EnqueueOptions): Promise<bigint> {
+    assertQueueRoute(route);
     const payload = QueueCodec.encodeEnqueue(route, body, options);
     const response = await this.requestFrame(MSG_QUEUE_ENQUEUE, payload);
     const decoded = QueueCodec.decodeEnqueueResponse(response);
@@ -80,6 +82,7 @@ export class QueueClient extends DomainClient {
     batchSize: number = 1,
     waitSeconds: number = 0,
   ): Promise<QueueItem[]> {
+    assertQueueReserveRoute(route);
     if (waitSeconds <= 0) {
       return this.reserveOnce(route, leaseSeconds, batchSize);
     }
@@ -155,6 +158,7 @@ export class QueueClient extends DomainClient {
   }
 
   async subscribe(pattern: string, handler: AvailabilityHandler): Promise<QueueSubscription> {
+    assertQueueSubscriptionPattern(pattern);
     this.initNotificationHandler();
     const existing = this.subscriptionsByPattern.get(pattern);
     if (existing) {
@@ -289,3 +293,30 @@ export class QueueClient extends DomainClient {
 }
 
 export * from "./types";
+
+function assertQueueRoute(route: string): void {
+  if (!isRouteShape(route, "queue", 3)) {
+    throw new QueueError(
+      `Invalid queue route: ${route} (expected queue://{realm}/{area}/{resource}, no empty segments or wildcards)`,
+      "INVALID_ROUTE",
+    );
+  }
+}
+
+function assertQueueReserveRoute(route: string): void {
+  if (!isSelectorRouteShape(route, "queue", 3)) {
+    throw new QueueError(
+      `Invalid queue route: ${route} (expected queue://{realm}/{area}/{resource} or queue://{realm}/{area}/*, no empty segments or wildcards)`,
+      "INVALID_ROUTE",
+    );
+  }
+}
+
+function assertQueueSubscriptionPattern(pattern: string): void {
+  if (!isSelectorRouteShape(pattern, "queue", 3, { allowRealmWildcard: true })) {
+    throw new QueueError(
+      `Invalid queue pattern: ${pattern} (expected queue://{realm}/{area}/{resource}, queue://{realm}/{area}/*, or queue://{realm}/**)`,
+      "INVALID_ROUTE",
+    );
+  }
+}

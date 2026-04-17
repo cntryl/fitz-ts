@@ -29,16 +29,68 @@ class FakeScheduleConnection {
   }
 }
 
+async function expectRouteValidationFailure(
+  action: Promise<unknown>,
+  messageFragment: string,
+  expectedCode = "INVALID_ROUTE",
+): Promise<void> {
+  let error: unknown = null;
+  let resolved = false;
+
+  try {
+    await action;
+    resolved = true;
+  } catch (caught) {
+    error = caught;
+  }
+
+  expect(resolved).toBe(false);
+  expect(error).not.toBeNull();
+  expect(error).toMatchObject({ code: expectedCode });
+  expect((error as Error).message).toContain(messageFragment);
+}
+
 describe("ScheduleClient route validation", () => {
+  it("accepts exact four-segment routes before sending", async () => {
+    const connection = new FakeScheduleConnection();
+    const client = new ScheduleClient(connection as unknown as Connection);
+
+    await expect(client.create("schedule://realm/area/resource/run", "0 0 * * *")).resolves.toBe(
+      "schedule://realm/area/resource/run",
+    );
+    expect(connection.requestCalls).toHaveLength(1);
+  });
+
   it("rejects legacy three-segment routes in create before sending", async () => {
     const connection = new FakeScheduleConnection();
     const client = new ScheduleClient(connection as unknown as Connection);
 
-    await expect(
+    await expectRouteValidationFailure(
       client.create("schedule://realm/area/resource", "0 0 * * *"),
-    ).rejects.toMatchObject({
-      code: "INVALID_ROUTE",
-    });
+      "expected schedule://{realm}/{area}/{resource}/{operation}",
+    );
+    expect(connection.requestCalls).toHaveLength(0);
+  });
+
+  it("rejects wrong-scheme routes in create before sending", async () => {
+    const connection = new FakeScheduleConnection();
+    const client = new ScheduleClient(connection as unknown as Connection);
+
+    await expectRouteValidationFailure(
+      client.create("queue://realm/area/resource/run", "0 0 * * *"),
+      "expected schedule://{realm}/{area}/{resource}/{operation}",
+    );
+    expect(connection.requestCalls).toHaveLength(0);
+  });
+
+  it("rejects empty-segment routes in cancel before sending", async () => {
+    const connection = new FakeScheduleConnection();
+    const client = new ScheduleClient(connection as unknown as Connection);
+
+    await expectRouteValidationFailure(
+      client.cancel("schedule://realm//resource/run"),
+      "no empty segments or wildcards",
+    );
     expect(connection.requestCalls).toHaveLength(0);
   });
 
@@ -46,9 +98,10 @@ describe("ScheduleClient route validation", () => {
     const connection = new FakeScheduleConnection();
     const client = new ScheduleClient(connection as unknown as Connection);
 
-    await expect(client.cancel("schedule://realm/area/resource/*")).rejects.toMatchObject({
-      code: "INVALID_ROUTE",
-    });
+    await expectRouteValidationFailure(
+      client.cancel("schedule://realm/area/resource/*"),
+      "no empty segments or wildcards",
+    );
     expect(connection.requestCalls).toHaveLength(0);
   });
 
@@ -56,11 +109,10 @@ describe("ScheduleClient route validation", () => {
     const connection = new FakeScheduleConnection();
     const client = new ScheduleClient(connection as unknown as Connection);
 
-    await expect(
+    await expectRouteValidationFailure(
       client.subscribe("schedule://realm/area/*", async () => undefined),
-    ).rejects.toMatchObject({
-      code: "INVALID_ROUTE",
-    });
+      "no empty segments or wildcards",
+    );
     expect(connection.requestCalls).toHaveLength(0);
   });
 });

@@ -58,6 +58,27 @@ class FakeKvConnection {
   }
 }
 
+async function expectRouteValidationFailure(
+  action: Promise<unknown>,
+  messageFragment: string,
+  expectedCode = "KV_INVALID_ROUTE",
+): Promise<void> {
+  let error: unknown = null;
+  let resolved = false;
+
+  try {
+    await action;
+    resolved = true;
+  } catch (caught) {
+    error = caught;
+  }
+
+  expect(resolved).toBe(false);
+  expect(error).not.toBeNull();
+  expect(error).toMatchObject({ code: expectedCode });
+  expect((error as Error).message).toContain(messageFragment);
+}
+
 describe("KvClient", () => {
   it("encodes the explicitly requested Sync durability in BEGIN payload", async () => {
     const connection = new FakeKvConnection();
@@ -94,6 +115,39 @@ describe("KvClient", () => {
     expect(reader.readString()).toBe("realm/area/resource");
     reader.readU8();
     expect(reader.readU8()).toBe(0);
+  });
+
+  it("rejects wrong-scheme KV routes before sending", async () => {
+    const connection = new FakeKvConnection();
+    const client = new KvClient(connection as unknown as Connection);
+
+    await expectRouteValidationFailure(
+      client.begin("queue://realm/area/resource", { durability: "Buffered" }),
+      "expected kv://{realm}/{area}/{resource} or {realm}/{area}/{resource}",
+    );
+    expect(connection.lastRequest).toBeNull();
+  });
+
+  it("rejects empty-segment KV routes before sending", async () => {
+    const connection = new FakeKvConnection();
+    const client = new KvClient(connection as unknown as Connection);
+
+    await expectRouteValidationFailure(
+      client.begin("kv://realm//resource", { durability: "Buffered" }),
+      "no empty segments or wildcards",
+    );
+    expect(connection.lastRequest).toBeNull();
+  });
+
+  it("rejects wildcard KV routes before sending", async () => {
+    const connection = new FakeKvConnection();
+    const client = new KvClient(connection as unknown as Connection);
+
+    await expectRouteValidationFailure(
+      client.begin("kv://realm/area/*", { durability: "Buffered" }),
+      "no empty segments or wildcards",
+    );
+    expect(connection.lastRequest).toBeNull();
   });
 
   it("rejects BEGIN when durability is omitted", async () => {

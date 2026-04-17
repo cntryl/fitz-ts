@@ -21,14 +21,14 @@ import {
   ScheduleNotification,
   ScheduleSubscription,
 } from "./types";
+import { isRouteShape } from "../_routes";
 
-function isValidConcreteScheduleRoute(route: string): boolean {
-  return /^schedule:\/\/([^/*]+)\/([^/*]+)\/([^/*]+)\/([^/*]+)$/.test(route);
-}
-
-function assertConcreteScheduleRoute(route: string, noun: string): void {
-  if (!isValidConcreteScheduleRoute(route)) {
-    throw new ScheduleError(`Invalid ${noun}: ${route}`, "INVALID_ROUTE");
+function assertConcreteScheduleRoute(route: string): void {
+  if (!isRouteShape(route, "schedule", 4)) {
+    throw new ScheduleError(
+      `Invalid schedule route: ${route} (expected schedule://{realm}/{area}/{resource}/{operation}, no empty segments or wildcards)`,
+      "INVALID_ROUTE",
+    );
   }
 }
 
@@ -76,7 +76,7 @@ export class ScheduleClient extends DomainClient {
     cronExpr: string,
     payload: Uint8Array = new Uint8Array(),
   ): Promise<string> {
-    assertConcreteScheduleRoute(route, "route");
+    assertConcreteScheduleRoute(route);
 
     const response = await this.requestFrame(
       MSG_SCHEDULE_CREATE,
@@ -87,7 +87,7 @@ export class ScheduleClient extends DomainClient {
   }
 
   async cancel(route: string): Promise<void> {
-    assertConcreteScheduleRoute(route, "route");
+    assertConcreteScheduleRoute(route);
 
     const response = await this.requestFrame(
       MSG_SCHEDULE_CANCEL,
@@ -106,7 +106,7 @@ export class ScheduleClient extends DomainClient {
   }
 
   async subscribe(pattern: string, handler: ScheduleHandler): Promise<ScheduleSubscription> {
-    assertConcreteScheduleRoute(pattern, "pattern");
+    assertConcreteScheduleRoute(pattern);
 
     this.initNotifyHandler();
     const existing = this.subscriptionsByPattern.get(pattern);

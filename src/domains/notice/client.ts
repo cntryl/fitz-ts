@@ -11,6 +11,7 @@ import {
   MSG_NOTICE_UNSUBSCRIBE,
 } from "../../frame/types";
 import { DomainClient } from "../base";
+import { isRouteShape, isSelectorRouteShape } from "../_routes";
 import { NoticeCodec } from "./codec";
 import { NoticeHandler, NoticeMsg, NoticeSubscription } from "./types";
 
@@ -54,6 +55,7 @@ export class NoticeClient extends DomainClient {
   }
 
   async publish(route: string, body: Uint8Array): Promise<void> {
+    assertNoticeRoute(route);
     const payload = NoticeCodec.encodePublish(route, body);
     const cancelOptionalResponse = this.connection
       .getMultiplexer()
@@ -67,6 +69,7 @@ export class NoticeClient extends DomainClient {
   }
 
   async subscribe(pattern: string, handler: NoticeHandler): Promise<NoticeSubscription> {
+    assertNoticePattern(pattern);
     this.initNotifyHandler();
     const existing = this.subscriptionsByPattern.get(pattern);
     if (existing) {
@@ -158,3 +161,21 @@ export class NoticeClient extends DomainClient {
 }
 
 export * from "./types";
+
+function assertNoticeRoute(route: string): void {
+  if (!isRouteShape(route, "notice", 3)) {
+    throw new NoticeError(
+      `Invalid notice route: ${route} (expected notice://{realm}/{area}/{resource}, no empty segments or wildcards)`,
+      "INVALID_ROUTE",
+    );
+  }
+}
+
+function assertNoticePattern(pattern: string): void {
+  if (!isSelectorRouteShape(pattern, "notice", 3, { allowRealmWildcard: true })) {
+    throw new NoticeError(
+      `Invalid notice pattern: ${pattern} (expected notice://{realm}/{area}/{resource}, notice://{realm}/{area}/*, or notice://{realm}/**)`,
+      "INVALID_ROUTE",
+    );
+  }
+}

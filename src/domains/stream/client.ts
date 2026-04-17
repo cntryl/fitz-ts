@@ -30,6 +30,7 @@ import {
   MSG_STREAM_UNSUBSCRIBE,
   MSG_STREAM_NOTIFY,
 } from "../../frame/types";
+import { isRouteShape, isSelectorRouteShape } from "../_routes";
 
 type StreamSubscriptionState = {
   subId: bigint;
@@ -74,6 +75,7 @@ export class StreamClient extends DomainClient {
    * @returns StreamSession for append/commit/rollback
    */
   async begin(route: string, ingestMetadata?: Uint8Array): Promise<StreamSession> {
+    assertStreamRoute(route);
     const payload = StreamCodec.encodeBegin(route, ingestMetadata);
     const response = await this.requestFrame(MSG_STREAM_BEGIN, payload);
     const decoded = StreamCodec.decodeBeginResponse(response);
@@ -95,6 +97,7 @@ export class StreamClient extends DomainClient {
    * @returns Array of stream records
    */
   async read(route: string, startOffset: bigint, limit: number = 100): Promise<StreamRecord[]> {
+    assertStreamPattern(route);
     const payload = StreamCodec.encodeRead(route, startOffset, limit);
     const response = await this.requestFrame(MSG_STREAM_READ, payload);
     const decoded = StreamCodec.decodeReadResponse(response);
@@ -127,6 +130,7 @@ export class StreamClient extends DomainClient {
    * @returns The most recent record, or null if stream is empty
    */
   async peek(route: string): Promise<StreamRecord | null> {
+    assertStreamRoute(route);
     const payload = StreamCodec.encodeLast(route);
     const response = await this.requestFrame(MSG_STREAM_LAST, payload);
     const decoded = StreamCodec.decodeLastResponse(response);
@@ -142,6 +146,7 @@ export class StreamClient extends DomainClient {
    * @returns Stream metadata (offsets and record count)
    */
   async metadata(route: string): Promise<StreamMetadata> {
+    assertStreamRoute(route);
     const payload = StreamCodec.encodeMetadata(route);
     const response = await this.requestFrame(MSG_STREAM_GET_METADATA, payload);
     const decoded = StreamCodec.decodeMetadataResponse(response);
@@ -158,6 +163,7 @@ export class StreamClient extends DomainClient {
   }
 
   async subscribe(pattern: string, handler: StreamCommitHandler): Promise<StreamSubscription> {
+    assertStreamPattern(pattern);
     this.initNotifyHandler();
     const existing = this.subscriptionsByPattern.get(pattern);
     if (existing) {
@@ -166,6 +172,24 @@ export class StreamClient extends DomainClient {
 
     const subId = await this.subscribeWire(pattern);
     return this.addLocalSubscription(pattern, subId, handler);
+
+function assertStreamRoute(route: string): void {
+  if (!isRouteShape(route, "stream", 3)) {
+    throw new StreamError(
+      `Invalid stream route: ${route} (expected stream://{realm}/{area}/{resource}, no empty segments or wildcards)`,
+      "INVALID_ROUTE",
+    );
+  }
+}
+
+function assertStreamPattern(pattern: string): void {
+  if (!isSelectorRouteShape(pattern, "stream", 3, { allowRealmWildcard: true })) {
+    throw new StreamError(
+      `Invalid stream pattern: ${pattern} (expected stream://{realm}/{area}/{resource}, stream://{realm}/{area}/*, or stream://{realm}/**)`,
+      "INVALID_ROUTE",
+    );
+  }
+}
   }
 
   private async subscribeWire(pattern: string): Promise<bigint> {

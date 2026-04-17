@@ -23,6 +23,7 @@ import {
 import { ConnectionError, RpcError, TransportError } from "../../core/errors";
 import { ConnectionState } from "../../core/types";
 import { utf8Encoder } from "../../core/buffer";
+import { isConcreteRouteShape } from "../_routes";
 
 /**
  * `ResponseWriter` implementation used by worker handlers.
@@ -253,6 +254,7 @@ export class RpcClient extends DomainClient {
     body: Uint8Array,
     options?: RequestOptions,
   ): Promise<AsyncIterableIterator<ResponseFrame>> {
+    assertRpcRoute(route);
     this.initRpcHandler();
 
     const timeoutMs = options?.timeoutMs ?? 30000;
@@ -261,7 +263,6 @@ export class RpcClient extends DomainClient {
 
     const iterator = new RpcIterator(correlationId, this, timeoutMs, options?.signal);
     this.pendingRpcs.set(correlationKey, iterator);
-
     try {
       const payload = RpcCodec.encodeRequest(correlationId, route, "", body);
       const response = await this.requestFrame(MSG_RPC_REQUEST, payload, options?.signal);
@@ -290,8 +291,8 @@ export class RpcClient extends DomainClient {
    * @returns Worker registration with `unsubscribe()`.
    */
   async registerWorker(route: string, handler: RpcHandler): Promise<RpcSubscription> {
+    assertRpcRoute(route);
     this.initRpcHandler();
-
     const payload = RpcCodec.encodeSubscribeWorker(route);
     const response = await this.requestFrame(MSG_RPC_SUBSCRIBE_WORKER, payload);
     const decoded = RpcCodec.decodeSubscribeWorkerResponse(response);
@@ -447,3 +448,12 @@ export class RpcClient extends DomainClient {
 }
 
 export * from "./types";
+
+function assertRpcRoute(route: string): void {
+  if (!isConcreteRouteShape(route, "rpc")) {
+    throw new RpcError(
+      `Invalid rpc route: ${route} (expected rpc://{realm}/{area}/{resource} or any other concrete rpc route, no empty segments or wildcards)`,
+      "INVALID_ROUTE",
+    );
+  }
+}
