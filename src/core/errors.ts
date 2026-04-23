@@ -4,20 +4,34 @@ export const ErrKvConflictingWrite = 3;
 export const ErrKvKeyNotFound = 4;
 export const ErrKvOperationNotAllowed = 5;
 
+export const ErrCodeKvIsolationConflict = 1004;
+export const ErrCodeKvBackendError = 1009;
+
 export const ErrQueueNotFound = 1;
 export const ErrQueueMessageNotFound = 2;
 export const ErrQueueInvalidToken = 3;
 export const ErrQueueFull = 4;
 export const ErrQueueInvalidDelay = 5;
 
+export const ErrCodeQueueFull = 4005;
+
 export const ErrRpcTimeout = 1;
 export const ErrRpcHandlerNotFound = 2;
 export const ErrRpcHandlerError = 3;
 export const ErrRpcInvalidRequest = 4;
 
+export const ErrCodeRpcTimeout = 6001;
+export const ErrCodeRpcWorkerNotFound = 6002;
+export const ErrCodeRpcBackpressure = 6003;
+export const ErrCodeRpcRouteNotRegistered = 6004;
+export const ErrCodeRpcCorrelationNotFound = 6005;
+export const ErrCodeRpcUnauthorized = 6009;
+
 export const ErrLeaseHeld = 1;
 export const ErrLeaseNotFound = 2;
 export const ErrLeaseInvalidToken = 3;
+
+export const ErrCodeLeaseHeld = 5001;
 
 export const ErrNoticeGeneral = 1;
 
@@ -36,15 +50,19 @@ export const ErrScheduleInvalidDelay = 4;
 export const ErrScheduleInvalidTimestamp = 5;
 
 const retryableErrorCodes = new Set([
-  "KV_4",
+  "KV_3",
+  `KV_${ErrCodeKvIsolationConflict}`,
+  `KV_${ErrCodeKvBackendError}`,
   "QUEUE_4",
+  `QUEUE_${ErrCodeQueueFull}`,
   "LEASE_1",
-  "NOTICE_1",
-  "STREAM_1",
-  "STREAM_2",
-  "STREAM_3",
-  "STREAM_4",
+  `LEASE_${ErrCodeLeaseHeld}`,
   "RPC_1",
+  "RPC_2",
+  `RPC_${ErrCodeRpcTimeout}`,
+  `RPC_${ErrCodeRpcWorkerNotFound}`,
+  `RPC_${ErrCodeRpcBackpressure}`,
+  `RPC_${ErrCodeRpcRouteNotRegistered}`,
 ]);
 
 function retryableKey(error: FitzError): string | null {

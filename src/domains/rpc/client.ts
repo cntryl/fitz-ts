@@ -20,7 +20,12 @@ import {
   MSG_RPC_SUBSCRIBE_WORKER,
   MSG_RPC_UNSUBSCRIBE_WORKER,
 } from "../../frame/types";
-import { ConnectionError, RpcError, TransportError } from "../../core/errors";
+import {
+  ConnectionError,
+  ErrCodeRpcWorkerNotFound,
+  RpcError,
+  TransportError,
+} from "../../core/errors";
 import { ConnectionState } from "../../core/types";
 import { utf8Encoder } from "../../core/buffer";
 import { isConcreteRouteShape } from "../_routes";
@@ -391,7 +396,7 @@ export class RpcClient extends DomainClient {
     }
 
     const terminalError = RpcCodec.decodeErrorBody(body);
-    if (terminalError?.code === 6002) {
+    if (terminalError?.code === ErrCodeRpcWorkerNotFound) {
       this.pendingRpcs.delete(key);
       return;
     }
