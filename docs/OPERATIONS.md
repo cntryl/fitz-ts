@@ -173,7 +173,8 @@ npm ci
 npm run verify:fast
 docker compose -f ../fitz-go/compose.yml up -d
 npm run verify
-npm run bench -- --run tests/bench/hotpath.bench.ts
+npm run bench -- --run benches/hotpath.bench.ts
+npm run test:unit -- tests/unit/perf/hotpath-thresholds.test.ts
 docker compose -f ../fitz-go/compose.yml down --volumes
 npm run pack:smoke
 ```

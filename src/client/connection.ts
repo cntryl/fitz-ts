@@ -99,6 +99,10 @@ function abortError(): Error {
   return error;
 }
 
+function connectionClosedError(): ConnectionError {
+  return new ConnectionError("Connection closed", { state: ConnectionState.Closed });
+}
+
 function throwIfAborted(signal?: AbortSignal): void {
   if (signal?.aborted) {
     throw abortError();
@@ -302,11 +306,19 @@ export class Connection {
     throwIfAborted(signal);
     this.receiveLoopAbort = false;
     this.frameParser.parseFrames(new Uint8Array(0));
-    this.transport = this.transportFactory();
+    const transport = this.transportFactory();
+    this.transport = transport;
     this.setState(isReconnect ? ConnectionState.Reconnecting : ConnectionState.Connecting);
     this.emitLifecycleEvent(isReconnect ? "reconnect_start" : "connect_start");
 
-    await this.transport.connect();
+    await transport.connect();
+    if (this.closeRequested) {
+      await transport.close().catch(() => undefined);
+      if (this.transport === transport) {
+        this.transport = null;
+      }
+      throw connectionClosedError();
+    }
     throwIfAborted(signal);
     this.receiveLoop = this.startReceiveLoop();
 
@@ -317,13 +329,22 @@ export class Connection {
 
     try {
       await this.sendConnect();
+      if (this.closeRequested) {
+        throw connectionClosedError();
+      }
       throwIfAborted(signal);
       await Promise.race([this.authOutcome.promise, sleep(this.authSettleDelayMs)]);
+      if (this.closeRequested) {
+        throw connectionClosedError();
+      }
       throwIfAborted(signal);
       this.authOutcome?.resolve();
       this.authOutcome = null;
       if (isReconnect) {
         await this.restoreReconnectState();
+        if (this.closeRequested) {
+          throw connectionClosedError();
+        }
       }
       this.setState(ConnectionState.Authenticated);
       this.multiplexer.setConnected();
@@ -332,13 +353,19 @@ export class Connection {
       this.authOutcome = null;
       this.multiplexer.setDisconnected();
       this.emitDisconnect();
-      if (this.transport) {
-        await this.transport.close().catch(() => undefined);
+      if (transport) {
+        await transport.close().catch(() => undefined);
+      }
+      if (this.transport === transport) {
         this.transport = null;
       }
       const rejectedAuth = error instanceof AuthenticationError;
       this.authRejected = rejectedAuth;
-      this.setState(rejectedAuth ? ConnectionState.Closed : ConnectionState.Disconnected);
+      if (this.closeRequested) {
+        this.setState(ConnectionState.Closed);
+      } else {
+        this.setState(rejectedAuth ? ConnectionState.Closed : ConnectionState.Disconnected);
+      }
       this.emitLifecycleEvent(isReconnect ? "reconnect_failed" : "connect_failed", error);
       if (isAbortError(error)) {
         throw abortError();
@@ -435,6 +462,9 @@ export class Connection {
         await this.openAndAuthenticate(true);
         return;
       } catch (error) {
+        if (this.closeRequested) {
+          return;
+        }
         this.log("warn", "fitz.connection.reconnect_retry", {
           attempts,
           delayMs,
@@ -442,6 +472,11 @@ export class Connection {
         });
         delayMs = Math.min(delayMs * 2, this.reconnectMaxBackoffMs);
       }
+    }
+
+    if (this.closeRequested) {
+      this.setState(ConnectionState.Closed);
+      return;
     }
 
     this.setState(ConnectionState.Disconnected);

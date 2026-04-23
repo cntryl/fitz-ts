@@ -15,6 +15,8 @@ import type { Transport } from "../../../src/transport/types";
 class FakeTransport implements Transport {
   public sent: Uint8Array[] = [];
   public connected = false;
+  public connectStarted = false;
+  public connectGate: Promise<void> | null = null;
   public concurrentSends = 0;
   public maxConcurrentSends = 0;
   public sendGate: Promise<void> | null = null;
@@ -30,6 +32,10 @@ class FakeTransport implements Transport {
   }
 
   async connect(): Promise<void> {
+    this.connectStarted = true;
+    if (this.connectGate) {
+      await this.connectGate;
+    }
     this.connected = true;
   }
 
@@ -251,6 +257,45 @@ describe("Connection", () => {
     expect(factory).toHaveBeenCalledTimes(1);
     expect(second.connected).toBe(false);
     expect(connection.getState()).toBe("CLOSED");
+  });
+
+  it("does not continue reconnecting if close wins during transport connect", async () => {
+    const first = new FakeTransport();
+    const second = new FakeTransport();
+    const factory = vi.fn<() => Transport>().mockReturnValueOnce(first).mockReturnValueOnce(second);
+    let releaseConnect: () => void = () => undefined;
+
+    second.connectGate = new Promise<void>((resolve) => {
+      releaseConnect = resolve;
+    });
+
+    const connection = new Connection(factory, async () => "jwt-token", {
+      authSettleDelayMs: 0,
+      reconnect: {
+        enabled: true,
+        maxAttempts: 1,
+        backoffMs: 0,
+        maxBackoffMs: 0,
+      },
+    });
+
+    await connection.connect();
+    first.fail(new Error("boom"));
+
+    await vi.waitFor(() => {
+      expect(second.connectStarted).toBe(true);
+      expect(connection.getState()).toBe("RECONNECTING");
+    });
+
+    await connection.close();
+    releaseConnect();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(second.sent).toHaveLength(0);
+    expect(second.connected).toBe(false);
+    expect(connection.getState()).toBe("CLOSED");
+    expect(factory).toHaveBeenCalledTimes(2);
   });
 
   it("exposes the CONNECTED to AUTHENTICATING to AUTHENTICATED transition sequence", async () => {

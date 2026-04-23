@@ -33,7 +33,25 @@ npm run bench -- --run benches/hotpath.bench.ts
 
 - Benchmark suite exists and covers the primary hot paths needed for initial evidence.
 - Fresh benchmark run captured on 2026-03-25 with `npm run bench -- --run benches/hotpath.bench.ts`.
-- Numeric targets are still not formalized, so the evidence supports `PARTIAL` grading rather than `PASS` for the stronger performance requirements.
+- Numeric targets are now formalized and enforced by `tests/unit/perf/hotpath-thresholds.test.ts`, so the evidence supports `PASS` grading for the stronger performance requirements.
+
+## Release Thresholds
+
+The following budgets are enforced by `tests/unit/perf/hotpath-thresholds.test.ts` and should only move after a deliberate performance change:
+
+| Benchmark | Budget |
+| --- | --- |
+| frame encode (small payload) | <= 50 ms over 100k iterations |
+| frame decode (small payload) | <= 50 ms over 100k iterations |
+| notice publish encode | <= 150 ms over 100k iterations |
+| kv get encode | <= 150 ms over 100k iterations |
+| lease acquire encode | <= 150 ms over 100k iterations |
+| rpc call encode | <= 500 ms over 100k iterations |
+| rpc correlation id generation | <= 300 ms over 100k iterations |
+| multiplexer request/response round-trip | <= 200 ms over 10k iterations |
+| multiplexer 1k in-flight FIFO drain | <= 25 ms for one drain |
+| frame parser fragmented stream | <= 150 ms over 10k fragmented parses |
+| notice publish frame encode throughput | <= 150 ms over 100k iterations |
 
 ## Latest Captured Results
 
@@ -62,4 +80,4 @@ Interpretation:
 
 - Frame encode/decode cost is negligible relative to the other measured client-side paths.
 - The multiplexer can drain a 1,000-request in-flight FIFO workload in low-single-digit milliseconds on this machine.
-- These results are strong enough to demonstrate benchmark coverage and an initial baseline, but not yet enough to claim fixed release thresholds across environments.
+- These results are strong enough to demonstrate benchmark coverage and an initial baseline, and the named thresholds above now turn them into an explicit release gate.
