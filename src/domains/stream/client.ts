@@ -172,24 +172,6 @@ export class StreamClient extends DomainClient {
 
     const subId = await this.subscribeWire(pattern);
     return this.addLocalSubscription(pattern, subId, handler);
-
-function assertStreamRoute(route: string): void {
-  if (!isRouteShape(route, "stream", 3)) {
-    throw new StreamError(
-      `Invalid stream route: ${route} (expected stream://{realm}/{area}/{resource}, no empty segments or wildcards)`,
-      "INVALID_ROUTE",
-    );
-  }
-}
-
-function assertStreamPattern(pattern: string): void {
-  if (!isSelectorRouteShape(pattern, "stream", 3, { allowRealmWildcard: true })) {
-    throw new StreamError(
-      `Invalid stream pattern: ${pattern} (expected stream://{realm}/{area}/{resource}, stream://{realm}/{area}/*, or stream://{realm}/**)`,
-      "INVALID_ROUTE",
-    );
-  }
-}
   }
 
   private async subscribeWire(pattern: string): Promise<bigint> {
@@ -326,5 +308,23 @@ function assertStreamPattern(pattern: string): void {
 
     const statusName = statusNames[status] || `Unknown(${status})`;
     throw new StreamError(`${operation} failed: ${statusName}`, statusName, status);
+  }
+}
+
+function assertStreamRoute(route: string): void {
+  if (!isRouteShape(route, "stream", 3)) {
+    throw new StreamError(
+      `Invalid stream route: ${route} (expected stream://{realm}/{area}/{resource}, no empty segments or wildcards)`,
+      "INVALID_ROUTE",
+    );
+  }
+}
+
+function assertStreamPattern(pattern: string): void {
+  if (!isSelectorRouteShape(pattern, "stream", 3, { allowRealmWildcard: true })) {
+    throw new StreamError(
+      `Invalid stream pattern: ${pattern} (expected stream://{realm}/{area}/{resource}, stream://{realm}/{area}/*, or stream://{realm}/**)`,
+      "INVALID_ROUTE",
+    );
   }
 }

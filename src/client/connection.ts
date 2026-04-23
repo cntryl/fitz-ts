@@ -429,6 +429,9 @@ export class Connection {
 
       try {
         await sleep(delayMs);
+        if (this.closeRequested) {
+          return;
+        }
         await this.openAndAuthenticate(true);
         return;
       } catch (error) {

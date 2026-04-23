@@ -58,25 +58,14 @@ class FakeKvConnection {
   }
 }
 
-async function expectRouteValidationFailure(
-  action: Promise<unknown>,
-  messageFragment: string,
-  expectedCode = "KV_INVALID_ROUTE",
-): Promise<void> {
-  let error: unknown = null;
-  let resolved = false;
-
-  try {
-    await action;
-    resolved = true;
-  } catch (caught) {
-    error = caught;
+function expectBeginRoute(connection: FakeKvConnection, route: string): void {
+  const lastRequest = connection.lastRequest;
+  if (!lastRequest) {
+    throw new Error("Expected BEGIN request to be recorded");
   }
 
-  expect(resolved).toBe(false);
-  expect(error).not.toBeNull();
-  expect(error).toMatchObject({ code: expectedCode });
-  expect((error as Error).message).toContain(messageFragment);
+  const reader = new BufferReader(lastRequest.payload);
+  expect(reader.readString()).toBe(route);
 }
 
 describe("KvClient", () => {
@@ -117,37 +106,34 @@ describe("KvClient", () => {
     expect(reader.readU8()).toBe(0);
   });
 
-  it("rejects wrong-scheme KV routes before sending", async () => {
+  it("forwards wrong-scheme KV routes without local validation", async () => {
     const connection = new FakeKvConnection();
     const client = new KvClient(connection as unknown as Connection);
 
-    await expectRouteValidationFailure(
-      client.begin("queue://realm/area/resource", { durability: "Buffered" }),
-      "expected kv://{realm}/{area}/{resource} or {realm}/{area}/{resource}",
-    );
-    expect(connection.lastRequest).toBeNull();
+    await client.begin("queue://realm/area/resource", { durability: "Buffered" });
+
+    expect(connection.lastRequest?.messageType).toBe(MSG_KV_BEGIN);
+    expectBeginRoute(connection, "queue://realm/area/resource");
   });
 
-  it("rejects empty-segment KV routes before sending", async () => {
+  it("forwards empty-segment KV routes without local validation", async () => {
     const connection = new FakeKvConnection();
     const client = new KvClient(connection as unknown as Connection);
 
-    await expectRouteValidationFailure(
-      client.begin("kv://realm//resource", { durability: "Buffered" }),
-      "no empty segments or wildcards",
-    );
-    expect(connection.lastRequest).toBeNull();
+    await client.begin("kv://realm//resource", { durability: "Buffered" });
+
+    expect(connection.lastRequest?.messageType).toBe(MSG_KV_BEGIN);
+    expectBeginRoute(connection, "kv://realm//resource");
   });
 
-  it("rejects wildcard KV routes before sending", async () => {
+  it("forwards wildcard KV routes without local validation", async () => {
     const connection = new FakeKvConnection();
     const client = new KvClient(connection as unknown as Connection);
 
-    await expectRouteValidationFailure(
-      client.begin("kv://realm/area/*", { durability: "Buffered" }),
-      "no empty segments or wildcards",
-    );
-    expect(connection.lastRequest).toBeNull();
+    await client.begin("kv://realm/area/*", { durability: "Buffered" });
+
+    expect(connection.lastRequest?.messageType).toBe(MSG_KV_BEGIN);
+    expectBeginRoute(connection, "kv://realm/area/*");
   });
 
   it("rejects BEGIN when durability is omitted", async () => {

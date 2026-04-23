@@ -223,6 +223,36 @@ describe("Connection", () => {
     await connection.close();
   });
 
+  it("does not reconnect after close during reconnect backoff", async () => {
+    const first = new FakeTransport();
+    const second = new FakeTransport();
+    const factory = vi.fn<() => Transport>().mockReturnValueOnce(first).mockReturnValueOnce(second);
+
+    const connection = new Connection(factory, async () => "jwt-token", {
+      authSettleDelayMs: 1,
+      reconnect: {
+        enabled: true,
+        maxAttempts: 1,
+        backoffMs: 50,
+        maxBackoffMs: 50,
+      },
+    });
+
+    await connection.connect();
+    first.fail(new Error("boom"));
+
+    await vi.waitFor(() => {
+      expect(connection.getState()).toBe("RECONNECTING");
+    });
+
+    await connection.close();
+    await new Promise((resolve) => setTimeout(resolve, 75));
+
+    expect(factory).toHaveBeenCalledTimes(1);
+    expect(second.connected).toBe(false);
+    expect(connection.getState()).toBe("CLOSED");
+  });
+
   it("exposes the CONNECTED to AUTHENTICATING to AUTHENTICATED transition sequence", async () => {
     const transport = new FakeTransport();
     const events: FitzLifecycleEvent[] = [];
