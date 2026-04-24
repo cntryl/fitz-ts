@@ -20,4 +20,4 @@ The TypeScript SDK follows the canonical Fitz client docs in the server reposito
 - [PUBLIC_CONTRACT.md](PUBLIC_CONTRACT.md)
 - [GRADING.md](GRADING.md)
 
-Use the canonical docs for protocol behavior and the local docs for TypeScript-specific verification and operational guidance.
+Use the canonical docs for protocol behavior and the local docs for TypeScript-specific verification, parity evidence, and operational guidance.
