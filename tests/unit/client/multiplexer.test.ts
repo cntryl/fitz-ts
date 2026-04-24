@@ -4,10 +4,18 @@ import { Multiplexer } from "../../../src/client/multiplexer";
 import type { FitzMeter, FitzSpan, FitzTracer } from "../../../src/core/types";
 
 class FakeSpan implements FitzSpan {
+  public readonly attributes: Record<string, unknown> = {};
+  public readonly startedAttributes: Record<string, unknown>;
   public ended = false;
   public exceptions: unknown[] = [];
 
-  setAttribute(): void {}
+  constructor(startedAttributes: Record<string, unknown> = {}) {
+    this.startedAttributes = startedAttributes;
+  }
+
+  setAttribute(key: string, value: unknown): void {
+    this.attributes[key] = value;
+  }
 
   recordException(error: unknown): void {
     this.exceptions.push(error);
@@ -21,8 +29,8 @@ class FakeSpan implements FitzSpan {
 class FakeTracer implements FitzTracer {
   public spans: FakeSpan[] = [];
 
-  startSpan(): FitzSpan {
-    const span = new FakeSpan();
+  startSpan(_name: string, attributes?: Record<string, unknown>): FitzSpan {
+    const span = new FakeSpan(attributes ?? {});
     this.spans.push(span);
     return span;
   }
@@ -100,6 +108,12 @@ describe("Multiplexer", () => {
     await expect(request).resolves.toEqual(new Uint8Array([2]));
     expect(tracer.spans).toHaveLength(1);
     expect(tracer.spans[0].ended).toBe(true);
+    expect(tracer.spans[0].startedAttributes).toMatchObject({
+      messageType: 77,
+    });
+    expect(tracer.spans[0].attributes).toMatchObject({
+      "fitz.request.duration_ms": expect.any(Number),
+    });
     expect(meter.counters).toContain("fitz.request.started");
     expect(meter.counters).toContain("fitz.response.received");
     expect(meter.histograms).toContain("fitz.request.duration");
