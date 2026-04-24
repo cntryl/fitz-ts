@@ -118,6 +118,7 @@ export class LeaseCodec {
       status,
       isHeld: true,
       owner,
+      ttlRemainingSecs,
       expiresAt: BigInt(Math.floor(Date.now() / 1000)) + ttlRemainingSecs,
     };
   }

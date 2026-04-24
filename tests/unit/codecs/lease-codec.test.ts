@@ -121,6 +121,28 @@ describe("LeaseCodec", () => {
     });
   });
 
+  describe("QUERY decoding", () => {
+    it("should_decode_query_response_with_ttl_remaining_secs", () => {
+      // Arrange
+      const writer = new BufferWriter(64);
+      writer.writeU8(0); // status = success
+      writer.writeU8(1); // has_holder = yes
+      writer.writeRoute("lease://owner/test");
+      writer.writeU64BE(42n); // ttl_remaining_secs
+      writer.writeU32BE(0); // pending_waiters
+      const response = writer.getBuffer();
+
+      // Act
+      const decoded = LeaseCodec.decodeQueryResponse(response);
+
+      // Assert
+      expect(decoded.isHeld).toBe(true);
+      expect(decoded.owner).toBe("lease://owner/test");
+      expect(decoded.ttlRemainingSecs).toBe(42n);
+      expect(decoded.expiresAt).toBeDefined();
+    });
+  });
+
   describe("NOTIFY decoding", () => {
     it("should_decode_notification_payload", () => {
       // Arrange

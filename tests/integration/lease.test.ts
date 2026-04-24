@@ -114,7 +114,7 @@ describe("Lease integration", () => {
       const info = await f.client().lease().query(route);
       expect(info.isHeld).toBe(true);
       expect(
-        info.owner !== undefined || info.expiresAt !== undefined || info.token !== undefined,
+        info.owner !== undefined || info.ttlRemainingSecs !== undefined || info.token !== undefined,
       ).toBe(true);
     });
 

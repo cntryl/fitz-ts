@@ -131,6 +131,7 @@ export interface LeaseInfo {
   isHeld: boolean;
   owner?: string;
   token?: bigint;
+  ttlRemainingSecs?: bigint;
   expiresAt?: bigint;
 }
 
@@ -142,6 +143,7 @@ export interface QueryResponse {
   isHeld?: boolean;
   owner?: string;
   token?: bigint;
+  ttlRemainingSecs?: bigint;
   expiresAt?: bigint;
 }
 

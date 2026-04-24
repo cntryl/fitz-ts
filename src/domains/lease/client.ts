@@ -81,6 +81,7 @@ export class LeaseClient extends DomainClient {
       isHeld: decoded.isHeld ?? false,
       owner: decoded.owner,
       token: decoded.token,
+      ttlRemainingSecs: decoded.ttlRemainingSecs,
       expiresAt: decoded.expiresAt,
     };
   }
