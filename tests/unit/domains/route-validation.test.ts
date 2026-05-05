@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import type { Connection } from "../../../src/client/connection";
+import { BufferReader } from "../../../src/core/buffer";
 import { ConnectionState } from "../../../src/core/types";
 import {
   MSG_LEASE_ACQUIRE,
@@ -35,7 +36,11 @@ class FakeConnection {
 
   constructor(private readonly response: Uint8Array) {}
 
-  async request(messageType: number, payload: Uint8Array, _signal?: AbortSignal): Promise<Uint8Array> {
+  async request(
+    messageType: number,
+    payload: Uint8Array,
+    _signal?: AbortSignal,
+  ): Promise<Uint8Array> {
     this.lastRequest = { messageType, payload };
     return this.response;
   }
@@ -81,6 +86,10 @@ function u64Bytes(value: bigint): Uint8Array {
   return new Uint8Array(buffer);
 }
 
+function readRoute(payload: Uint8Array): string {
+  return new BufferReader(payload).readRoute();
+}
+
 describe("route forwarding", () => {
   it("forwards lease acquire routes without local validation", async () => {
     const connection = new FakeConnection(new Uint8Array([0, 1, ...u64Bytes(42n)]));
@@ -88,8 +97,10 @@ describe("route forwarding", () => {
 
     const lease = await client.acquire("lease://example/*", 30);
 
-    expect(lease.route).toBe("lease://example/*");
-    expect(lease.token).toBe(42n);
+    expect(readRoute(connection.lastRequest?.payload ?? new Uint8Array())).toBe(
+      "lease://example/*",
+    );
+    expect(lease.testOnlyInvalidToken()).toBe(43n);
     expect(connection.lastRequest?.messageType).toBe(MSG_LEASE_ACQUIRE);
   });
 
@@ -178,7 +189,10 @@ describe("route forwarding", () => {
 
     const subscription = await client.subscribe("stream://example/area/**", async () => undefined);
 
-    expect(subscription.pattern).toBe("stream://example/area/**");
+    expect(subscription.subId).toBe(7n);
+    expect(readRoute(connection.lastRequest?.payload ?? new Uint8Array())).toBe(
+      "stream://example/area/**",
+    );
     expect(connection.lastRequest?.messageType).toBe(MSG_STREAM_SUBSCRIBE);
   });
 
