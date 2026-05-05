@@ -120,6 +120,11 @@ export { StreamClient } from "./domains/stream/client";
 export type {
   StreamRecord,
   StreamMetadata,
+  StreamDiscriminator,
+  StreamFilterClause,
+  StreamFilterSet,
+  StreamAppendOptions,
+  StreamReadOptions,
   StreamSession,
   StreamCommitNotification,
   StreamCommitHandler,

@@ -13,6 +13,7 @@ import {
   StreamSession,
   StreamRecord,
   StreamMetadata,
+  StreamReadOptions,
   StreamStatus,
   StreamCommitHandler,
   StreamCommitNotification,
@@ -96,10 +97,15 @@ export class StreamClient extends DomainClient {
    * @param limit Maximum number of records to read (default: 100)
    * @returns Array of stream records
    */
-  async read(route: string, startOffset: bigint, limit: number = 100): Promise<StreamRecord[]> {
+  async read(
+    route: string,
+    startOffset: bigint,
+    limit: number = 100,
+    options?: StreamReadOptions,
+  ): Promise<StreamRecord[]> {
     assertStreamPattern(route);
-    const payload = StreamCodec.encodeRead(route, startOffset, limit);
-    const response = await this.requestFrame(MSG_STREAM_READ, payload);
+    const payload = StreamCodec.encodeRead(route, startOffset, limit, options?.filter);
+    const response = await this.requestFrame(MSG_STREAM_READ, payload, options?.signal);
     const decoded = StreamCodec.decodeReadResponse(response);
 
     this.checkStatus(decoded.status, "READ");
@@ -118,8 +124,9 @@ export class StreamClient extends DomainClient {
     route: string,
     startOffset: bigint,
     limit: number = 100,
+    options?: StreamReadOptions,
   ): Promise<AsyncIterable<StreamRecord>> {
-    const records = await this.read(route, startOffset, limit);
+    const records = await this.read(route, startOffset, limit, options);
     const iterator = new SliceIterator(records);
     return new AsyncIterableIterator(iterator);
   }

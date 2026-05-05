@@ -4,7 +4,8 @@
 
 import { describe, it, expect } from "vite-plus/test";
 import { StreamCodec } from "../../../src/domains/stream/codec";
-import { BufferWriter } from "../../../src/core/buffer";
+import { BufferReader, BufferWriter } from "../../../src/core/buffer";
+import type { StreamFilterClause, StreamFilterSet } from "../../../src/domains/stream/types";
 import { testData } from "../helpers/test-utils";
 
 function writeOptionalU64(writer: BufferWriter, value: bigint | undefined): void {
@@ -111,6 +112,94 @@ function encodeMetadataResponse(metadata: {
   return writer.getBuffer();
 }
 
+function readBincodeU32LE(bytes: Uint8Array, offset: number): [number, number] {
+  if (offset + 4 > bytes.length) {
+    throw new Error("buffer underflow");
+  }
+
+  const value =
+    bytes[offset] |
+    (bytes[offset + 1] << 8) |
+    (bytes[offset + 2] << 16) |
+    (bytes[offset + 3] << 24);
+  return [value >>> 0, offset + 4];
+}
+
+function readBincodeU64LE(bytes: Uint8Array, offset: number): [bigint, number] {
+  if (offset + 8 > bytes.length) {
+    throw new Error("buffer underflow");
+  }
+
+  let value = 0n;
+  for (let index = 0; index < 8; index += 1) {
+    value |= BigInt(bytes[offset + index]) << BigInt(index * 8);
+  }
+
+  return [value, offset + 8];
+}
+
+function readBincodeString(bytes: Uint8Array, offset: number): [string, number] {
+  const [length, afterLength] = readBincodeU64LE(bytes, offset);
+  const end = afterLength + Number(length);
+  if (end > bytes.length) {
+    throw new Error("buffer underflow");
+  }
+
+  return [Buffer.from(bytes.slice(afterLength, end)).toString("utf8"), end];
+}
+
+function decodeStreamFilterSet(bytes: Uint8Array): StreamFilterSet {
+  const [count, start] = readBincodeU64LE(bytes, 0);
+  let offset = start;
+  const clauses: StreamFilterClause[] = [];
+
+  for (let index = 0n; index < count; index += 1n) {
+    const [variant, afterVariant] = readBincodeU32LE(bytes, offset);
+    offset = afterVariant;
+
+    switch (variant) {
+      case 0: {
+        const [value, afterValue] = readBincodeString(bytes, offset);
+        offset = afterValue;
+        clauses.push({ kind: "Equals", value });
+        break;
+      }
+      case 1: {
+        const [value, afterValue] = readBincodeString(bytes, offset);
+        offset = afterValue;
+        clauses.push({ kind: "NotEquals", value });
+        break;
+      }
+      case 2: {
+        const [value, afterValue] = readBincodeString(bytes, offset);
+        offset = afterValue;
+        clauses.push({ kind: "StartsWith", value });
+        break;
+      }
+      case 3: {
+        const [valueCount, afterCount] = readBincodeU64LE(bytes, offset);
+        offset = afterCount;
+        const values: string[] = [];
+        for (let valueIndex = 0n; valueIndex < valueCount; valueIndex += 1n) {
+          const [value, afterValue] = readBincodeString(bytes, offset);
+          offset = afterValue;
+          values.push(value);
+        }
+        clauses.push({ kind: "AnyOf", values });
+        break;
+      }
+      default:
+        throw new Error(`unexpected clause variant ${variant}`);
+    }
+  }
+
+  if (offset !== bytes.length) {
+    throw new Error("buffer has trailing bytes");
+  }
+
+  return { clauses };
+}
+
 describe("StreamCodec", () => {
   describe("BEGIN encoding", () => {
     it("should_encode_begin_with_route", () => {
@@ -186,6 +275,26 @@ describe("StreamCodec", () => {
       // Assert
       expect(encoded).toBeInstanceOf(Uint8Array);
     });
+
+    it("should_encode_append_with_discriminator", () => {
+      const encoded = StreamCodec.encodeAppend(
+        456n,
+        100n,
+        testData("record1"),
+        undefined,
+        "proj.alpha",
+      );
+      const reader = new BufferReader(encoded);
+
+      expect(reader.readU64BE()).toBe(456n);
+      expect(reader.readU64BE()).toBe(100n);
+      expect(reader.readU32BE()).toBe(testData("record1").length);
+      expect(Buffer.from(reader.readBytes(testData("record1").length)).toString()).toBe("record1");
+      expect(reader.readU8()).toBe(0);
+      expect(reader.readU8()).toBe(1);
+      expect(reader.readString()).toBe("proj.alpha");
+      expect(reader.isEOF()).toBe(true);
+    });
   });
 
   describe("COMMIT encoding", () => {
@@ -212,6 +321,24 @@ describe("StreamCodec", () => {
 
       // Assert
       expect(encoded).toBeInstanceOf(Uint8Array);
+    });
+
+    it("should_encode_read_with_filter", () => {
+      const filter: StreamFilterSet = {
+        clauses: [{ kind: "Equals", value: "proj.alpha" }],
+      };
+
+      const encoded = StreamCodec.encodeRead("stream://test/events", 0n, 10, filter);
+      const reader = new BufferReader(encoded);
+
+      expect(reader.readRoute()).toBe("stream://test/events");
+      expect(reader.readU64BE()).toBe(0n);
+      expect(reader.readU64BE()).toBe(10n);
+      expect(reader.readU8()).toBe(1);
+      const filterLength = reader.readU32BE();
+      const filterBytes = reader.readBytes(filterLength);
+      expect(decodeStreamFilterSet(filterBytes)).toEqual(filter);
+      expect(reader.isEOF()).toBe(true);
     });
   });
 

@@ -144,14 +144,24 @@ describe("core errors", () => {
   });
 
   it("classifies known domain retryable codes as retryable", () => {
-    expect(isRetryable(new KvError("conflict", "CONFLICTING_WRITE", ErrCodeKvIsolationConflict))).toBe(true);
+    expect(
+      isRetryable(new KvError("conflict", "CONFLICTING_WRITE", ErrCodeKvIsolationConflict)),
+    ).toBe(true);
     expect(isRetryable(new KvError("backend", "BACKEND_ERROR", ErrCodeKvBackendError))).toBe(true);
     expect(isRetryable(new QueueError("full", "QUEUE_FULL", ErrCodeQueueFull))).toBe(true);
     expect(isRetryable(new LeaseError("held", "LEASE_HELD", ErrCodeLeaseHeld))).toBe(true);
     expect(isRetryable(new RpcError("timeout", "TIMEOUT", ErrCodeRpcTimeout))).toBe(true);
-    expect(isRetryable(new RpcError("worker missing", "WORKER_NOT_FOUND", ErrCodeRpcWorkerNotFound))).toBe(true);
-    expect(isRetryable(new RpcError("backpressure", "BACKPRESSURE", ErrCodeRpcBackpressure))).toBe(true);
-    expect(isRetryable(new RpcError("route missing", "ROUTE_NOT_REGISTERED", ErrCodeRpcRouteNotRegistered))).toBe(true);
+    expect(
+      isRetryable(new RpcError("worker missing", "WORKER_NOT_FOUND", ErrCodeRpcWorkerNotFound)),
+    ).toBe(true);
+    expect(isRetryable(new RpcError("backpressure", "BACKPRESSURE", ErrCodeRpcBackpressure))).toBe(
+      true,
+    );
+    expect(
+      isRetryable(
+        new RpcError("route missing", "ROUTE_NOT_REGISTERED", ErrCodeRpcRouteNotRegistered),
+      ),
+    ).toBe(true);
   });
 
   it("does not classify non-retryable domain errors as retryable", () => {

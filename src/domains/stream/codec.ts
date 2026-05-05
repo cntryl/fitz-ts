@@ -3,8 +3,64 @@
  * Per CLIENT_SPEC.md and fitz-go/internal/domains/stream/protocol.go
  */
 
-import { BufferWriter, BufferReader, utf8Decoder } from "../../core/buffer";
-import { StreamRecord, StreamMetadata, StreamCommitMode, StreamCommitPayload } from "./types";
+import { BufferWriter, BufferReader, utf8Decoder, utf8Encoder } from "../../core/buffer";
+import {
+  StreamCommitMode,
+  StreamCommitPayload,
+  StreamDiscriminator,
+  StreamFilterClause,
+  StreamFilterSet,
+  StreamMetadata,
+  StreamRecord,
+} from "./types";
+
+class BincodeWriter {
+  private bytes: number[] = [];
+
+  writeU8(value: number): void {
+    this.bytes.push(value & 0xff);
+  }
+
+  writeU32(value: number): void {
+    const unsigned = value >>> 0;
+    this.bytes.push(
+      unsigned & 0xff,
+      (unsigned >>> 8) & 0xff,
+      (unsigned >>> 16) & 0xff,
+      (unsigned >>> 24) & 0xff,
+    );
+  }
+
+  writeU64(value: bigint): void {
+    const masked = BigInt.asUintN(64, value);
+    this.bytes.push(
+      Number(masked & 0xffn),
+      Number((masked >> 8n) & 0xffn),
+      Number((masked >> 16n) & 0xffn),
+      Number((masked >> 24n) & 0xffn),
+      Number((masked >> 32n) & 0xffn),
+      Number((masked >> 40n) & 0xffn),
+      Number((masked >> 48n) & 0xffn),
+      Number((masked >> 56n) & 0xffn),
+    );
+  }
+
+  writeBytes(data: Uint8Array): void {
+    for (const byte of data) {
+      this.bytes.push(byte);
+    }
+  }
+
+  writeString(value: string): void {
+    const encoded = utf8Encoder.encode(value);
+    this.writeU64(BigInt(encoded.length));
+    this.writeBytes(encoded);
+  }
+
+  finish(): Uint8Array {
+    return Uint8Array.from(this.bytes);
+  }
+}
 
 export class StreamCodec {
   /**
@@ -38,13 +94,14 @@ export class StreamCodec {
 
   /**
    * Encode APPEND request
-   * Payload: [session_id: u64][expected_offset: u64][body: bytes][has_metadata: u8][metadata?: bytes]
+   * Payload: [session_id: u64][expected_offset: u64][body: bytes][has_metadata: u8][metadata?: bytes][has_discriminator: u8][discriminator?: string]
    */
   static encodeAppend(
     sessionId: bigint,
     expectedOffset: bigint,
     body: Uint8Array,
     metadata?: Uint8Array,
+    discriminator?: StreamDiscriminator,
   ): Uint8Array {
     const writer = new BufferWriter(512);
     writer.writeU64BE(sessionId);
@@ -58,6 +115,14 @@ export class StreamCodec {
     } else {
       writer.writeU8(0);
     }
+
+    if (discriminator !== undefined && discriminator.length > 0) {
+      writer.writeU8(1);
+      writer.writeString(discriminator);
+    } else {
+      writer.writeU8(0);
+    }
+
     return writer.getBuffer();
   }
 
@@ -121,21 +186,24 @@ export class StreamCodec {
 
   /**
    * Encode READ request
-   * Payload: [route: string][start_offset: u64][limit: u64][has_max_bytes: u8][max_bytes?: u64]
+   * Payload: [route: string][start_offset: u64][limit: u64][has_filter: u8][filter_length?: u32][filter?: bincode]
    */
   static encodeRead(
     route: string,
     startOffset: bigint,
     limit: number,
-    maxBytes?: bigint,
+    filter?: StreamFilterSet,
   ): Uint8Array {
     const writer = new BufferWriter(256);
     writer.writeRoute(route);
     writer.writeU64BE(startOffset);
     writer.writeU64BE(BigInt(limit));
-    if (maxBytes !== undefined) {
+    const filterBytes =
+      filter && filter.clauses.length > 0 ? encodeStreamFilterSet(filter) : undefined;
+    if (filterBytes !== undefined) {
       writer.writeU8(1);
-      writer.writeU64BE(maxBytes);
+      writer.writeU32BE(filterBytes.length);
+      writer.writeBytes(filterBytes);
     } else {
       writer.writeU8(0);
     }
@@ -362,5 +430,40 @@ export class StreamCodec {
     const dataLength = reader.readU32BE();
     const data = reader.readBytes(dataLength);
     return { status, sessionId, data };
+  }
+}
+
+function encodeStreamFilterSet(filter: StreamFilterSet): Uint8Array {
+  const writer = new BincodeWriter();
+  writer.writeU64(BigInt(filter.clauses.length));
+
+  for (const clause of filter.clauses) {
+    encodeStreamFilterClause(writer, clause);
+  }
+
+  return writer.finish();
+}
+
+function encodeStreamFilterClause(writer: BincodeWriter, clause: StreamFilterClause): void {
+  switch (clause.kind) {
+    case "Equals":
+      writer.writeU32(0);
+      writer.writeString(clause.value);
+      return;
+    case "NotEquals":
+      writer.writeU32(1);
+      writer.writeString(clause.value);
+      return;
+    case "StartsWith":
+      writer.writeU32(2);
+      writer.writeString(clause.value);
+      return;
+    case "AnyOf":
+      writer.writeU32(3);
+      writer.writeU64(BigInt(clause.values.length));
+      for (const value of clause.values) {
+        writer.writeString(value);
+      }
+      return;
   }
 }

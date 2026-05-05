@@ -2,6 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import { TestFixture } from "./fixture/fixture";
 import { runWithBothTransports } from "./fixture/transport";
+import type { StreamFilterSet } from "../../src/domains/stream/types";
 
 const b = (value: string) => Buffer.from(value);
 
@@ -36,6 +37,25 @@ describe("Stream integration", () => {
       for (let i = 1; i < records.length; i += 1) {
         expect(records[i].offset).toBeGreaterThan(records[i - 1].offset);
       }
+    });
+
+    it("should read only matching discriminator records", async () => {
+      const f = new TestFixture(transport, authMode);
+      await f.connectOrFail();
+
+      const route = f.uniqueRoute("stream");
+      const session = await f.client().stream().begin(route);
+      await session.append(0n, b("alpha"), { discriminator: "proj.alpha" });
+      await session.append(1n, b("beta"), { discriminator: "audit.beta" });
+      await session.commit("Sync");
+
+      const filter: StreamFilterSet = {
+        clauses: [{ kind: "Equals", value: "proj.alpha" }],
+      };
+      const records = await f.client().stream().read(route, 0n, 10, { filter });
+
+      expect(records).toHaveLength(1);
+      expect(Buffer.from(records[0].body).toString()).toBe("alpha");
     });
 
     it("should reject append when expected offset is mismatched", async () => {

@@ -5,7 +5,7 @@
 
 import { Connection } from "../../client/connection";
 import { StreamCodec } from "./codec";
-import { StreamCommitMode, StreamSession, StreamStatus } from "./types";
+import { StreamAppendOptions, StreamCommitMode, StreamSession, StreamStatus } from "./types";
 import { StreamError } from "../../core/errors";
 import { MSG_STREAM_APPEND, MSG_STREAM_COMMIT, MSG_STREAM_ROLLBACK } from "../../frame/types";
 
@@ -27,11 +27,30 @@ export class StreamSessionImpl implements StreamSession {
    * Append a record to the stream.
    * Returns the assigned offset
    */
-  async append(expectedOffset: bigint, body: Uint8Array, signal?: AbortSignal): Promise<bigint> {
+  async append(expectedOffset: bigint, body: Uint8Array, signal?: AbortSignal): Promise<bigint>;
+  async append(
+    expectedOffset: bigint,
+    body: Uint8Array,
+    options?: StreamAppendOptions,
+    signal?: AbortSignal,
+  ): Promise<bigint>;
+  async append(
+    expectedOffset: bigint,
+    body: Uint8Array,
+    optionsOrSignal?: AbortSignal | StreamAppendOptions,
+    signal?: AbortSignal,
+  ): Promise<bigint> {
     this.ensureOpen();
 
-    const payload = StreamCodec.encodeAppend(this.sessionId, expectedOffset, body);
-    const response = await this.connection.request(MSG_STREAM_APPEND, payload, signal);
+    const { options, requestSignal } = normalizeAppendArguments(optionsOrSignal, signal);
+    const payload = StreamCodec.encodeAppend(
+      this.sessionId,
+      expectedOffset,
+      body,
+      undefined,
+      options?.discriminator,
+    );
+    const response = await this.connection.request(MSG_STREAM_APPEND, payload, requestSignal);
     const decoded = StreamCodec.decodeAppendResponse(response);
 
     this.checkStatus(decoded.status, "APPEND");
@@ -105,4 +124,27 @@ export class StreamSessionImpl implements StreamSession {
     const statusName = statusNames[status] || `Unknown(${status})`;
     throw new StreamError(`${operation} failed: ${statusName}`, statusName, status);
   }
+}
+
+function normalizeAppendArguments(
+  optionsOrSignal?: AbortSignal | StreamAppendOptions,
+  signal?: AbortSignal,
+): { options?: StreamAppendOptions; requestSignal?: AbortSignal } {
+  if (isAbortSignal(optionsOrSignal)) {
+    return { requestSignal: optionsOrSignal };
+  }
+
+  return {
+    options: optionsOrSignal,
+    requestSignal: signal,
+  };
+}
+
+function isAbortSignal(value: unknown): value is AbortSignal {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "aborted" in value &&
+    typeof (value as AbortSignal).addEventListener === "function"
+  );
 }

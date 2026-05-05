@@ -55,7 +55,10 @@ function measureSync(iterations: number, callback: () => void): number {
   return performance.now() - startedAt;
 }
 
-async function measureAsync(iterations: number, callback: () => void | Promise<void>): Promise<number> {
+async function measureAsync(
+  iterations: number,
+  callback: () => void | Promise<void>,
+): Promise<number> {
   for (let index = 0; index < Math.min(100, iterations); index += 1) {
     await callback();
   }

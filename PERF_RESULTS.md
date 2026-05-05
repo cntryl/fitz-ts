@@ -39,19 +39,19 @@ npm run bench -- --run benches/hotpath.bench.ts
 
 The following budgets are enforced by `tests/unit/perf/hotpath-thresholds.test.ts` and should only move after a deliberate performance change:
 
-| Benchmark | Budget |
-| --- | --- |
-| frame encode (small payload) | <= 50 ms over 100k iterations |
-| frame decode (small payload) | <= 50 ms over 100k iterations |
-| notice publish encode | <= 150 ms over 100k iterations |
-| kv get encode | <= 150 ms over 100k iterations |
-| lease acquire encode | <= 150 ms over 100k iterations |
-| rpc call encode | <= 500 ms over 100k iterations |
-| rpc correlation id generation | <= 300 ms over 100k iterations |
-| multiplexer request/response round-trip | <= 200 ms over 10k iterations |
-| multiplexer 1k in-flight FIFO drain | <= 25 ms for one drain |
-| frame parser fragmented stream | <= 150 ms over 10k fragmented parses |
-| notice publish frame encode throughput | <= 150 ms over 100k iterations |
+| Benchmark                               | Budget                               |
+| --------------------------------------- | ------------------------------------ |
+| frame encode (small payload)            | <= 50 ms over 100k iterations        |
+| frame decode (small payload)            | <= 50 ms over 100k iterations        |
+| notice publish encode                   | <= 150 ms over 100k iterations       |
+| kv get encode                           | <= 150 ms over 100k iterations       |
+| lease acquire encode                    | <= 150 ms over 100k iterations       |
+| rpc call encode                         | <= 500 ms over 100k iterations       |
+| rpc correlation id generation           | <= 300 ms over 100k iterations       |
+| multiplexer request/response round-trip | <= 200 ms over 10k iterations        |
+| multiplexer 1k in-flight FIFO drain     | <= 25 ms for one drain               |
+| frame parser fragmented stream          | <= 150 ms over 10k fragmented parses |
+| notice publish frame encode throughput  | <= 150 ms over 100k iterations       |
 
 ## Latest Captured Results
 

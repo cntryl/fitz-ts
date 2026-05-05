@@ -32,6 +32,27 @@ export interface StreamMetadata {
   realmWatermark?: bigint;
 }
 
+export type StreamDiscriminator = string;
+
+export type StreamFilterClause =
+  | { kind: "Equals"; value: string }
+  | { kind: "NotEquals"; value: string }
+  | { kind: "StartsWith"; value: string }
+  | { kind: "AnyOf"; values: string[] };
+
+export interface StreamFilterSet {
+  clauses: StreamFilterClause[];
+}
+
+export interface StreamAppendOptions {
+  discriminator?: StreamDiscriminator;
+}
+
+export interface StreamReadOptions {
+  filter?: StreamFilterSet;
+  signal?: AbortSignal;
+}
+
 export type StreamCommitMode = "Buffered" | "Sync";
 
 export interface StreamCommitPayload {
@@ -82,6 +103,12 @@ export interface StreamSession {
    * Returns the assigned offset
    */
   append(expectedOffset: bigint, body: Uint8Array, signal?: AbortSignal): Promise<bigint>;
+  append(
+    expectedOffset: bigint,
+    body: Uint8Array,
+    options?: StreamAppendOptions,
+    signal?: AbortSignal,
+  ): Promise<bigint>;
 
   /**
    * Commit the write session and make appended records durable.
