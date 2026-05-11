@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { BufferReader } from "../../../src/core/buffer";
+import { BufferReader, BufferWriter } from "../../../src/core/buffer";
 import { ConnectionError } from "../../../src/core/errors";
 import { MSG_STREAM_APPEND, MSG_STREAM_BEGIN, MSG_STREAM_READ } from "../../../src/frame/types";
 import { StreamClient } from "../../../src/domains/stream/client";
@@ -12,7 +12,10 @@ class FakeStreamConnection {
   public lastPayload: Uint8Array | undefined;
   private disconnectListeners = new Set<() => void>();
 
-  constructor(private readonly appendMode: "pending" | "success" = "pending") {}
+  constructor(
+    private readonly appendMode: "pending" | "success" = "pending",
+    private readonly readResponse: Uint8Array = new Uint8Array([0]),
+  ) {}
 
   async request(
     messageType: number,
@@ -49,7 +52,7 @@ class FakeStreamConnection {
     }
 
     if (messageType === MSG_STREAM_READ) {
-      return new Uint8Array([0]);
+      return this.readResponse;
     }
 
     throw new ConnectionError("disconnected");
@@ -137,10 +140,142 @@ describe("StreamClient", () => {
     expect(reader.readRoute()).toBe("stream://realm/area/resource");
     expect(reader.readU64BE()).toBe(5n);
     expect(reader.readU64BE()).toBe(10n);
+    expect(reader.readU8()).toBe(0);
     expect(reader.readU8()).toBe(1);
     const filterLength = reader.readU32BE();
     expect(filterLength).toBeGreaterThan(0);
     expect(reader.readBytes(filterLength)).toBeInstanceOf(Uint8Array);
     expect(reader.isEOF()).toBe(true);
   });
+
+  it("returns read pages with filtered markers and preserves event-only read compatibility", async () => {
+    const readResponse = encodeWrappedReadResponse(
+      [
+        encodeReadEvent({
+          offset: 4n,
+          areaOffset: 8n,
+          realmOffset: 12n,
+          body: new Uint8Array([1, 2, 3]),
+          timestamp: 99n,
+        }),
+        encodeReadFiltered(5n, "server_filter"),
+      ],
+      {
+        lastResourceOffset: 5n,
+        lastAreaOffset: 8n,
+        lastRealmOffset: 12n,
+        hasMore: false,
+      },
+    );
+    const connection = new FakeStreamConnection("success", readResponse);
+    const client = new StreamClient(connection as unknown as Connection);
+
+    const page = await client.readPage("stream://realm/area/resource", 4n, 10);
+    expect(page.items).toHaveLength(2);
+    expect(page.items[0]).toEqual({
+      kind: "event",
+      record: {
+        offset: 4n,
+        areaOffset: 8n,
+        realmOffset: 12n,
+        body: new Uint8Array([1, 2, 3]),
+        timestamp: 99n,
+      },
+    });
+    expect(page.items[1]).toEqual({
+      kind: "filtered",
+      offset: 5n,
+      reason: "server_filter",
+    });
+    expect(page.cursor).toEqual({
+      lastResourceOffset: 5n,
+      lastAreaOffset: 8n,
+      lastRealmOffset: 12n,
+      hasMore: false,
+    });
+
+    const records = await client.read("stream://realm/area/resource", 4n, 10);
+    expect(records).toHaveLength(1);
+    expect(records[0].offset).toBe(4n);
+    expect(Buffer.from(records[0].body).toString("hex")).toBe("010203");
+  });
 });
+
+function encodeReadEvent(options: {
+  offset: bigint;
+  areaOffset?: bigint;
+  realmOffset?: bigint;
+  body: Uint8Array;
+  metadata?: Uint8Array;
+  timestamp: bigint;
+}): Uint8Array {
+  const writer = new BufferWriter(64);
+  writer.writeU8(0);
+  writer.writeU64BE(options.offset);
+  writeOptionalU64(writer, options.areaOffset);
+  writeOptionalU64(writer, options.realmOffset);
+  writer.writeU32BE(options.body.length);
+  writer.writeBytes(options.body);
+  writeOptionalBytes(writer, options.metadata);
+  writer.writeU64BE(options.timestamp);
+  return writer.getBuffer();
+}
+
+function writeOptionalU64(writer: BufferWriter, value: bigint | undefined): void {
+  if (value === undefined) {
+    writer.writeU8(0);
+    return;
+  }
+
+  writer.writeU8(1);
+  writer.writeU64BE(value);
+}
+
+function writeOptionalBytes(writer: BufferWriter, value: Uint8Array | undefined): void {
+  if (!value) {
+    writer.writeU8(0);
+    return;
+  }
+
+  writer.writeU8(1);
+  writer.writeU32BE(value.length);
+  writer.writeBytes(value);
+}
+
+function encodeReadFiltered(offset: bigint, reason?: "server_filter" | "permission" | "projection"): Uint8Array {
+  const writer = new BufferWriter(16);
+  writer.writeU8(1);
+  writer.writeU64BE(offset);
+  writer.writeU8(reason === undefined ? 0 : reason === "server_filter" ? 1 : reason === "permission" ? 2 : 3);
+  return writer.getBuffer();
+}
+
+function encodeWrappedReadResponse(items: Uint8Array[], cursor: {
+  lastResourceOffset: bigint;
+  lastAreaOffset?: bigint;
+  lastRealmOffset?: bigint;
+  hasMore: boolean;
+}): Uint8Array {
+  const data = new BufferWriter(256);
+  data.writeU32BE(items.length);
+  for (const item of items) {
+    data.writeBytes(item);
+  }
+  data.writeU64BE(cursor.lastResourceOffset);
+  data.writeU8(cursor.lastAreaOffset === undefined ? 0 : 1);
+  if (cursor.lastAreaOffset !== undefined) {
+    data.writeU64BE(cursor.lastAreaOffset);
+  }
+  data.writeU8(cursor.lastRealmOffset === undefined ? 0 : 1);
+  if (cursor.lastRealmOffset !== undefined) {
+    data.writeU64BE(cursor.lastRealmOffset);
+  }
+  data.writeU8(cursor.hasMore ? 1 : 0);
+
+  const writer = new BufferWriter(320);
+  writer.writeU8(0);
+  writer.writeU8(0);
+  writer.writeU32BE(data.getLength());
+  writer.writeBytes(data.getBuffer());
+  return writer.getBuffer();
+}

@@ -10,8 +10,13 @@ import {
   StreamDiscriminator,
   StreamFilterClause,
   StreamFilterSet,
+  StreamFilteredReason,
   StreamMetadata,
   StreamRecord,
+  StreamReadCursor,
+  StreamReadItem,
+  StreamReadPage,
+  StreamReadOptions,
 } from "./types";
 
 class BincodeWriter {
@@ -186,18 +191,26 @@ export class StreamCodec {
 
   /**
    * Encode READ request
-   * Payload: [route: string][start_offset: u64][limit: u64][has_filter: u8][filter_length?: u32][filter?: bincode]
+   * Payload: [route: string][start_offset: u64][limit: u64][has_max_bytes: u8][max_bytes?: u64][has_filter: u8][filter_length?: u32][filter?: bincode]
    */
   static encodeRead(
     route: string,
     startOffset: bigint,
     limit: number,
-    filter?: StreamFilterSet,
+    options?: StreamReadOptions,
   ): Uint8Array {
     const writer = new BufferWriter(256);
     writer.writeRoute(route);
     writer.writeU64BE(startOffset);
     writer.writeU64BE(BigInt(limit));
+    if (options?.maxBytes !== undefined) {
+      writer.writeU8(1);
+      writer.writeU64BE(options.maxBytes);
+    } else {
+      writer.writeU8(0);
+    }
+
+    const filter = options?.filter;
     const filterBytes =
       filter && filter.clauses.length > 0 ? encodeStreamFilterSet(filter) : undefined;
     if (filterBytes !== undefined) {
@@ -216,26 +229,38 @@ export class StreamCodec {
    */
   static decodeReadResponse(payload: Uint8Array): {
     status: number;
-    records: StreamRecord[];
+    items: StreamReadItem[];
+    cursor?: StreamReadCursor;
   } {
     const decoded = this.decodeWrappedResponse(payload);
-    if (decoded.status !== 0 || decoded.data.length === 0) {
-      return { status: decoded.status, records: [] };
+    if (decoded.status !== 0) {
+      return { status: decoded.status, items: [] };
+    }
+
+    if (decoded.data.length === 0) {
+      return { status: decoded.status, items: [] };
     }
 
     const reader = new BufferReader(decoded.data);
-    if (reader.remainingBytes() < 4) {
-      return { status: decoded.status, records: [] };
-    }
-
     const count = reader.readU32BE();
-    const records: StreamRecord[] = [];
+    const items: StreamReadItem[] = [];
 
     for (let i = 0; i < count; i++) {
-      records.push(this.decodeStreamRecord(reader));
+      items.push(this.decodeStreamReadItem(reader));
     }
 
-    return { status: decoded.status, records };
+    const cursor: StreamReadCursor = {
+      lastResourceOffset: reader.readU64BE(),
+      lastAreaOffset: reader.readOptionalU64() ?? undefined,
+      lastRealmOffset: reader.readOptionalU64() ?? undefined,
+      hasMore: reader.readU8() === 1,
+    };
+
+    if (!reader.isEOF()) {
+      throw new Error("READ response has trailing bytes");
+    }
+
+    return { status: decoded.status, items, cursor };
   }
 
   /**
@@ -392,6 +417,49 @@ export class StreamCodec {
       realmOffset,
       metadata,
     };
+  }
+
+  static flattenStreamReadItems(items: StreamReadItem[]): StreamRecord[] {
+    return items.flatMap((item) => (item.kind === "event" ? [item.record] : []));
+  }
+
+  private static decodeStreamReadItem(reader: BufferReader): StreamReadItem {
+    const tag = reader.readU8();
+    switch (tag) {
+      case 0:
+        return { kind: "event", record: this.decodeStreamRecord(reader) };
+      case 1:
+        return {
+          kind: "filtered",
+          offset: reader.readU64BE(),
+          reason: this.decodeStreamFilteredReason(reader),
+        };
+      case 2:
+        return {
+          kind: "filtered_range",
+          fromOffset: reader.readU64BE(),
+          toOffset: reader.readU64BE(),
+          reason: this.decodeStreamFilteredReason(reader),
+        };
+      default:
+        throw new Error(`unknown stream read item tag: ${tag}`);
+    }
+  }
+
+  private static decodeStreamFilteredReason(reader: BufferReader): StreamFilteredReason | undefined {
+    const tag = reader.readU8();
+    switch (tag) {
+      case 0:
+        return undefined;
+      case 1:
+        return "server_filter";
+      case 2:
+        return "permission";
+      case 3:
+        return "projection";
+      default:
+        throw new Error(`unknown stream filtered reason tag: ${tag}`);
+    }
   }
 
   private static readOptionalBytes(reader: BufferReader): Uint8Array | undefined {

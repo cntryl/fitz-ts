@@ -58,6 +58,38 @@ describe("Stream integration", () => {
       expect(Buffer.from(records[0].body).toString()).toBe("alpha");
     });
 
+    it("should expose synthetic filtered markers in read pages", async () => {
+      const f = new TestFixture(transport, authMode);
+      await f.connectOrFail();
+
+      const route = f.uniqueRoute("stream");
+      const session = await f.client().stream().begin(route);
+      await session.append(0n, b("alpha"), { discriminator: "proj.alpha" });
+      await session.append(1n, b("beta"), { discriminator: "audit.beta" });
+      await session.commit("Sync");
+
+      const filter: StreamFilterSet = {
+        clauses: [{ kind: "Equals", value: "proj.alpha" }],
+      };
+
+      const page = await f.client().stream().readPage(route, 0n, 10, { filter });
+      expect(page.items).toHaveLength(2);
+      expect(page.items[0]).toMatchObject({ kind: "event" });
+      expect(page.items[1]).toEqual({
+        kind: "filtered",
+        offset: 1n,
+        reason: "server_filter",
+      });
+      expect(page.cursor).toMatchObject({
+        lastResourceOffset: 1n,
+        hasMore: false,
+      });
+
+      const records = await f.client().stream().read(route, 0n, 10, { filter });
+      expect(records).toHaveLength(1);
+      expect(Buffer.from(records[0].body).toString()).toBe("alpha");
+    });
+
     it("should reject append when expected offset is mismatched", async () => {
       const f = new TestFixture(transport, authMode);
       await f.connectOrFail();

@@ -34,6 +34,8 @@ export interface StreamMetadata {
 
 export type StreamDiscriminator = string;
 
+export type StreamFilteredReason = "server_filter" | "permission" | "projection";
+
 export type StreamFilterClause =
   | { kind: "Equals"; value: string }
   | { kind: "NotEquals"; value: string }
@@ -49,8 +51,41 @@ export interface StreamAppendOptions {
 }
 
 export interface StreamReadOptions {
+  maxBytes?: bigint;
   filter?: StreamFilterSet;
   signal?: AbortSignal;
+}
+
+export interface StreamReadCursor {
+  lastResourceOffset: bigint;
+  lastAreaOffset?: bigint;
+  lastRealmOffset?: bigint;
+  hasMore: boolean;
+}
+
+export interface StreamReadEvent {
+  kind: "event";
+  record: StreamRecord;
+}
+
+export interface StreamReadFiltered {
+  kind: "filtered";
+  offset: bigint;
+  reason?: StreamFilteredReason;
+}
+
+export interface StreamReadFilteredRange {
+  kind: "filtered_range";
+  fromOffset: bigint;
+  toOffset: bigint;
+  reason?: StreamFilteredReason;
+}
+
+export type StreamReadItem = StreamReadEvent | StreamReadFiltered | StreamReadFilteredRange;
+
+export interface StreamReadPage {
+  items: StreamReadItem[];
+  cursor: StreamReadCursor;
 }
 
 export type StreamCommitMode = "Buffered" | "Sync";

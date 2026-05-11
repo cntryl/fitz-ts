@@ -14,6 +14,7 @@ import {
   StreamRecord,
   StreamMetadata,
   StreamReadOptions,
+  StreamReadPage,
   StreamStatus,
   StreamCommitHandler,
   StreamCommitNotification,
@@ -91,6 +92,38 @@ export class StreamClient extends DomainClient {
   }
 
   /**
+   * Read a page from the stream, including synthetic filtered markers.
+   * @param route Stream route
+   * @param startOffset Offset to start reading from (0 for beginning)
+   * @param limit Maximum number of records to read (default: 100)
+   * @returns Raw stream read page with items and cursor metadata
+   */
+  async readPage(
+    route: string,
+    startOffset: bigint,
+    limit: number = 100,
+    options?: StreamReadOptions,
+  ): Promise<StreamReadPage> {
+    assertStreamPattern(route);
+    const payload = StreamCodec.encodeRead(route, startOffset, limit, options);
+    const response = await this.requestFrame(MSG_STREAM_READ, payload, options?.signal);
+    const decoded = StreamCodec.decodeReadResponse(response);
+
+    this.checkStatus(decoded.status, "READ");
+
+    return {
+      items: decoded.items,
+      cursor:
+        decoded.cursor ?? {
+          lastResourceOffset: startOffset,
+          lastAreaOffset: undefined,
+          lastRealmOffset: undefined,
+          hasMore: false,
+        },
+    };
+  }
+
+  /**
    * Read records from the stream.
    * @param route Stream route
    * @param startOffset Offset to start reading from (0 for beginning)
@@ -103,14 +136,8 @@ export class StreamClient extends DomainClient {
     limit: number = 100,
     options?: StreamReadOptions,
   ): Promise<StreamRecord[]> {
-    assertStreamPattern(route);
-    const payload = StreamCodec.encodeRead(route, startOffset, limit, options?.filter);
-    const response = await this.requestFrame(MSG_STREAM_READ, payload, options?.signal);
-    const decoded = StreamCodec.decodeReadResponse(response);
-
-    this.checkStatus(decoded.status, "READ");
-
-    return decoded.records;
+    const page = await this.readPage(route, startOffset, limit, options);
+    return StreamCodec.flattenStreamReadItems(page.items);
   }
 
   /**

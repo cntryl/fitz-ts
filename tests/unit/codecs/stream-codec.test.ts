@@ -5,7 +5,11 @@
 import { describe, it, expect } from "vite-plus/test";
 import { StreamCodec } from "../../../src/domains/stream/codec";
 import { BufferReader, BufferWriter } from "../../../src/core/buffer";
-import type { StreamFilterClause, StreamFilterSet } from "../../../src/domains/stream/types";
+import type {
+  StreamFilterClause,
+  StreamFilterSet,
+  StreamReadItem,
+} from "../../../src/domains/stream/types";
 import { testData } from "../helpers/test-utils";
 
 function writeOptionalU64(writer: BufferWriter, value: bigint | undefined): void {
@@ -49,7 +53,7 @@ function encodeStreamRecord(options: {
 }
 
 function encodeReadResponse(
-  records: Uint8Array[],
+  items: StreamReadItem[],
   cursor: {
     lastResourceOffset: bigint;
     lastAreaOffset?: bigint;
@@ -58,9 +62,25 @@ function encodeReadResponse(
   },
 ): Uint8Array {
   const data = new BufferWriter(512);
-  data.writeU32BE(records.length);
-  for (const record of records) {
-    data.writeBytes(record);
+  data.writeU32BE(items.length);
+  for (const item of items) {
+    switch (item.kind) {
+      case "event":
+        data.writeU8(0);
+        data.writeBytes(encodeStreamRecord(item.record));
+        break;
+      case "filtered":
+        data.writeU8(1);
+        data.writeU64BE(item.offset);
+        writeFilteredReason(data, item.reason);
+        break;
+      case "filtered_range":
+        data.writeU8(2);
+        data.writeU64BE(item.fromOffset);
+        data.writeU64BE(item.toOffset);
+        writeFilteredReason(data, item.reason);
+        break;
+    }
   }
   data.writeU64BE(cursor.lastResourceOffset);
   writeOptionalU64(data, cursor.lastAreaOffset);
@@ -73,6 +93,23 @@ function encodeReadResponse(
   writer.writeU32BE(data.getLength());
   writer.writeBytes(data.getBuffer());
   return writer.getBuffer();
+}
+
+function writeFilteredReason(writer: BufferWriter, reason?: "server_filter" | "permission" | "projection"): void {
+  switch (reason) {
+    case undefined:
+      writer.writeU8(0);
+      return;
+    case "server_filter":
+      writer.writeU8(1);
+      return;
+    case "permission":
+      writer.writeU8(2);
+      return;
+    case "projection":
+      writer.writeU8(3);
+      return;
+  }
 }
 
 function encodeLastResponse(record: Uint8Array): Uint8Array {
@@ -328,12 +365,13 @@ describe("StreamCodec", () => {
         clauses: [{ kind: "Equals", value: "proj.alpha" }],
       };
 
-      const encoded = StreamCodec.encodeRead("stream://test/events", 0n, 10, filter);
+      const encoded = StreamCodec.encodeRead("stream://test/events", 0n, 10, { filter });
       const reader = new BufferReader(encoded);
 
       expect(reader.readRoute()).toBe("stream://test/events");
       expect(reader.readU64BE()).toBe(0n);
       expect(reader.readU64BE()).toBe(10n);
+      expect(reader.readU8()).toBe(0);
       expect(reader.readU8()).toBe(1);
       const filterLength = reader.readU32BE();
       const filterBytes = reader.readBytes(filterLength);
@@ -347,22 +385,28 @@ describe("StreamCodec", () => {
       // Arrange
       const response = encodeReadResponse(
         [
-          encodeStreamRecord({
-            offset: 100n,
-            areaOffset: 200n,
-            realmOffset: 300n,
-            body: testData("record1"),
-            metadata: testData("meta1"),
-            timestamp: 111n,
-          }),
-          encodeStreamRecord({
-            offset: 101n,
-            areaOffset: 201n,
-            realmOffset: 301n,
-            body: testData("record2"),
-            metadata: testData("meta2"),
-            timestamp: 222n,
-          }),
+          {
+            kind: "event",
+            record: {
+              offset: 100n,
+              areaOffset: 200n,
+              realmOffset: 300n,
+              body: testData("record1"),
+              metadata: testData("meta1"),
+              timestamp: 111n,
+            },
+          },
+          {
+            kind: "event",
+            record: {
+              offset: 101n,
+              areaOffset: 201n,
+              realmOffset: 301n,
+              body: testData("record2"),
+              metadata: testData("meta2"),
+              timestamp: 222n,
+            },
+          },
         ],
         {
           lastResourceOffset: 101n,
@@ -377,11 +421,25 @@ describe("StreamCodec", () => {
 
       // Assert
       expect(decoded.status).toBe(0);
-      expect(decoded.records).toHaveLength(2);
-      expect(decoded.records[0].offset).toBe(100n);
-      expect(decoded.records[1].offset).toBe(101n);
-      expect(decoded.records[0].timestamp).toBe(111n);
-      expect(Buffer.from(decoded.records[0].body).toString()).toBe("record1");
+      expect(decoded.items).toHaveLength(2);
+      expect(decoded.items[0].kind).toBe("event");
+      if (decoded.items[0].kind !== "event") {
+        throw new Error("expected event item");
+      }
+      expect(decoded.items[0].record.offset).toBe(100n);
+      expect(decoded.items[1].kind).toBe("event");
+      if (decoded.items[1].kind !== "event") {
+        throw new Error("expected event item");
+      }
+      expect(decoded.items[1].record.offset).toBe(101n);
+      expect(decoded.items[0].record.timestamp).toBe(111n);
+      expect(Buffer.from(decoded.items[0].record.body).toString()).toBe("record1");
+      expect(decoded.cursor).toMatchObject({
+        lastResourceOffset: 101n,
+        lastAreaOffset: 201n,
+        lastRealmOffset: 301n,
+        hasMore: false,
+      });
     });
 
     it("should_decode_read_response_empty", () => {
@@ -395,7 +453,52 @@ describe("StreamCodec", () => {
       const decoded = StreamCodec.decodeReadResponse(response);
 
       // Assert
-      expect(decoded.records).toHaveLength(0);
+      expect(decoded.items).toHaveLength(0);
+      expect(decoded.cursor).toMatchObject({
+        lastResourceOffset: 0n,
+        hasMore: false,
+      });
+    });
+
+    it("should_decode_read_response_with_filtered_marker", () => {
+      const response = encodeReadResponse(
+        [
+          {
+            kind: "filtered",
+            offset: 44n,
+            reason: "server_filter",
+          },
+          {
+            kind: "filtered_range",
+            fromOffset: 45n,
+            toOffset: 48n,
+            reason: "server_filter",
+          },
+        ],
+        {
+          lastResourceOffset: 48n,
+          hasMore: true,
+        },
+      );
+
+      const decoded = StreamCodec.decodeReadResponse(response);
+
+      expect(decoded.items).toHaveLength(2);
+      expect(decoded.items[0]).toEqual({
+        kind: "filtered",
+        offset: 44n,
+        reason: "server_filter",
+      });
+      expect(decoded.items[1]).toEqual({
+        kind: "filtered_range",
+        fromOffset: 45n,
+        toOffset: 48n,
+        reason: "server_filter",
+      });
+      expect(decoded.cursor).toMatchObject({
+        lastResourceOffset: 48n,
+        hasMore: true,
+      });
     });
   });
 
