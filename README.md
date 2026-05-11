@@ -59,6 +59,31 @@ const client = new Client({
 
 See `docs/OPERATIONS.md` for lifecycle events, metric names, and production guidance.
 
+## Stream Replay
+
+```typescript
+import type { StreamFilterSet } from "@cntryl/fitz";
+
+const filter: StreamFilterSet = {
+  clauses: [{ kind: "Equals", value: "proj.alpha" }],
+};
+
+const records = await client.stream().read("stream://realm/app/events", 0n, 100, {
+  filter,
+  maxBytes: 64_000n,
+});
+
+const page = await client.stream().readPage("stream://realm/app/events", 0n, 100, {
+  filter,
+  maxBytes: 64_000n,
+});
+
+// read() keeps the compatibility projection and returns event records only.
+// readPage() exposes synthetic filtered markers and cursor metadata.
+void records;
+void page.cursor.lastResourceOffset;
+```
+
 ## Concurrency Notes
 
 - Different domains can operate concurrently on one client connection.
