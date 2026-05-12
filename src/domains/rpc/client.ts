@@ -30,6 +30,13 @@ import { ConnectionState } from "../../core/types";
 import { utf8Encoder } from "../../core/buffer";
 import { isConcreteRouteShape } from "../_routes";
 
+type DecodedInboundRequest = {
+  correlationId: Uint8Array;
+  route: string;
+  replyRoute: string;
+  body: Uint8Array;
+};
+
 /**
  * `ResponseWriter` implementation used by worker handlers.
  */
@@ -415,7 +422,7 @@ export class RpcClient extends DomainClient {
   /**
    * Handle an incoming `RPC_REQUEST` frame for worker mode.
    */
-  private handleRpcRequest(req: InboundRequest): void {
+  private handleRpcRequest(req: DecodedInboundRequest): void {
     const handler = this.workers.get(req.route);
 
     if (!handler) {
@@ -426,7 +433,14 @@ export class RpcClient extends DomainClient {
 
     this.connection.dispatchAsyncHandler(async () => {
       try {
-        await handler(req, writer);
+        await handler(
+          {
+            route: req.route,
+            replyRoute: req.replyRoute,
+            body: req.body,
+          },
+          writer,
+        );
       } catch (error) {
         if (isBenignShutdownError(error, this.connection)) {
           return;

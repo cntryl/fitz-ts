@@ -21,7 +21,7 @@ export type NoticeHandler = (msg: NoticeMsg) => Promise<void> | void;
  */
 export class NoticeSubscription {
   constructor(
-    public readonly subId: bigint,
+    private readonly subId: bigint,
     public readonly pattern: string,
     private readonly unsubscribeFn: (subId: bigint) => Promise<void>,
   ) {}

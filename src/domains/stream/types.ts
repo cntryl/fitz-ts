@@ -118,7 +118,7 @@ export type StreamCommitHandler = (notification: StreamCommitNotification) => vo
 
 export class StreamSubscription {
   constructor(
-    public readonly subId: bigint,
+    private readonly subId: bigint,
     private readonly pattern: string,
     private readonly unsubscribeFn: (pattern: string) => Promise<void>,
   ) {}
