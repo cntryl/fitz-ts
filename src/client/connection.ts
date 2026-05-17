@@ -22,6 +22,7 @@ import { Multiplexer } from "./multiplexer";
 
 export interface ConnectionOptions {
   timeout?: number;
+  maxInFlightRequests?: number;
   reconnect?: {
     enabled?: boolean;
     maxAttempts?: number;
@@ -93,6 +94,127 @@ class AsyncHandlerDispatcher {
   }
 }
 
+class RequestGate {
+  private activeCount = 0;
+  private closed = false;
+  private readonly queue: Array<{
+    resolve: (release: () => void) => void;
+    reject: (error: Error) => void;
+    signal?: AbortSignal;
+    onAbort?: () => void;
+  }> = [];
+
+  constructor(private readonly maxConcurrency: number) {}
+
+  async acquire(signal?: AbortSignal): Promise<() => void> {
+    if (signal?.aborted) {
+      throw abortError();
+    }
+
+    if (this.closed) {
+      throw connectionClosedError();
+    }
+
+    return await new Promise<() => void>((resolve, reject) => {
+      const grant = () => {
+        if (this.closed) {
+          reject(connectionClosedError());
+          return;
+        }
+
+        this.activeCount += 1;
+        resolve(() => this.release());
+      };
+
+      const waiter = {
+        resolve,
+        reject,
+        signal,
+        onAbort: undefined as (() => void) | undefined,
+      };
+
+      const cleanup = () => {
+        if (signal && waiter.onAbort) {
+          signal.removeEventListener("abort", waiter.onAbort);
+        }
+      };
+
+      waiter.onAbort = () => {
+        this.removeWaiter(waiter);
+        cleanup();
+        reject(abortError());
+      };
+
+      if (signal) {
+        signal.addEventListener("abort", waiter.onAbort, { once: true });
+      }
+
+      if (this.activeCount < this.maxConcurrency) {
+        cleanup();
+        grant();
+        return;
+      }
+
+      this.queue.push(waiter);
+    });
+  }
+
+  close(): void {
+    if (this.closed) {
+      return;
+    }
+
+    this.closed = true;
+    const error = connectionClosedError();
+    for (const waiter of this.queue.splice(0)) {
+      if (waiter.signal && waiter.onAbort) {
+        waiter.signal.removeEventListener("abort", waiter.onAbort);
+      }
+      waiter.reject(error);
+    }
+  }
+
+  private release(): void {
+    if (this.activeCount > 0) {
+      this.activeCount -= 1;
+    }
+
+    while (!this.closed && this.activeCount < this.maxConcurrency) {
+      const waiter = this.queue.shift();
+      if (!waiter) {
+        return;
+      }
+
+      if (waiter.signal?.aborted) {
+        if (waiter.signal && waiter.onAbort) {
+          waiter.signal.removeEventListener("abort", waiter.onAbort);
+        }
+        continue;
+      }
+
+      if (waiter.signal && waiter.onAbort) {
+        waiter.signal.removeEventListener("abort", waiter.onAbort);
+      }
+
+      this.activeCount += 1;
+      waiter.resolve(() => this.release());
+      return;
+    }
+  }
+
+  private removeWaiter(waiter: {
+    resolve: (release: () => void) => void;
+    reject: (error: Error) => void;
+    signal?: AbortSignal;
+    onAbort?: () => void;
+  }): void {
+    const index = this.queue.indexOf(waiter);
+    if (index >= 0) {
+      this.queue.splice(index, 1);
+    }
+  }
+}
+
 function abortError(): Error {
   const error = new Error("The operation was aborted");
   error.name = "AbortError";
@@ -124,9 +246,11 @@ export class Connection {
   private readonly reconnectMaxAttempts: number;
   private readonly reconnectBackoffMs: number;
   private readonly reconnectMaxBackoffMs: number;
+  private readonly maxInFlightRequests: number;
   private readonly observability?: FitzObservability;
   private readonly multiplexer: Multiplexer;
   private readonly asyncHandlerDispatcher: AsyncHandlerDispatcher;
+  private requestGate: RequestGate;
   private readonly frameParser = new FrameParser();
   private readonly reconnectListeners = new Set<ReconnectListener>();
   private readonly disconnectListeners = new Set<DisconnectListener>();
@@ -152,7 +276,9 @@ export class Connection {
     this.reconnectMaxAttempts = options.reconnect?.maxAttempts ?? Infinity;
     this.reconnectBackoffMs = options.reconnect?.backoffMs ?? 250;
     this.reconnectMaxBackoffMs = options.reconnect?.maxBackoffMs ?? 5000;
+    this.maxInFlightRequests = options.maxInFlightRequests ?? 256;
     this.observability = options.observability;
+    this.requestGate = new RequestGate(this.maxInFlightRequests);
     this.asyncHandlerDispatcher = new AsyncHandlerDispatcher(
       options.asyncHandlers?.maxConcurrency ?? Infinity,
       options.asyncHandlers?.timeoutMs ?? this.timeout,
@@ -182,6 +308,7 @@ export class Connection {
     this.closeRequested = true;
     this.receiveLoopAbort = true;
     this.setState(ConnectionState.Closed);
+    this.requestGate.close();
     this.authOutcome?.reject(new ConnectionError("Connection closed", { state: this.state }));
     this.authOutcome = null;
     this.multiplexer.setDisconnected();
@@ -208,11 +335,13 @@ export class Connection {
     signal?: AbortSignal,
   ): Promise<Uint8Array> {
     this.ensureAuthenticated();
-    const transport = this.ensureTransport();
-    const frame = FrameCodec.encodeFrame(messageType, requestPayload);
+    const releaseRequestSlot = await this.requestGate.acquire(signal);
     const startedAt = Date.now();
 
     try {
+      const transport = this.ensureTransport();
+      const frame = FrameCodec.encodeFrame(messageType, requestPayload);
+
       return await this.multiplexer.request(
         messageType,
         frame,
@@ -231,16 +360,20 @@ export class Connection {
       });
       this.handlePossibleTransportFailure(error);
       throw error;
+    } finally {
+      releaseRequestSlot();
     }
   }
 
   async send(messageType: number, requestPayload: Uint8Array): Promise<void> {
     this.ensureAuthenticated();
-    const transport = this.ensureTransport();
-    const frame = FrameCodec.encodeFrame(messageType, requestPayload);
+    const releaseRequestSlot = await this.requestGate.acquire();
     const startedAt = Date.now();
 
     try {
+      const transport = this.ensureTransport();
+      const frame = FrameCodec.encodeFrame(messageType, requestPayload);
+
       await this.sendSerialized(transport, frame);
     } catch (error) {
       this.log("error", "fitz.connection.send_failed", {
@@ -253,6 +386,8 @@ export class Connection {
       });
       this.handlePossibleTransportFailure(error);
       throw error;
+    } finally {
+      releaseRequestSlot();
     }
   }
 
@@ -306,6 +441,7 @@ export class Connection {
     throwIfAborted(signal);
     this.receiveLoopAbort = false;
     this.frameParser.parseFrames(new Uint8Array(0));
+    this.requestGate = new RequestGate(this.maxInFlightRequests);
     const transport = this.transportFactory();
     this.transport = transport;
     this.setState(isReconnect ? ConnectionState.Reconnecting : ConnectionState.Connecting);
@@ -403,6 +539,7 @@ export class Connection {
 
   private async handleConnectionLoss(error: unknown): Promise<void> {
     this.multiplexer.setDisconnected();
+    this.requestGate.close();
     this.emitDisconnect();
     this.log("warn", "fitz.connection.lost", {
       error: this.describeError(error),

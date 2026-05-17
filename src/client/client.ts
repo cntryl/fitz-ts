@@ -36,6 +36,7 @@ export class Client {
       transport: "auto",
       maxFrameSize: 65535,
       authSettleDelayMs: 100,
+      maxInFlightRequests: 256,
       observability: config.observability ?? {},
       reconnect: {
         enabled: false,
@@ -74,6 +75,7 @@ export class Client {
       {
         timeout: this.config.timeout,
         authSettleDelayMs: this.config.authSettleDelayMs,
+        maxInFlightRequests: this.config.maxInFlightRequests,
         reconnect: this.config.reconnect,
         observability: this.observability,
         asyncHandlers: this.config.asyncHandlers,

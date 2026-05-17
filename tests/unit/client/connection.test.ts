@@ -9,6 +9,7 @@ import type {
   FitzTracer,
 } from "../../../src/core/types";
 import { AuthenticationError } from "../../../src/core/errors";
+import { FrameCodec } from "../../../src/frame/codec";
 import { MSG_CONNECT } from "../../../src/frame/types";
 import type { Transport } from "../../../src/transport/types";
 
@@ -88,6 +89,16 @@ class FakeTransport implements Transport {
   fail(error: Error): void {
     this.pendingRead?.reject(error);
     this.pendingRead = null;
+  }
+
+  pushRead(data: Uint8Array): void {
+    if (this.pendingRead) {
+      this.pendingRead.resolve(data);
+      this.pendingRead = null;
+      return;
+    }
+
+    this.reads.push(data);
   }
 }
 
@@ -298,6 +309,38 @@ describe("Connection", () => {
     expect(factory).toHaveBeenCalledTimes(2);
   });
 
+  it("bounds concurrent outbound requests to the configured limit", async () => {
+    const transport = new FakeTransport();
+    const connection = new Connection(
+      () => transport,
+      async () => "",
+      {
+        authSettleDelayMs: 0,
+        maxInFlightRequests: 1,
+      },
+    );
+
+    await connection.connect();
+
+    const firstRequest = connection.request(77, new Uint8Array([1]));
+    await vi.waitFor(() => {
+      expect(transport.sent).toHaveLength(2);
+    });
+
+    const controller = new AbortController();
+    const secondRequest = connection.request(77, new Uint8Array([2]), controller.signal);
+    const abortTimer = setTimeout(() => controller.abort(), 20);
+
+    await expect(secondRequest).rejects.toThrow(/aborted/i);
+    clearTimeout(abortTimer);
+    expect(transport.sent).toHaveLength(2);
+
+    transport.pushRead(FrameCodec.encodeFrame(77, new Uint8Array([9])));
+    await expect(firstRequest).resolves.toEqual(new Uint8Array([9]));
+
+    await connection.close();
+  });
+
   it("exposes the CONNECTED to AUTHENTICATING to AUTHENTICATED transition sequence", async () => {
     const transport = new FakeTransport();
     const events: FitzLifecycleEvent[] = [];
@@ -475,9 +518,9 @@ describe("Connection", () => {
 
     await connection.connect();
     const pending = connection.request(77, new Uint8Array([1, 2, 3]));
-    await Promise.resolve();
-
-    expect(transport.sent).toHaveLength(2);
+    await vi.waitFor(() => {
+      expect(transport.sent).toHaveLength(2);
+    });
     connection.getMultiplexer().dispatch(77, new Uint8Array([9]));
 
     await expect(pending).resolves.toEqual(new Uint8Array([9]));
@@ -591,7 +634,9 @@ describe("Connection", () => {
     await connection.connect();
 
     const pending = connection.request(92, new Uint8Array([1, 2, 3]), controller.signal);
-    await Promise.resolve();
+    await vi.waitFor(() => {
+      expect(transport.sent).toHaveLength(2);
+    });
     controller.abort();
 
     await expect(pending).rejects.toMatchObject({ name: "AbortError" });

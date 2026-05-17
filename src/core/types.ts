@@ -64,6 +64,7 @@ export interface ClientConfig {
   reconnect?: ReconnectOptions;
   maxFrameSize?: number;
   authSettleDelayMs?: number;
+  maxInFlightRequests?: number;
   observability?: FitzObservability;
   asyncHandlers?: AsyncHandlerOptions;
 }

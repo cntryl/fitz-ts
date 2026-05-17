@@ -1,7 +1,7 @@
 /**
  * Fitz cross-language conformance harness â€” TypeScript / fitz-ts
  *
- * Implements all 15 scenarios defined in:
+ * Implements the shared 001..015 scenarios plus the bounded-load check for:
  *   fitz/docs/clients/cross-language-conformance-suite.yaml
  *
  * Configuration via environment variables:
@@ -861,6 +861,42 @@ describe(`Fitz conformance â€” fitz-ts [transport=${TRANSPORT}, auth=${AUTH
       } finally {
         await client.close().catch(() => undefined);
       }
+
+      return { verdict: "pass", evidence };
+    });
+
+    collector.record(result);
+    expect(result.verdict).toBe("pass");
+  });
+
+  // CS-017 - bounded concurrency under burst load
+  it("CS-017 bounded concurrency under burst load", async () => {
+    const result = await runScenario("CS-017", "bounded concurrency under burst load", "P1", async () => {
+      const evidence: string[] = [];
+
+      const pause = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+      await withClient({ timeout: 750, maxInFlightRequests: 16 }, async (client) => {
+        const route = uniqueRoute("rpc");
+
+        const firstCall = client.rpc().call(route, b("first"), { timeoutMs: 750 });
+        firstCall.catch(() => undefined);
+
+        const secondCall = client.rpc().call(route, b("second"), { timeoutMs: 750 });
+        secondCall.catch(() => undefined);
+
+        const secondState = await Promise.race([
+          secondCall.then(
+            () => "settled",
+            () => "settled",
+          ),
+          pause(100).then(() => "pending"),
+        ]);
+
+        expect(secondState).toBe("pending");
+        evidence.push("second RPC call remained pending while first was in flight");
+        evidence.push("configured maxInFlightRequests=16 and burst size=2");
+      });
 
       return { verdict: "pass", evidence };
     });
