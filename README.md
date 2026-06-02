@@ -127,17 +127,32 @@ npm ci
 npm run verify:fast
 docker compose -f ../fitz-go/compose.yml up -d
 npm run verify
-npm run bench -- --run benches/hotpath.bench.ts
+npm run bench
 docker compose -f ../fitz-go/compose.yml down --volumes
 ```
 
+Tiered benchmark commands:
+
+```bash
+npm run bench:tier1
+npm run bench:tier2
+npm run bench:tier3
+npm run bench:tier4
+npm run bench
+```
+
+> Run the full suite repeatedly before relying on benchmark automation. `tier4` is broader and more integration-style, so it should be stabilized over multiple executions before adding CI thresholds.
+
+Benchmark tiers:
+
+- `tier1`: hot-path microbenchmarks for core frame, codec, and multiplexer/parse runtime costs.
+- `tier2`: subsystem benchmarks for domain-level payload and request-encoding workloads.
+- `tier3`: system benchmarks for combined protocol and client flow payloads.
+- `tier4`: integration benchmarks for realistic multi-message encode and frame assembly scenarios.
+
 The conformance harness writes JSON results to `artifacts/conformance-results.json` by default.
 
-The repo keeps one custom verification script:
-[`scripts/pack-smoke.js`](scripts/pack-smoke.js)
-for tarball consumer verification.
-
-Tooling is otherwise direct:
+Tooling is direct:
 
 - `vp check` for combined format, lint, and type checks
 - `vp fmt` for formatting

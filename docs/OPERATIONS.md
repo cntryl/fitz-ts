@@ -173,8 +173,10 @@ npm ci
 npm run verify:fast
 docker compose -f ../fitz-go/compose.yml up -d
 npm run verify
-npm run bench -- --run benches/hotpath.bench.ts
+npm run bench
 npm run test:unit -- tests/unit/perf/hotpath-thresholds.test.ts
 docker compose -f ../fitz-go/compose.yml down --volumes
 npm run pack:smoke
 ```
+
+> For bench validation, run the full suite multiple times locally before formalizing any CI threshold gating. `tier4` is intended to capture broader integration-style encode/parse composition and may be noisier than lower-tier microbenchmarks.

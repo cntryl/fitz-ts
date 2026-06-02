@@ -95,15 +95,11 @@ export type AvailabilityHandler = (notification: AvailabilityNotification) => vo
  * Queue availability subscription.
  */
 export class QueueSubscription {
-  private readonly subId: bigint;
-  public readonly pattern: string;
-  private readonly unsubscribeFn: (subId: bigint) => Promise<void>;
-
-  constructor(subId: bigint, pattern: string, unsubscribeFn: (subId: bigint) => Promise<void>) {
-    this.subId = subId;
-    this.pattern = pattern;
-    this.unsubscribeFn = unsubscribeFn;
-  }
+  constructor(
+    public readonly subId: bigint,
+    public readonly pattern: string,
+    private readonly unsubscribeFn: (subId: bigint) => Promise<void>,
+  ) {}
 
   /**
    * Unsubscribe from availability notifications.

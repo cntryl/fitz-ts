@@ -23,6 +23,7 @@ import { dirname, resolve } from "node:path";
 import { Client } from "../../src/client/client.js";
 import type { ClientConfig } from "../../src/core/types.js";
 import { AuthenticationError, TimeoutError } from "../../src/core/errors.js";
+import type { InboundRequest, ResponseWriter } from "../../src/domains/rpc/types.js";
 
 import { ResultCollector, type ScenarioResult, type Verdict } from "./result.js";
 import type { TransportType } from "../integration/fixture/transport.js";
@@ -475,10 +476,12 @@ describe(`Fitz conformance â€” fitz-ts [transport=${TRANSPORT}, auth=${AUTH
         await callerClient.connect();
 
         const route = uniqueRoute("rpc");
-        const sub = await workerClient.rpc().registerWorker(route, async (_req, writer) => {
-          await new Promise<void>((resolve) => setTimeout(resolve, 2000));
-          await writer.send(b("late"), true);
-        });
+        const sub = await workerClient
+          .rpc()
+          .registerWorker(route, async (_req: InboundRequest, writer: ResponseWriter) => {
+            await new Promise<void>((resolve) => setTimeout(resolve, 2000));
+            await writer.send(b("late"), true);
+          });
 
         const controller = new AbortController();
         const iterator = await callerClient.rpc().call(route, b("block"), {
@@ -548,10 +551,12 @@ describe(`Fitz conformance â€” fitz-ts [transport=${TRANSPORT}, auth=${AUTH
         await callerClient.connect();
 
         const route = uniqueRoute("rpc");
-        await workerClient.rpc().registerWorker(route, async (_req, writer) => {
-          await new Promise<void>((resolve) => setTimeout(resolve, 3000));
-          await writer.send(b("late"), true);
-        });
+        await workerClient
+          .rpc()
+          .registerWorker(route, async (_req: InboundRequest, writer: ResponseWriter) => {
+            await new Promise<void>((resolve) => setTimeout(resolve, 3000));
+            await writer.send(b("late"), true);
+          });
 
         const controller = new AbortController();
         const iterator = await callerClient.rpc().call(route, b("block"), {
@@ -871,35 +876,40 @@ describe(`Fitz conformance â€” fitz-ts [transport=${TRANSPORT}, auth=${AUTH
 
   // CS-017 - bounded concurrency under burst load
   it("CS-017 bounded concurrency under burst load", async () => {
-    const result = await runScenario("CS-017", "bounded concurrency under burst load", "P1", async () => {
-      const evidence: string[] = [];
+    const result = await runScenario(
+      "CS-017",
+      "bounded concurrency under burst load",
+      "P1",
+      async () => {
+        const evidence: string[] = [];
 
-      const pause = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+        const pause = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
-      await withClient({ timeout: 750, maxInFlightRequests: 16 }, async (client) => {
-        const route = uniqueRoute("rpc");
+        await withClient({ timeout: 750, maxInFlightRequests: 16 }, async (client) => {
+          const route = uniqueRoute("rpc");
 
-        const firstCall = client.rpc().call(route, b("first"), { timeoutMs: 750 });
-        firstCall.catch(() => undefined);
+          const firstCall = client.rpc().call(route, b("first"), { timeoutMs: 750 });
+          firstCall.catch(() => undefined);
 
-        const secondCall = client.rpc().call(route, b("second"), { timeoutMs: 750 });
-        secondCall.catch(() => undefined);
+          const secondCall = client.rpc().call(route, b("second"), { timeoutMs: 750 });
+          secondCall.catch(() => undefined);
 
-        const secondState = await Promise.race([
-          secondCall.then(
-            () => "settled",
-            () => "settled",
-          ),
-          pause(100).then(() => "pending"),
-        ]);
+          const secondState = await Promise.race([
+            secondCall.then(
+              () => "settled",
+              () => "settled",
+            ),
+            pause(100).then(() => "pending"),
+          ]);
 
-        expect(secondState).toBe("pending");
-        evidence.push("second RPC call remained pending while first was in flight");
-        evidence.push("configured maxInFlightRequests=16 and burst size=2");
-      });
+          expect(secondState).toBe("pending");
+          evidence.push("second RPC call remained pending while first was in flight");
+          evidence.push("configured maxInFlightRequests=16 and burst size=2");
+        });
 
-      return { verdict: "pass", evidence };
-    });
+        return { verdict: "pass", evidence };
+      },
+    );
 
     collector.record(result);
     expect(result.verdict).toBe("pass");

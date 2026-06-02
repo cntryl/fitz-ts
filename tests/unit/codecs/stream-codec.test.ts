@@ -95,7 +95,10 @@ function encodeReadResponse(
   return writer.getBuffer();
 }
 
-function writeFilteredReason(writer: BufferWriter, reason?: "server_filter" | "permission" | "projection"): void {
+function writeFilteredReason(
+  writer: BufferWriter,
+  reason?: "server_filter" | "permission" | "projection",
+): void {
   switch (reason) {
     case undefined:
       writer.writeU8(0);

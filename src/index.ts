@@ -3,7 +3,7 @@
  */
 
 // Core exports
-export { Client } from "./client/client";
+export { Client, createClient } from "./client/client";
 
 // Types and errors
 export type {

@@ -168,24 +168,28 @@ describe("public surface", () => {
     expect(source).not.toContain("correlationId");
   });
 
-  it("keeps queue item and subscription ids private", () => {
+  it("keeps queue item ids private and exposes subscription ids readonly", () => {
     const source = readSource("../../src/domains/queue/types.ts");
     expect(source).toContain("private id: bigint;");
     expect(source).toContain("private token: bigint;");
-    expect(source).toContain("private readonly subId: bigint");
+    expect(source).toContain("public readonly subId: bigint");
   });
 
-  it("keeps lease tokens private", () => {
+  it("keeps lease tokens private and exposes subscription ids readonly", () => {
     const source = readSource("../../src/domains/lease/types.ts");
     expect(source).toContain("private token: bigint;");
-    expect(source).toContain("private readonly subId: bigint");
+    expect(source).toContain("public readonly subId: bigint");
   });
 
-  it("keeps notice, schedule, and stream subscription ids private", () => {
-    expect(readSource("../../src/domains/notice/types.ts")).toContain("private readonly subId: bigint");
+  it("exposes notice, schedule, and stream subscription ids as readonly", () => {
+    expect(readSource("../../src/domains/notice/types.ts")).toContain(
+      "public readonly subId: bigint",
+    );
     const scheduleSource = readSource("../../src/domains/schedule/types.ts");
-    expect(scheduleSource).toContain("private readonly subId: bigint");
+    expect(scheduleSource).toContain("public readonly subId: bigint");
     expect(scheduleSource).toContain("private readonly handler: ScheduleHandler");
-    expect(readSource("../../src/domains/stream/types.ts")).toContain("private readonly subId: bigint");
+    expect(readSource("../../src/domains/stream/types.ts")).toContain(
+      "public readonly subId: bigint",
+    );
   });
 });

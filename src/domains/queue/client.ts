@@ -2,7 +2,8 @@
  * Queue domain client.
  */
 
-import { Connection } from "../../client/connection";
+import { createDomainClient } from "../base";
+import type { Connection } from "../../client/connection";
 import { QueueError } from "../../core/errors";
 import {
   MSG_QUEUE_ENQUEUE,
@@ -11,7 +12,6 @@ import {
   MSG_QUEUE_SUBSCRIBE,
   MSG_QUEUE_UNSUBSCRIBE,
 } from "../../frame/types";
-import { DomainClient } from "../base";
 import { isRouteShape, isSelectorRouteShape } from "../_routes";
 import { QueueCodec } from "./codec";
 import {
@@ -28,66 +28,67 @@ type QueueSubscriptionState = {
   handlers: Map<number, AvailabilityHandler>;
 };
 
-export class QueueClient extends DomainClient {
-  private readonly subscriptionsByPattern = new Map<string, QueueSubscriptionState>();
-  private readonly patternsBySubId = new Map<bigint, string>();
-  private notificationHandlerRegistered = false;
-  private nextHandlerId = 1;
+export type QueueClient = ReturnType<typeof createQueueClient>;
 
-  constructor(connection: Connection) {
-    super(connection);
-    this.connection.onReconnect(async () => {
-      if (this.subscriptionsByPattern.size === 0) {
-        return;
-      }
+export function createQueueClient(connection: Connection) {
+  const { requestFrame } = createDomainClient(connection);
+  const subscriptionsByPattern = new Map<string, QueueSubscriptionState>();
+  const patternsBySubId = new Map<bigint, string>();
+  let notificationHandlerRegistered = false;
+  let nextHandlerId = 1;
 
-      const subscriptions = Array.from(
-        this.subscriptionsByPattern.entries(),
-        ([pattern, state]) => ({
-          pattern,
-          handlers: Array.from(state.handlers.entries()),
-        }),
-      );
-      this.subscriptionsByPattern.clear();
-      this.patternsBySubId.clear();
+  connection.onReconnect(async () => {
+    if (subscriptionsByPattern.size === 0) {
+      return;
+    }
 
-      for (const subscription of subscriptions) {
-        const subId = await this.subscribeWire(subscription.pattern);
-        this.subscriptionsByPattern.set(subscription.pattern, {
-          subId,
-          handlers: new Map(subscription.handlers),
-        });
-        this.patternsBySubId.set(subId, subscription.pattern);
-      }
-    });
-  }
+    const subscriptions = Array.from(subscriptionsByPattern.entries(), ([pattern, state]) => ({
+      pattern,
+      handlers: Array.from(state.handlers.entries()),
+    }));
+    subscriptionsByPattern.clear();
+    patternsBySubId.clear();
 
-  async enqueue(route: string, body: Uint8Array, options?: EnqueueOptions): Promise<bigint> {
+    for (const subscription of subscriptions) {
+      const subId = await subscribeWire(subscription.pattern);
+      subscriptionsByPattern.set(subscription.pattern, {
+        subId,
+        handlers: new Map(subscription.handlers),
+      });
+      patternsBySubId.set(subId, subscription.pattern);
+    }
+  });
+
+  const enqueue = async (
+    route: string,
+    body: Uint8Array,
+    options?: EnqueueOptions,
+  ): Promise<bigint> => {
     assertQueueRoute(route);
     const payload = QueueCodec.encodeEnqueue(route, body, options);
-    const response = await this.requestFrame(MSG_QUEUE_ENQUEUE, payload);
+    const response = await requestFrame(MSG_QUEUE_ENQUEUE, payload);
     const decoded = QueueCodec.decodeEnqueueResponse(response);
-    this.checkStatus(decoded, "ENQUEUE");
+    checkStatus(decoded, "ENQUEUE");
 
     if (decoded.messageId === undefined) {
       throw new QueueError("ENQUEUE response missing messageId", "MISSING_MESSAGE_ID");
     }
 
     return decoded.messageId;
-  }
+  };
 
-  async reserve(
+  const reserve = async (
     route: string,
     leaseSeconds: number,
     batchSize: number = 1,
     waitSeconds: number = 0,
-  ): Promise<QueueItem[]> {
+  ): Promise<QueueItem[]> => {
     assertQueueReserveRoute(route);
     if (waitSeconds <= 0) {
-      return this.reserveOnce(route, leaseSeconds, batchSize);
+      return reserveOnce(route, leaseSeconds, batchSize);
     }
 
-    let items = await this.reserveOnce(route, leaseSeconds, batchSize);
+    let items = await reserveOnce(route, leaseSeconds, batchSize);
     if (items.length > 0) {
       return items;
     }
@@ -95,7 +96,7 @@ export class QueueClient extends DomainClient {
     const deadline = Date.now() + waitSeconds * 1000;
     let pendingNotifications = 0;
     let waiter: (() => void) | undefined;
-    const subscription = await this.subscribe(route, async () => {
+    const subscription = await subscribe(route, async () => {
       pendingNotifications += 1;
       if (!waiter) {
         return;
@@ -109,7 +110,7 @@ export class QueueClient extends DomainClient {
 
     try {
       while (true) {
-        items = await this.reserveOnce(route, leaseSeconds, batchSize);
+        items = await reserveOnce(route, leaseSeconds, batchSize);
         if (items.length > 0) {
           return items;
         }
@@ -140,70 +141,73 @@ export class QueueClient extends DomainClient {
     } finally {
       await subscription.unsubscribe();
     }
-  }
+  };
 
-  private async reserveOnce(
+  const reserveOnce = async (
     route: string,
     leaseSeconds: number,
     batchSize: number,
-  ): Promise<QueueItem[]> {
+  ): Promise<QueueItem[]> => {
     const payload = QueueCodec.encodeReserve(route, leaseSeconds, batchSize);
-    const response = await this.requestFrame(MSG_QUEUE_RESERVE, payload);
+    const response = await requestFrame(MSG_QUEUE_RESERVE, payload);
     const decoded = QueueCodec.decodeReserveResponse(response);
-    this.checkStatus(decoded, "RESERVE");
+    checkStatus(decoded, "RESERVE");
 
     return (decoded.items ?? []).map(
-      (item) => new QueueItem(item.id, item.token, item.body, route, this.connection),
+      (item) => new QueueItem(item.id, item.token, item.body, route, connection),
     );
-  }
+  };
 
-  async subscribe(pattern: string, handler: AvailabilityHandler): Promise<QueueSubscription> {
+  const subscribe = async (
+    pattern: string,
+    handler: AvailabilityHandler,
+  ): Promise<QueueSubscription> => {
     assertQueueSubscriptionPattern(pattern);
-    this.initNotificationHandler();
-    const existing = this.subscriptionsByPattern.get(pattern);
+    initNotificationHandler();
+    const existing = subscriptionsByPattern.get(pattern);
     if (existing) {
-      return this.addLocalSubscription(pattern, existing.subId, handler);
+      return addLocalSubscription(pattern, existing.subId, handler);
     }
 
-    const subId = await this.subscribeWire(pattern);
-    return this.addLocalSubscription(pattern, subId, handler);
-  }
+    const subId = await subscribeWire(pattern);
+    return addLocalSubscription(pattern, subId, handler);
+  };
 
-  private async subscribeWire(pattern: string): Promise<bigint> {
-    const payload = QueueCodec.encodeSubscribe(this.wireWatchPattern(pattern));
-    const response = await this.requestFrame(MSG_QUEUE_SUBSCRIBE, payload);
+  const subscribeWire = async (pattern: string): Promise<bigint> => {
+    const payload = QueueCodec.encodeSubscribe(wireWatchPattern(pattern));
+    const response = await requestFrame(MSG_QUEUE_SUBSCRIBE, payload);
     const decoded = QueueCodec.decodeSubscribeResponse(response);
-    this.checkStatus(decoded, "SUBSCRIBE");
+    checkStatus(decoded, "SUBSCRIBE");
 
     if (decoded.subId === undefined) {
       throw new QueueError("SUBSCRIBE response missing subId", "MISSING_SUB_ID");
     }
 
     return decoded.subId;
-  }
+  };
 
-  private addLocalSubscription(
+  const addLocalSubscription = (
     pattern: string,
     subId: bigint,
     handler: AvailabilityHandler,
-  ): QueueSubscription {
-    const handlerId = this.nextHandlerId++;
-    let subscription = this.subscriptionsByPattern.get(pattern);
+  ): QueueSubscription => {
+    const handlerId = nextHandlerId++;
+    let subscription = subscriptionsByPattern.get(pattern);
     if (!subscription) {
       subscription = { subId, handlers: new Map() };
-      this.subscriptionsByPattern.set(pattern, subscription);
-      this.patternsBySubId.set(subId, pattern);
+      subscriptionsByPattern.set(pattern, subscription);
+      patternsBySubId.set(subId, pattern);
     }
 
     subscription.handlers.set(handlerId, handler);
 
     return new QueueSubscription(subId, pattern, async () => {
-      await this.unsubscribe(pattern, handlerId);
+      await unsubscribe(pattern, handlerId);
     });
-  }
+  };
 
-  private async unsubscribe(pattern: string, handlerId: number): Promise<void> {
-    const subscription = this.subscriptionsByPattern.get(pattern);
+  const unsubscribe = async (pattern: string, handlerId: number): Promise<void> => {
+    const subscription = subscriptionsByPattern.get(pattern);
     if (!subscription) {
       return;
     }
@@ -213,36 +217,36 @@ export class QueueClient extends DomainClient {
       return;
     }
 
-    this.subscriptionsByPattern.delete(pattern);
-    this.patternsBySubId.delete(subscription.subId);
-    const payload = QueueCodec.encodeUnsubscribe(this.wireWatchPattern(pattern));
-    const response = await this.requestFrame(MSG_QUEUE_UNSUBSCRIBE, payload);
+    subscriptionsByPattern.delete(pattern);
+    patternsBySubId.delete(subscription.subId);
+    const payload = QueueCodec.encodeUnsubscribe(wireWatchPattern(pattern));
+    const response = await requestFrame(MSG_QUEUE_UNSUBSCRIBE, payload);
     const decoded = QueueCodec.decodeUnsubscribeResponse(response);
-    this.checkStatus(decoded, "UNSUBSCRIBE");
-  }
+    checkStatus(decoded, "UNSUBSCRIBE");
+  };
 
-  private initNotificationHandler(): void {
-    if (this.notificationHandlerRegistered) {
+  const initNotificationHandler = (): void => {
+    if (notificationHandlerRegistered) {
       return;
     }
 
-    this.notificationHandlerRegistered = true;
-    this.connection.registerNotificationHandler(MSG_QUEUE_NOTIFY, (payload) => {
+    notificationHandlerRegistered = true;
+    connection.registerNotificationHandler(MSG_QUEUE_NOTIFY, (payload) => {
       try {
         const { subId, route } = QueueCodec.decodeNotification(payload);
-        const pattern = this.patternsBySubId.get(subId);
+        const pattern = patternsBySubId.get(subId);
         if (!pattern) {
           return;
         }
 
-        const subscription = this.subscriptionsByPattern.get(pattern);
+        const subscription = subscriptionsByPattern.get(pattern);
         if (!subscription) {
           return;
         }
 
-        const notification: AvailabilityNotification = { route: this.publicQueueRoute(route) };
+        const notification: AvailabilityNotification = { route: publicQueueRoute(route) };
         for (const handler of subscription.handlers.values()) {
-          this.connection.dispatchAsyncHandler(async () => {
+          connection.dispatchAsyncHandler(async () => {
             await handler(notification);
           });
         }
@@ -250,28 +254,28 @@ export class QueueClient extends DomainClient {
         // Best-effort notification dispatch.
       }
     });
-  }
+  };
 
-  private wireWatchPattern(pattern: string): string {
+  const wireWatchPattern = (pattern: string): string => {
     if (pattern.endsWith("/ready")) {
       return pattern;
     }
 
     return `${pattern}/ready`;
-  }
+  };
 
-  private publicQueueRoute(route: string): string {
+  const publicQueueRoute = (route: string): string => {
     if (!route.endsWith("/ready")) {
       return route;
     }
 
     return route.slice(0, -"/ready".length);
-  }
+  };
 
-  private checkStatus(
+  const checkStatus = (
     response: { status: number; errorCode?: number; errorMessage?: string },
     operation: string,
-  ): void {
+  ): void => {
     if (response.status === QueueStatus.Ok) {
       return;
     }
@@ -289,8 +293,23 @@ export class QueueClient extends DomainClient {
     const reason = response.errorMessage ?? statusName;
 
     throw new QueueError(`${operation} failed: ${reason}`, statusName, errorCode);
-  }
+  };
+
+  return {
+    enqueue,
+    reserve,
+    subscribe,
+  };
 }
+
+type QueueClientConstructor = {
+  new (connection: Connection): QueueClient;
+  (connection: Connection): QueueClient;
+};
+
+export const QueueClient: QueueClientConstructor = function (connection: Connection) {
+  return createQueueClient(connection);
+} as unknown as QueueClientConstructor;
 
 export * from "./types";
 

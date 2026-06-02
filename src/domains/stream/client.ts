@@ -7,7 +7,7 @@
  * 3. `commit()` or `rollback()` finalizes the session
  */
 
-import { DomainClient } from "../base";
+import { createDomainClient } from "../base";
 import { StreamCodec } from "./codec";
 import {
   StreamSession,
@@ -33,159 +33,122 @@ import {
   MSG_STREAM_NOTIFY,
 } from "../../frame/types";
 import { isRouteShape, isSelectorRouteShape } from "../_routes";
+import type { Connection } from "../../client/connection";
 
 type StreamSubscriptionState = {
   subId: bigint;
   handlers: Map<number, StreamCommitHandler>;
 };
 
-export class StreamClient extends DomainClient {
-  private subscriptionsByPattern = new Map<string, StreamSubscriptionState>();
-  private patternsBySubId = new Map<bigint, string>();
-  private initialized = false;
-  private nextHandlerId = 1;
+export type StreamClient = ReturnType<typeof createStreamClient>;
 
-  constructor(connection: import("../../client/connection").Connection) {
-    super(connection);
-    this.connection.onReconnect(async () => {
-      if (this.subscriptionsByPattern.size === 0) {
-        return;
-      }
+export function createStreamClient(connection: Connection) {
+  const { requestFrame } = createDomainClient(connection);
+  const subscriptionsByPattern = new Map<string, StreamSubscriptionState>();
+  const patternsBySubId = new Map<bigint, string>();
+  let initialized = false;
+  let nextHandlerId = 1;
 
-      const snapshot = Array.from(this.subscriptionsByPattern.entries(), ([pattern, state]) => ({
-        pattern,
-        handlers: Array.from(state.handlers.entries()),
-      }));
-      this.subscriptionsByPattern.clear();
-      this.patternsBySubId.clear();
+  connection.onReconnect(async () => {
+    if (subscriptionsByPattern.size === 0) {
+      return;
+    }
 
-      for (const subscription of snapshot) {
-        const subId = await this.subscribeWire(subscription.pattern);
-        this.subscriptionsByPattern.set(subscription.pattern, {
-          subId,
-          handlers: new Map(subscription.handlers),
-        });
-        this.patternsBySubId.set(subId, subscription.pattern);
-      }
-    });
-  }
+    const snapshot = Array.from(subscriptionsByPattern.entries(), ([pattern, state]) => ({
+      pattern,
+      handlers: Array.from(state.handlers.entries()),
+    }));
+    subscriptionsByPattern.clear();
+    patternsBySubId.clear();
 
-  /**
-   * Begin a write session on the stream.
-   * @param route Stream route (e.g., "stream://realm/area/events")
-   * @param ingestMetadata Optional ingest metadata to send with begin
-   * @returns StreamSession for append/commit/rollback
-   */
-  async begin(route: string, ingestMetadata?: Uint8Array): Promise<StreamSession> {
+    for (const subscription of snapshot) {
+      const subId = await subscribeWire(subscription.pattern);
+      subscriptionsByPattern.set(subscription.pattern, {
+        subId,
+        handlers: new Map(subscription.handlers),
+      });
+      patternsBySubId.set(subId, subscription.pattern);
+    }
+  });
+
+  const begin = async (route: string, ingestMetadata?: Uint8Array): Promise<StreamSession> => {
     assertStreamRoute(route);
     const payload = StreamCodec.encodeBegin(route, ingestMetadata);
-    const response = await this.requestFrame(MSG_STREAM_BEGIN, payload);
+    const response = await requestFrame(MSG_STREAM_BEGIN, payload);
     const decoded = StreamCodec.decodeBeginResponse(response);
 
-    this.checkStatus(decoded.status, "BEGIN");
+    checkStatus(decoded.status, "BEGIN");
 
     if (decoded.sessionId === undefined) {
       throw new StreamError("BEGIN response missing sessionId", "MISSING_SESSION_ID");
     }
 
-    return new StreamSessionImpl(this.connection, route, decoded.sessionId);
-  }
+    return new StreamSessionImpl(connection, route, decoded.sessionId);
+  };
 
-  /**
-   * Read a page from the stream, including synthetic filtered markers.
-   * @param route Stream route
-   * @param startOffset Offset to start reading from (0 for beginning)
-   * @param limit Maximum number of records to read (default: 100)
-   * @returns Raw stream read page with items and cursor metadata
-   */
-  async readPage(
+  const readPage = async (
     route: string,
     startOffset: bigint,
     limit: number = 100,
     options?: StreamReadOptions,
-  ): Promise<StreamReadPage> {
+  ): Promise<StreamReadPage> => {
     assertStreamPattern(route);
     const payload = StreamCodec.encodeRead(route, startOffset, limit, options);
-    const response = await this.requestFrame(MSG_STREAM_READ, payload, options?.signal);
+    const response = await requestFrame(MSG_STREAM_READ, payload, options?.signal);
     const decoded = StreamCodec.decodeReadResponse(response);
 
-    this.checkStatus(decoded.status, "READ");
+    checkStatus(decoded.status, "READ");
 
     return {
       items: decoded.items,
-      cursor:
-        decoded.cursor ?? {
-          lastResourceOffset: startOffset,
-          lastAreaOffset: undefined,
-          lastRealmOffset: undefined,
-          hasMore: false,
-        },
+      cursor: decoded.cursor ?? {
+        lastResourceOffset: startOffset,
+        lastAreaOffset: undefined,
+        lastRealmOffset: undefined,
+        hasMore: false,
+      },
     };
-  }
+  };
 
-  /**
-   * Read records from the stream.
-   * @param route Stream route
-   * @param startOffset Offset to start reading from (0 for beginning)
-   * @param limit Maximum number of records to read (default: 100)
-   * @returns Array of stream records
-   */
-  async read(
+  const read = async (
     route: string,
     startOffset: bigint,
     limit: number = 100,
     options?: StreamReadOptions,
-  ): Promise<StreamRecord[]> {
-    const page = await this.readPage(route, startOffset, limit, options);
+  ): Promise<StreamRecord[]> => {
+    const page = await readPage(route, startOffset, limit, options);
     return StreamCodec.flattenStreamReadItems(page.items);
-  }
+  };
 
-  /**
-   * Consume records from the stream as an async iterator.
-   * @param route Stream route
-   * @param startOffset Offset to start reading from (0 for beginning)
-   * @param limit Maximum number of records to read (default: 100)
-   * @returns AsyncIterable of stream records
-   */
-  async consume(
+  const consume = async (
     route: string,
     startOffset: bigint,
     limit: number = 100,
     options?: StreamReadOptions,
-  ): Promise<AsyncIterable<StreamRecord>> {
-    const records = await this.read(route, startOffset, limit, options);
+  ): Promise<AsyncIterable<StreamRecord>> => {
+    const records = await read(route, startOffset, limit, options);
     const iterator = new SliceIterator(records);
     return new AsyncIterableIterator(iterator);
-  }
+  };
 
-  /**
-   * Get the last record in the stream.
-   * @param route Stream route
-   * @returns The most recent record, or null if stream is empty
-   */
-  async peek(route: string): Promise<StreamRecord | null> {
+  const peek = async (route: string): Promise<StreamRecord | null> => {
     assertStreamRoute(route);
     const payload = StreamCodec.encodeLast(route);
-    const response = await this.requestFrame(MSG_STREAM_LAST, payload);
+    const response = await requestFrame(MSG_STREAM_LAST, payload);
     const decoded = StreamCodec.decodeLastResponse(response);
 
-    this.checkStatus(decoded.status, "LAST");
+    checkStatus(decoded.status, "LAST");
 
     return decoded.record ?? null;
-  }
+  };
 
-  /**
-   * Get stream metadata.
-   * @param route Stream route
-   * @returns Stream metadata (offsets and record count)
-   */
-  async metadata(route: string): Promise<StreamMetadata> {
+  const metadata = async (route: string): Promise<StreamMetadata> => {
     assertStreamRoute(route);
     const payload = StreamCodec.encodeMetadata(route);
-    const response = await this.requestFrame(MSG_STREAM_GET_METADATA, payload);
+    const response = await requestFrame(MSG_STREAM_GET_METADATA, payload);
     const decoded = StreamCodec.decodeMetadataResponse(response);
 
-    this.checkStatus(decoded.status, "GET_METADATA");
+    checkStatus(decoded.status, "GET_METADATA");
 
     return (
       decoded.metadata ?? {
@@ -194,54 +157,57 @@ export class StreamClient extends DomainClient {
         recordCount: 0n,
       }
     );
-  }
+  };
 
-  async subscribe(pattern: string, handler: StreamCommitHandler): Promise<StreamSubscription> {
+  const subscribe = async (
+    pattern: string,
+    handler: StreamCommitHandler,
+  ): Promise<StreamSubscription> => {
     assertStreamPattern(pattern);
-    this.initNotifyHandler();
-    const existing = this.subscriptionsByPattern.get(pattern);
+    initNotifyHandler();
+    const existing = subscriptionsByPattern.get(pattern);
     if (existing) {
-      return this.addLocalSubscription(pattern, existing.subId, handler);
+      return addLocalSubscription(pattern, existing.subId, handler);
     }
 
-    const subId = await this.subscribeWire(pattern);
-    return this.addLocalSubscription(pattern, subId, handler);
-  }
+    const subId = await subscribeWire(pattern);
+    return addLocalSubscription(pattern, subId, handler);
+  };
 
-  private async subscribeWire(pattern: string): Promise<bigint> {
+  const subscribeWire = async (pattern: string): Promise<bigint> => {
     const payload = StreamCodec.encodeSubscribe(pattern);
-    const response = await this.requestFrame(MSG_STREAM_SUBSCRIBE, payload);
+    const response = await requestFrame(MSG_STREAM_SUBSCRIBE, payload);
     const decoded = StreamCodec.decodeSubscribeResponse(response);
-    this.checkStatus(decoded.status, "SUBSCRIBE");
+    checkStatus(decoded.status, "SUBSCRIBE");
 
     if (decoded.subId === undefined) {
-      throw new StreamError("SUBSCRIBE response missing subId", "MISSING_SUB_ID");
+      throw new StreamError("SUBSCRIBE response missing subId", "MISSING_SESSION_ID");
     }
 
     return decoded.subId;
-  }
+  };
 
-  private addLocalSubscription(
+  const addLocalSubscription = (
     pattern: string,
     subId: bigint,
     handler: StreamCommitHandler,
-  ): StreamSubscription {
-    const handlerId = this.nextHandlerId++;
-    let subscription = this.subscriptionsByPattern.get(pattern);
+  ): StreamSubscription => {
+    const handlerId = nextHandlerId++;
+    let subscription = subscriptionsByPattern.get(pattern);
     if (!subscription) {
       subscription = { subId, handlers: new Map() };
-      this.subscriptionsByPattern.set(pattern, subscription);
-      this.patternsBySubId.set(subId, pattern);
+      subscriptionsByPattern.set(pattern, subscription);
+      patternsBySubId.set(subId, pattern);
     }
 
     subscription.handlers.set(handlerId, handler);
     return new StreamSubscription(subId, pattern, async () => {
-      await this.unsubscribe(pattern, handlerId);
+      await unsubscribe(pattern, handlerId);
     });
-  }
+  };
 
-  private async unsubscribe(pattern: string, handlerId: number): Promise<void> {
-    const subscription = this.subscriptionsByPattern.get(pattern);
+  const unsubscribe = async (pattern: string, handlerId: number): Promise<void> => {
+    const subscription = subscriptionsByPattern.get(pattern);
     if (!subscription) {
       return;
     }
@@ -251,29 +217,29 @@ export class StreamClient extends DomainClient {
       return;
     }
 
-    this.subscriptionsByPattern.delete(pattern);
-    this.patternsBySubId.delete(subscription.subId);
+    subscriptionsByPattern.delete(pattern);
+    patternsBySubId.delete(subscription.subId);
     const payload = StreamCodec.encodeUnsubscribe(pattern);
-    const response = await this.requestFrame(MSG_STREAM_UNSUBSCRIBE, payload);
+    const response = await requestFrame(MSG_STREAM_UNSUBSCRIBE, payload);
     const decoded = StreamCodec.decodeUnsubscribeResponse(response);
-    this.checkStatus(decoded.status, "UNSUBSCRIBE");
-  }
+    checkStatus(decoded.status, "UNSUBSCRIBE");
+  };
 
-  private initNotifyHandler(): void {
-    if (this.initialized) {
+  const initNotifyHandler = (): void => {
+    if (initialized) {
       return;
     }
 
-    this.initialized = true;
-    this.connection.registerNotificationHandler(MSG_STREAM_NOTIFY, (payload) => {
+    initialized = true;
+    connection.registerNotificationHandler(MSG_STREAM_NOTIFY, (payload) => {
       try {
         const decoded = StreamCodec.decodeNotification(payload);
-        const pattern = this.patternsBySubId.get(decoded.subId);
+        const pattern = patternsBySubId.get(decoded.subId);
         if (!pattern) {
           return;
         }
 
-        const subscription = this.subscriptionsByPattern.get(pattern);
+        const subscription = subscriptionsByPattern.get(pattern);
         if (!subscription) {
           return;
         }
@@ -312,7 +278,7 @@ export class StreamClient extends DomainClient {
         };
 
         for (const handler of subscription.handlers.values()) {
-          this.connection.dispatchAsyncHandler(async () => {
+          connection.dispatchAsyncHandler(async () => {
             await handler(notification);
           });
         }
@@ -320,12 +286,9 @@ export class StreamClient extends DomainClient {
         // Best-effort notification dispatch.
       }
     });
-  }
+  };
 
-  /**
-   * Check status and throw an error for non-OK responses.
-   */
-  private checkStatus(status: number, operation: string): void {
+  const checkStatus = (status: number, operation: string): void => {
     if (status === StreamStatus.Ok) {
       return;
     }
@@ -342,8 +305,29 @@ export class StreamClient extends DomainClient {
 
     const statusName = statusNames[status] || `Unknown(${status})`;
     throw new StreamError(`${operation} failed: ${statusName}`, statusName, status);
-  }
+  };
+
+  return {
+    begin,
+    readPage,
+    read,
+    consume,
+    peek,
+    metadata,
+    subscribe,
+  };
 }
+
+type StreamClientConstructor = {
+  new (connection: Connection): StreamClient;
+  (connection: Connection): StreamClient;
+};
+
+export const StreamClient: StreamClientConstructor = function (connection: Connection) {
+  return createStreamClient(connection);
+} as unknown as StreamClientConstructor;
+
+export * from "./types";
 
 function assertStreamRoute(route: string): void {
   if (!isRouteShape(route, "stream", 3)) {

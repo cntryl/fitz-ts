@@ -1,21 +1,27 @@
-import { bench, describe } from "vite-plus/test";
+import { bench, describe } from "vitest";
 
-import { Multiplexer } from "../src/client/multiplexer";
-import { FrameCodec, FrameParser } from "../src/frame/codec";
-import { NoticeCodec } from "../src/domains/notice/codec";
-import { KvCodec } from "../src/domains/kv/codec";
-import { LeaseCodec } from "../src/domains/lease/codec";
-import { RpcCodec } from "../src/domains/rpc/codec";
+import { Multiplexer } from "../../src/client/multiplexer";
+import { FrameCodec, FrameParser } from "../../src/frame/codec";
+import { NoticeCodec } from "../../src/domains/notice/codec";
+import { KvCodec } from "../../src/domains/kv/codec";
+import { LeaseCodec } from "../../src/domains/lease/codec";
+import { RpcCodec } from "../../src/domains/rpc/codec";
+import { QueueCodec } from "../../src/domains/queue/codec";
+import { ScheduleCodec } from "../../src/domains/schedule/codec";
+import { StreamCodec } from "../../src/domains/stream/codec";
 
 const encoder = new TextEncoder();
 const route = "kv://bench/area/resource";
 const noticeRoute = "notice://bench/area/resource";
 const rpcRoute = "rpc://bench/area/resource";
 const replyRoute = "rpc://bench/area/reply";
+const queueRoute = "queue://bench/area/resource";
+const scheduleRoute = "schedule://bench/area/resource";
 const body = encoder.encode("benchmark-payload");
 const key = encoder.encode("bench-key");
 const txId = 42n;
 const leaseTtlSecs = 30;
+const scheduleCron = "*/5 * * * *";
 
 function buildResponseFrame(index: number): Uint8Array {
   return encoder.encode(`response-${index}`);
@@ -41,6 +47,18 @@ describe("fitz-ts hotpath benchmarks", () => {
 
   bench("lease acquire encode", () => {
     LeaseCodec.encodeAcquire(route, leaseTtlSecs);
+  });
+
+  bench("queue enqueue encode", () => {
+    QueueCodec.encodeEnqueue(queueRoute, body, { delayMs: 1500 });
+  });
+
+  bench("schedule create encode", () => {
+    ScheduleCodec.encodeCreate(scheduleRoute, scheduleCron, body);
+  });
+
+  bench("stream append encode", () => {
+    StreamCodec.encodeAppend(1n, 0n, body, undefined, "tag");
   });
 
   bench("rpc call encode", () => {

@@ -15,278 +15,286 @@ function ensureUtf8ScratchCapacity(minCapacity: number): Uint8Array {
   return utf8Scratch;
 }
 
-export class BufferWriter {
-  private buffer: Uint8Array;
-  private offset: number = 0;
+export type BufferWriter = ReturnType<typeof createBufferWriter>;
 
-  constructor(capacity: number = 4096) {
-    this.buffer = new Uint8Array(capacity);
-  }
+export function createBufferWriter(capacity: number = 4096) {
+  let buffer = new Uint8Array(capacity);
+  let offset = 0;
 
-  private ensureCapacity(needed: number) {
-    if (this.offset + needed > this.buffer.length) {
-      const newCapacity = Math.max(this.buffer.length * 2, this.offset + needed);
+  const ensureCapacity = (needed: number) => {
+    if (offset + needed > buffer.length) {
+      const newCapacity = Math.max(buffer.length * 2, offset + needed);
       const newBuffer = new Uint8Array(newCapacity);
-      newBuffer.set(this.buffer);
-      this.buffer = newBuffer;
+      newBuffer.set(buffer);
+      buffer = newBuffer;
     }
-  }
+  };
 
-  writeU8(value: number): void {
-    this.ensureCapacity(1);
-    this.buffer[this.offset++] = value & 0xff;
-  }
+  const writeU8 = (value: number): void => {
+    ensureCapacity(1);
+    buffer[offset++] = value & 0xff;
+  };
 
-  writeU16BE(value: number): void {
-    this.ensureCapacity(2);
-    this.buffer[this.offset++] = (value >> 8) & 0xff;
-    this.buffer[this.offset++] = value & 0xff;
-  }
+  const writeU16BE = (value: number): void => {
+    ensureCapacity(2);
+    buffer[offset++] = (value >> 8) & 0xff;
+    buffer[offset++] = value & 0xff;
+  };
 
-  writeU32BE(value: number): void {
-    this.ensureCapacity(4);
-    this.buffer[this.offset++] = (value >> 24) & 0xff;
-    this.buffer[this.offset++] = (value >> 16) & 0xff;
-    this.buffer[this.offset++] = (value >> 8) & 0xff;
-    this.buffer[this.offset++] = value & 0xff;
-  }
+  const writeU32BE = (value: number): void => {
+    ensureCapacity(4);
+    buffer[offset++] = (value >> 24) & 0xff;
+    buffer[offset++] = (value >> 16) & 0xff;
+    buffer[offset++] = (value >> 8) & 0xff;
+    buffer[offset++] = value & 0xff;
+  };
 
-  writeU64BE(value: bigint): void {
-    this.ensureCapacity(8);
-    this.buffer[this.offset++] = Number((value >> 56n) & 0xffn);
-    this.buffer[this.offset++] = Number((value >> 48n) & 0xffn);
-    this.buffer[this.offset++] = Number((value >> 40n) & 0xffn);
-    this.buffer[this.offset++] = Number((value >> 32n) & 0xffn);
-    this.buffer[this.offset++] = Number((value >> 24n) & 0xffn);
-    this.buffer[this.offset++] = Number((value >> 16n) & 0xffn);
-    this.buffer[this.offset++] = Number((value >> 8n) & 0xffn);
-    this.buffer[this.offset++] = Number(value & 0xffn);
-  }
+  const writeU64BE = (value: bigint): void => {
+    ensureCapacity(8);
+    buffer[offset++] = Number((value >> 56n) & 0xffn);
+    buffer[offset++] = Number((value >> 48n) & 0xffn);
+    buffer[offset++] = Number((value >> 40n) & 0xffn);
+    buffer[offset++] = Number((value >> 32n) & 0xffn);
+    buffer[offset++] = Number((value >> 24n) & 0xffn);
+    buffer[offset++] = Number((value >> 16n) & 0xffn);
+    buffer[offset++] = Number((value >> 8n) & 0xffn);
+    buffer[offset++] = Number(value & 0xffn);
+  };
 
-  writeBytes(data: Uint8Array): void {
-    this.ensureCapacity(data.length);
-    this.buffer.set(data, this.offset);
-    this.offset += data.length;
-  }
+  const writeBytes = (data: Uint8Array): void => {
+    ensureCapacity(data.length);
+    buffer.set(data, offset);
+    offset += data.length;
+  };
 
-  writeString(str: string): void {
+  const writeString = (str: string): void => {
     if (str.length === 0) {
-      this.writeU32BE(0);
+      writeU32BE(0);
       return;
     }
 
     const scratch = ensureUtf8ScratchCapacity(str.length * 4);
     const { written } = utf8Encoder.encodeInto(str, scratch);
-    this.writeU32BE(written);
-    this.writeBytes(scratch.subarray(0, written));
-  }
+    writeU32BE(written);
+    writeBytes(scratch.subarray(0, written));
+  };
 
-  writeRoute(route: string): void {
-    this.writeString(route);
-  }
+  const writeRoute = (route: string): void => {
+    writeString(route);
+  };
 
-  getBuffer(): Uint8Array {
-    return this.buffer.slice(0, this.offset);
-  }
+  const getBuffer = (): Uint8Array => buffer.slice(0, offset);
 
-  getLength(): number {
-    return this.offset;
-  }
+  const getLength = (): number => offset;
 
-  reset(): void {
-    this.offset = 0;
-  }
+  const reset = (): void => {
+    offset = 0;
+  };
 
-  /**
-   * Write optional U64BE value
-   * Format: [u8 hasValue][u64 value if hasValue=1]
-   */
-  writeOptionalU64(value: bigint | undefined): void {
+  const writeOptionalU64 = (value: bigint | undefined): void => {
     if (value === undefined) {
-      this.writeU8(0);
+      writeU8(0);
     } else {
-      this.writeU8(1);
-      this.writeU64BE(value);
+      writeU8(1);
+      writeU64BE(value);
     }
-  }
+  };
 
-  /**
-   * Write optional string value
-   * Format: [u8 hasValue][u32 len][string if hasValue=1]
-   */
-  writeOptionalString(value: string | undefined): void {
+  const writeOptionalString = (value: string | undefined): void => {
     if (value === undefined) {
-      this.writeU8(0);
+      writeU8(0);
     } else {
-      this.writeU8(1);
-      this.writeString(value);
+      writeU8(1);
+      writeString(value);
     }
-  }
+  };
 
-  /**
-   * Write optional bytes value
-   * Format: [u8 hasValue][u32 len][bytes if hasValue=1]
-   */
-  writeOptionalBytes(value: Uint8Array | undefined): void {
+  const writeOptionalBytes = (value: Uint8Array | undefined): void => {
     if (value === undefined) {
-      this.writeU8(0);
+      writeU8(0);
     } else {
-      this.writeU8(1);
-      this.writeU32BE(value.length);
-      this.writeBytes(value);
+      writeU8(1);
+      writeU32BE(value.length);
+      writeBytes(value);
     }
-  }
+  };
+
+  return {
+    writeU8,
+    writeU16BE,
+    writeU32BE,
+    writeU64BE,
+    writeBytes,
+    writeString,
+    writeRoute,
+    getBuffer,
+    getLength,
+    reset,
+    writeOptionalU64,
+    writeOptionalString,
+    writeOptionalBytes,
+  };
 }
 
-export class BufferReader {
-  private buffer: Uint8Array;
-  private offset: number = 0;
+type BufferWriterConstructor = {
+  new (capacity?: number): BufferWriter;
+  (capacity?: number): BufferWriter;
+};
 
-  constructor(buffer: Uint8Array) {
-    this.buffer = buffer;
-  }
+export const BufferWriter: BufferWriterConstructor = function (capacity = 4096) {
+  return createBufferWriter(capacity);
+} as unknown as BufferWriterConstructor;
 
-  readU8(): number {
-    if (this.offset >= this.buffer.length) {
+export type BufferReader = ReturnType<typeof createBufferReader>;
+
+export function createBufferReader(buffer: Uint8Array) {
+  let internalBuffer = buffer;
+  let offset = 0;
+
+  const readU8 = (): number => {
+    if (offset >= internalBuffer.length) {
       throw new Error("Buffer overflow: cannot read U8");
     }
-    return this.buffer[this.offset++];
-  }
+    return internalBuffer[offset++];
+  };
 
-  readU16BE(): number {
-    if (this.offset + 2 > this.buffer.length) {
+  const readU16BE = (): number => {
+    if (offset + 2 > internalBuffer.length) {
       throw new Error("Buffer overflow: cannot read U16BE");
     }
-    const value = (this.buffer[this.offset] << 8) | this.buffer[this.offset + 1];
-    this.offset += 2;
+    const value = (internalBuffer[offset] << 8) | internalBuffer[offset + 1];
+    offset += 2;
     return value;
-  }
+  };
 
-  readU32BE(): number {
-    if (this.offset + 4 > this.buffer.length) {
+  const readU32BE = (): number => {
+    if (offset + 4 > internalBuffer.length) {
       throw new Error("Buffer overflow: cannot read U32BE");
     }
     const value =
-      (this.buffer[this.offset] << 24) |
-      (this.buffer[this.offset + 1] << 16) |
-      (this.buffer[this.offset + 2] << 8) |
-      this.buffer[this.offset + 3];
-    this.offset += 4;
-    return value >>> 0; // Ensure unsigned
-  }
+      (internalBuffer[offset] << 24) |
+      (internalBuffer[offset + 1] << 16) |
+      (internalBuffer[offset + 2] << 8) |
+      internalBuffer[offset + 3];
+    offset += 4;
+    return value >>> 0;
+  };
 
-  readU64BE(): bigint {
-    if (this.offset + 8 > this.buffer.length) {
+  const readU64BE = (): bigint => {
+    if (offset + 8 > internalBuffer.length) {
       throw new Error("Buffer overflow: cannot read U64BE");
     }
     const high =
-      ((BigInt(this.buffer[this.offset]) << 24n) |
-        (BigInt(this.buffer[this.offset + 1]) << 16n) |
-        (BigInt(this.buffer[this.offset + 2]) << 8n) |
-        BigInt(this.buffer[this.offset + 3])) &
+      ((BigInt(internalBuffer[offset]) << 24n) |
+        (BigInt(internalBuffer[offset + 1]) << 16n) |
+        (BigInt(internalBuffer[offset + 2]) << 8n) |
+        BigInt(internalBuffer[offset + 3])) &
       0xffffffffn;
 
     const low =
-      ((BigInt(this.buffer[this.offset + 4]) << 24n) |
-        (BigInt(this.buffer[this.offset + 5]) << 16n) |
-        (BigInt(this.buffer[this.offset + 6]) << 8n) |
-        BigInt(this.buffer[this.offset + 7])) &
+      ((BigInt(internalBuffer[offset + 4]) << 24n) |
+        (BigInt(internalBuffer[offset + 5]) << 16n) |
+        (BigInt(internalBuffer[offset + 6]) << 8n) |
+        BigInt(internalBuffer[offset + 7])) &
       0xffffffffn;
 
-    this.offset += 8;
+    offset += 8;
     return (high << 32n) | low;
-  }
+  };
 
-  readBytes(count: number): Uint8Array {
-    if (this.offset + count > this.buffer.length) {
+  const readBytes = (count: number): Uint8Array => {
+    if (offset + count > internalBuffer.length) {
       throw new Error("Buffer overflow: cannot read bytes");
     }
-    const data = this.buffer.slice(this.offset, this.offset + count);
-    this.offset += count;
+    const data = internalBuffer.slice(offset, offset + count);
+    offset += count;
     return data;
-  }
+  };
 
-  readString(): string {
-    const length = this.readU32BE();
+  const readString = (): string => {
+    const length = readU32BE();
     if (length === 0) {
       return "";
     }
 
-    const bytes = this.readBytes(length);
+    const bytes = readBytes(length);
     return utf8Decoder.decode(bytes);
-  }
+  };
 
-  readRoute(): string {
-    return this.readString();
-  }
+  const readRoute = (): string => readString();
 
-  remainingBytes(): number {
-    return this.buffer.length - this.offset;
-  }
+  const remainingBytes = (): number => internalBuffer.length - offset;
 
-  isEOF(): boolean {
-    return this.offset >= this.buffer.length;
-  }
+  const isEOF = (): boolean => offset >= internalBuffer.length;
 
-  getOffset(): number {
-    return this.offset;
-  }
+  const getOffset = (): number => offset;
 
-  setOffset(offset: number): void {
-    if (offset < 0 || offset > this.buffer.length) {
+  const setOffset = (value: number): void => {
+    if (value < 0 || value > internalBuffer.length) {
       throw new Error("Invalid offset");
     }
-    this.offset = offset;
-  }
+    offset = value;
+  };
 
-  peekU8(): number {
-    if (this.offset >= this.buffer.length) {
+  const peekU8 = (): number => {
+    if (offset >= internalBuffer.length) {
       throw new Error("Buffer overflow: cannot peek U8");
     }
-    return this.buffer[this.offset];
-  }
+    return internalBuffer[offset];
+  };
 
-  /**
-   * Read optional U64BE value
-   * Format: [u8 hasValue][u64 value if hasValue=1]
-   */
-  readOptionalU64(): bigint | undefined {
-    const hasValue = this.readU8();
+  const readOptionalU64 = (): bigint | undefined => {
+    const hasValue = readU8();
     if (hasValue === 0) {
       return undefined;
     }
-    return this.readU64BE();
-  }
+    return readU64BE();
+  };
 
-  /**
-   * Read optional string value
-   * Format: [u8 hasValue][u32 len][string if hasValue=1]
-   */
-  readOptionalString(): string | undefined {
-    const hasValue = this.readU8();
+  const readOptionalString = (): string | undefined => {
+    const hasValue = readU8();
     if (hasValue === 0) {
       return undefined;
     }
-    return this.readString();
-  }
+    return readString();
+  };
 
-  /**
-   * Read optional bytes value
-   * Format: [u8 hasValue][u32 len][bytes if hasValue=1]
-   */
-  readOptionalBytes(): Uint8Array | undefined {
-    const hasValue = this.readU8();
+  const readOptionalBytes = (): Uint8Array | undefined => {
+    const hasValue = readU8();
     if (hasValue === 0) {
       return undefined;
     }
-    const length = this.readU32BE();
-    return this.readBytes(length);
-  }
+    const length = readU32BE();
+    return readBytes(length);
+  };
 
-  /**
-   * Get remaining unread bytes
-   */
-  remaining(): Uint8Array {
-    return this.buffer.slice(this.offset);
-  }
+  const remaining = (): Uint8Array => internalBuffer.slice(offset);
+
+  return {
+    readU8,
+    readU16BE,
+    readU32BE,
+    readU64BE,
+    readBytes,
+    readString,
+    readRoute,
+    remainingBytes,
+    isEOF,
+    getOffset,
+    setOffset,
+    peekU8,
+    readOptionalU64,
+    readOptionalString,
+    readOptionalBytes,
+    remaining,
+  };
 }
+
+type BufferReaderConstructor = {
+  new (buffer: Uint8Array): BufferReader;
+  (buffer: Uint8Array): BufferReader;
+};
+
+export const BufferReader: BufferReaderConstructor = function (buffer: Uint8Array) {
+  return createBufferReader(buffer);
+} as unknown as BufferReaderConstructor;

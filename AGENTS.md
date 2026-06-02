@@ -13,6 +13,12 @@ This repo uses Vite+ and npm script aliases. Use the package.json scripts as the
 
 Use the `package.json` scripts as the source of truth.
 
+## Style Preference
+
+- Prefer factory functions and plain object APIs instead of class constructors for runtime objects.
+- Implement stateful abstractions with closure-backed factories.
+- Preserve `Error` subclasses as classes when native exception semantics are desired.
+
 ## Core Commands
 
 - `npm run verify:fast`
@@ -33,4 +39,3 @@ Use the `package.json` scripts as the source of truth.
 - Run `npm ci` after dependency changes.
 - Run `npm run verify:fast` for local validation.
 - Run `npm run verify` before release-facing changes are considered done.
-- Keep [`scripts/pack-smoke.js`](/D:/repos/cntryl/fitz-workspace/fitz-ts/scripts/pack-smoke.js) green when changing build or package metadata.

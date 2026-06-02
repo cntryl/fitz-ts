@@ -39,26 +39,30 @@
     "access": "public"
   },
   "scripts": {
-    "build": "vp pack && tsc -p tsconfig.build.json && node ./scripts/fix-dts-imports.js",
-    "pack:smoke": "node ./scripts/pack-smoke.js",
+    "build": "vp pack && tsc -p tsconfig.build.json",
+    "pack:smoke": "npm pack --pack-destination artifacts && mkdir -p artifacts/smoke && cd artifacts/smoke && npm init -y >/dev/null 2>&1 && npm install \"../$(ls ../*.tgz | head -n 1)\" >/dev/null 2>&1",
     "test": "npm run test:unit && npm run test:integration && npm run test:conformance",
     "test:unit": "vp test run --project unit",
     "test:integration": "vp test run --project integration",
     "test:conformance": "vp test run --project conformance --reporter=verbose",
     "verify:fast": "npm run fmt:check && npm run lint && npm run build && npm run test:unit",
     "verify": "npm run verify:fast && npm run test:integration && npm run test:conformance",
-    "bench": "vp test bench --run",
+    "bench": "npm run bench:tier1 && npm run bench:tier2 && npm run bench:tier3 && npm run bench:tier4",
+    "bench:tier1": "NODE_ENV=production vp exec vitest bench --run --reporter=default benches/tier1/*.bench.ts",
+    "bench:tier2": "NODE_ENV=production vp exec vitest bench --run --reporter=default benches/tier2/*.bench.ts",
+    "bench:tier3": "NODE_ENV=production vp exec vitest bench --run --reporter=default benches/tier3/*.bench.ts",
+    "bench:tier4": "NODE_ENV=production vp exec vitest bench --run --reporter=default benches/tier4/*.bench.ts",
     "lint": "vp lint . --deny-warnings",
     "fmt": "vp fmt .",
     "fmt:check": "vp fmt --check",
     "prepare": "vp config"
   },
   "devDependencies": {
-    "@types/node": "^25.6.0",
-    "typescript": "^6.0.2",
+    "@types/node": "^25.9.1",
+    "typescript": "^6.0.3",
     "vite-plus": "latest",
     "vitest": "npm:@voidzero-dev/vite-plus-test@latest",
-    "ws": "^8.20.0"
+    "ws": "^8.21.0"
   },
   "overrides": {
     "vite": "npm:@voidzero-dev/vite-plus-core@latest",
@@ -67,5 +71,5 @@
   "engines": {
     "node": ">=20.19.0"
   },
-  "packageManager": "npm@11.12.1"
+  "packageManager": "npm@11.16.0"
 }

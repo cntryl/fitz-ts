@@ -15,7 +15,6 @@ import {
   StreamRecord,
   StreamReadCursor,
   StreamReadItem,
-  StreamReadPage,
   StreamReadOptions,
 } from "./types";
 
@@ -446,7 +445,9 @@ export class StreamCodec {
     }
   }
 
-  private static decodeStreamFilteredReason(reader: BufferReader): StreamFilteredReason | undefined {
+  private static decodeStreamFilteredReason(
+    reader: BufferReader,
+  ): StreamFilteredReason | undefined {
     const tag = reader.readU8();
     switch (tag) {
       case 0:

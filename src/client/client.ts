@@ -2,8 +2,9 @@
  * Main Fitz client facade.
  */
 
-import { ClientConfig, ConnectionState, FitzObservability, TokenProvider } from "../core/types";
-import { Connection } from "./connection";
+import { ConnectionState } from "../core/types";
+import type { ClientConfig, TokenProvider } from "../core/types";
+import { Connection, createConnection } from "./connection";
 import { createTransport } from "../transport/factory";
 import { ConnectionError } from "../core/errors";
 import { KvClient } from "../domains/kv/client";
@@ -14,174 +15,197 @@ import { NoticeClient } from "../domains/notice/client";
 import { StreamClient } from "../domains/stream/client";
 import { ScheduleClient } from "../domains/schedule/client";
 
-export class Client {
-  private readonly config: Required<
+export type Client = ReturnType<typeof createClient>;
+
+export function createClient(config: ClientConfig) {
+  const observability = config.observability;
+  const resolvedConfig: Required<
     Omit<ClientConfig, "tokenProvider" | "reconnect" | "asyncHandlers">
   > &
-    Pick<ClientConfig, "tokenProvider" | "reconnect" | "asyncHandlers">;
-  private readonly observability: FitzObservability | undefined;
-  private connection: Connection | null = null;
-  private kvClient: KvClient | null = null;
-  private queueClient: QueueClient | null = null;
-  private rpcClient: RpcClient | null = null;
-  private leaseClient: LeaseClient | null = null;
-  private noticeClient: NoticeClient | null = null;
-  private streamClient: StreamClient | null = null;
-  private scheduleClient: ScheduleClient | null = null;
+    Pick<ClientConfig, "tokenProvider" | "reconnect" | "asyncHandlers"> = {
+    timeout: 30000,
+    transport: "auto",
+    maxFrameSize: 65535,
+    authSettleDelayMs: 100,
+    maxInFlightRequests: 256,
+    observability: config.observability ?? {},
+    reconnect: {
+      enabled: false,
+      maxAttempts: Infinity,
+      backoffMs: 250,
+      maxBackoffMs: 5000,
+      ...config.reconnect,
+    },
+    asyncHandlers: {
+      maxConcurrency: Infinity,
+      timeoutMs: 30000,
+      ...config.asyncHandlers,
+    },
+    ...config,
+  };
 
-  constructor(config: ClientConfig) {
-    this.observability = config.observability;
-    this.config = {
-      timeout: 30000,
-      transport: "auto",
-      maxFrameSize: 65535,
-      authSettleDelayMs: 100,
-      maxInFlightRequests: 256,
-      observability: config.observability ?? {},
-      reconnect: {
-        enabled: false,
-        maxAttempts: Infinity,
-        backoffMs: 250,
-        maxBackoffMs: 5000,
-        ...config.reconnect,
-      },
-      asyncHandlers: {
-        maxConcurrency: Infinity,
-        timeoutMs: 30000,
-        ...config.asyncHandlers,
-      },
-      ...config,
-    };
-
-    if (!this.config.url) {
-      throw new Error("URL is required");
-    }
+  if (!resolvedConfig.url) {
+    throw new Error("URL is required");
   }
 
-  async connect(options: { signal?: AbortSignal } = {}): Promise<void> {
-    if (this.connection?.isConnected()) {
-      return;
-    }
+  let connection: Connection | null = null;
+  let kvClient: KvClient | null = null;
+  let queueClient: QueueClient | null = null;
+  let rpcClient: RpcClient | null = null;
+  let leaseClient: LeaseClient | null = null;
+  let noticeClient: NoticeClient | null = null;
+  let streamClient: StreamClient | null = null;
+  let scheduleClient: ScheduleClient | null = null;
 
-    const tokenProvider = this.resolveTokenProvider();
-
-    this.connection = new Connection(
-      () =>
-        createTransport(this.config.url, this.config.transport, {
-          timeout: this.config.timeout,
-          maxFrameSize: this.config.maxFrameSize,
-        }),
-      tokenProvider,
-      {
-        timeout: this.config.timeout,
-        authSettleDelayMs: this.config.authSettleDelayMs,
-        maxInFlightRequests: this.config.maxInFlightRequests,
-        reconnect: this.config.reconnect,
-        observability: this.observability,
-        asyncHandlers: this.config.asyncHandlers,
-      },
-    );
-
-    await this.connection.connect(options);
-  }
-
-  async close(): Promise<void> {
-    if (this.connection) {
-      await this.connection.close();
-      this.connection = null;
-    }
-    this.kvClient = null;
-    this.queueClient = null;
-    this.rpcClient = null;
-    this.leaseClient = null;
-    this.noticeClient = null;
-    this.streamClient = null;
-    this.scheduleClient = null;
-  }
-
-  isConnected(): boolean {
-    return this.connection?.isConnected() ?? false;
-  }
-
-  kv(): KvClient {
-    const connection = this.ensureConnection();
-    if (!this.kvClient) {
-      this.kvClient = new KvClient(connection);
-    }
-    return this.kvClient;
-  }
-
-  queue(): QueueClient {
-    const connection = this.ensureConnection();
-    if (!this.queueClient) {
-      this.queueClient = new QueueClient(connection);
-    }
-    return this.queueClient;
-  }
-
-  rpc(): RpcClient {
-    const connection = this.ensureConnection();
-    if (!this.rpcClient) {
-      this.rpcClient = new RpcClient(connection);
-    }
-    return this.rpcClient;
-  }
-
-  lease(): LeaseClient {
-    const connection = this.ensureConnection();
-    if (!this.leaseClient) {
-      this.leaseClient = new LeaseClient(connection);
-    }
-    return this.leaseClient;
-  }
-
-  notice(): NoticeClient {
-    const connection = this.ensureConnection();
-    if (!this.noticeClient) {
-      this.noticeClient = new NoticeClient(connection);
-    }
-    return this.noticeClient;
-  }
-
-  stream(): StreamClient {
-    const connection = this.ensureConnection();
-    if (!this.streamClient) {
-      this.streamClient = new StreamClient(connection);
-    }
-    return this.streamClient;
-  }
-
-  schedule(): ScheduleClient {
-    const connection = this.ensureConnection();
-    if (!this.scheduleClient) {
-      this.scheduleClient = new ScheduleClient(connection);
-    }
-    return this.scheduleClient;
-  }
-
-  getUrl(): string {
-    return this.ensureConnection().getUrl();
-  }
-
-  getState(): ConnectionState {
-    return this.connection?.getState() ?? ConnectionState.Disconnected;
-  }
-
-  private resolveTokenProvider(): TokenProvider {
-    if (this.config.tokenProvider) {
-      return this.config.tokenProvider;
+  const resolveTokenProvider = (): TokenProvider => {
+    if (resolvedConfig.tokenProvider) {
+      return resolvedConfig.tokenProvider;
     }
 
     return () => "";
-  }
+  };
 
-  private ensureConnection(): Connection {
-    if (!this.connection) {
+  const ensureConnection = (): Connection => {
+    if (!connection) {
       throw new ConnectionError("Not connected to Fitz server. Call connect() first.", {
-        state: this.getState(),
+        state: getState(),
       });
     }
 
-    return this.connection;
-  }
+    return connection;
+  };
+
+  const connect = async (options: { signal?: AbortSignal } = {}): Promise<void> => {
+    if (connection?.isConnected()) {
+      return;
+    }
+
+    const tokenProvider = resolveTokenProvider();
+
+    connection = createConnection(
+      () =>
+        createTransport(resolvedConfig.url, resolvedConfig.transport, {
+          timeout: resolvedConfig.timeout,
+          maxFrameSize: resolvedConfig.maxFrameSize,
+        }),
+      tokenProvider,
+      {
+        timeout: resolvedConfig.timeout,
+        authSettleDelayMs: resolvedConfig.authSettleDelayMs,
+        maxInFlightRequests: resolvedConfig.maxInFlightRequests,
+        reconnect: resolvedConfig.reconnect,
+        observability,
+        asyncHandlers: resolvedConfig.asyncHandlers,
+      },
+    );
+
+    await connection.connect(options);
+  };
+
+  const close = async (): Promise<void> => {
+    if (connection) {
+      await connection.close();
+      connection = null;
+    }
+    kvClient = null;
+    queueClient = null;
+    rpcClient = null;
+    leaseClient = null;
+    noticeClient = null;
+    streamClient = null;
+    scheduleClient = null;
+  };
+
+  const isConnected = (): boolean => {
+    return connection?.isConnected() ?? false;
+  };
+
+  const kv = (): KvClient => {
+    const activeConnection = ensureConnection();
+    if (!kvClient) {
+      kvClient = new KvClient(activeConnection);
+    }
+    return kvClient;
+  };
+
+  const queue = (): QueueClient => {
+    const activeConnection = ensureConnection();
+    if (!queueClient) {
+      queueClient = new QueueClient(activeConnection);
+    }
+    return queueClient;
+  };
+
+  const rpc = (): RpcClient => {
+    const activeConnection = ensureConnection();
+    if (!rpcClient) {
+      rpcClient = new RpcClient(activeConnection);
+    }
+    return rpcClient;
+  };
+
+  const lease = (): LeaseClient => {
+    const activeConnection = ensureConnection();
+    if (!leaseClient) {
+      leaseClient = new LeaseClient(activeConnection);
+    }
+    return leaseClient;
+  };
+
+  const notice = (): NoticeClient => {
+    const activeConnection = ensureConnection();
+    if (!noticeClient) {
+      noticeClient = new NoticeClient(activeConnection);
+    }
+    return noticeClient;
+  };
+
+  const stream = (): StreamClient => {
+    const activeConnection = ensureConnection();
+    if (!streamClient) {
+      streamClient = new StreamClient(activeConnection);
+    }
+    return streamClient;
+  };
+
+  const schedule = (): ScheduleClient => {
+    const activeConnection = ensureConnection();
+    if (!scheduleClient) {
+      scheduleClient = new ScheduleClient(activeConnection);
+    }
+    return scheduleClient;
+  };
+
+  const getUrl = (): string => {
+    return ensureConnection().getUrl();
+  };
+
+  const getState = (): ConnectionState => {
+    return connection?.getState() ?? ConnectionState.Disconnected;
+  };
+
+  return {
+    config: resolvedConfig,
+    connect,
+    close,
+    isConnected,
+    kv,
+    queue,
+    rpc,
+    lease,
+    notice,
+    stream,
+    schedule,
+    getUrl,
+    getState,
+  };
 }
+
+type ClientConstructor = {
+  new (config: ClientConfig): Client;
+  (config: ClientConfig): Client;
+};
+
+export const Client: ClientConstructor = function (config: ClientConfig) {
+  return createClient(config);
+} as unknown as ClientConstructor;

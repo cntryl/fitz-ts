@@ -15,6 +15,7 @@ export interface ResponseFrame {
  * Inbound RPC request received by a worker
  */
 export interface InboundRequest {
+  correlationId: Uint8Array;
   route: string;
   replyRoute: string;
   body: Uint8Array;

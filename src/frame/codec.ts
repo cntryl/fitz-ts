@@ -12,228 +12,217 @@ export interface Frame {
   payload: Uint8Array;
 }
 
-export class FrameCodec {
-  /**
-   * Encode a message type (variable-length: 1-3 bytes)
-   * 0-254: single byte
-   * 255+: 0xFF followed by u16 BE
-   */
-  private static encodeMessageType(messageType: number, writer: BufferWriter): void {
-    if (messageType < 0) {
-      throw new CodecError(`Invalid message type: ${messageType}`);
-    }
-    if (messageType <= 254) {
-      writer.writeU8(messageType);
-    } else {
-      writer.writeU8(0xff);
-      writer.writeU16BE(messageType);
-    }
+const encodeMessageType = (messageType: number, writer: BufferWriter): void => {
+  if (messageType < 0) {
+    throw new CodecError(`Invalid message type: ${messageType}`);
   }
-
-  /**
-   * Decode a message type (variable-length)
-   */
-  private static decodeMessageType(reader: BufferReader): number {
-    const firstByte = reader.readU8();
-    if (firstByte === 0xff) {
-      return reader.readU16BE();
-    }
-    return firstByte;
+  if (messageType <= 254) {
+    writer.writeU8(messageType);
+  } else {
+    writer.writeU8(0xff);
+    writer.writeU16BE(messageType);
   }
+};
 
-  /**
-   * Encode frame: [MessageType][Length (u16 BE)][Payload]
-   */
-  static encodeFrame(messageType: number, payload: Uint8Array): Uint8Array {
-    const writer = new BufferWriter(payload.length + 10);
-
-    // Encode message type
-    this.encodeMessageType(messageType, writer);
-
-    // Encode length
-    writer.writeU16BE(payload.length);
-
-    // Write payload
-    writer.writeBytes(payload);
-
-    return writer.getBuffer();
+const decodeMessageType = (reader: BufferReader): number => {
+  const firstByte = reader.readU8();
+  if (firstByte === 0xff) {
+    return reader.readU16BE();
   }
+  return firstByte;
+};
 
-  /**
-   * Decode frame from buffer
-   */
-  static decodeFrame(buffer: Uint8Array): Frame {
-    const reader = new BufferReader(buffer);
+const encodeFrame = (messageType: number, payload: Uint8Array): Uint8Array => {
+  const writer = BufferWriter(payload.length + 10);
 
-    try {
-      const messageType = this.decodeMessageType(reader);
-      const length = reader.readU16BE();
+  encodeMessageType(messageType, writer);
+  writer.writeU16BE(payload.length);
+  writer.writeBytes(payload);
 
-      if (reader.remainingBytes() < length) {
-        throw new CodecError(
-          `Frame incomplete: expected ${length} bytes, got ${reader.remainingBytes()}`,
-        );
-      }
+  return writer.getBuffer();
+};
 
-      const payload = reader.readBytes(length);
+const decodeFrame = (buffer: Uint8Array): Frame => {
+  const reader = BufferReader(buffer);
 
-      return { messageType, payload };
-    } catch (err) {
-      if (err instanceof CodecError) {
-        throw err;
-      }
+  try {
+    const messageType = decodeMessageType(reader);
+    const length = reader.readU16BE();
+
+    if (reader.remainingBytes() < length) {
       throw new CodecError(
-        `Failed to decode frame: ${err instanceof Error ? err.message : String(err)}`,
+        `Frame incomplete: expected ${length} bytes, got ${reader.remainingBytes()}`,
       );
     }
-  }
 
-  /**
-   * Calculate encoded size of a message type
-   */
-  static getMessageTypeSize(messageType: number): number {
-    if (messageType <= 254) {
-      return 1;
+    const payload = reader.readBytes(length);
+
+    return { messageType, payload };
+  } catch (err) {
+    if (err instanceof CodecError) {
+      throw err;
     }
-    return 3; // 0xFF + u16 BE
+    throw new CodecError(
+      `Failed to decode frame: ${err instanceof Error ? err.message : String(err)}`,
+    );
   }
+};
 
-  /**
-   * Calculate total frame size
-   */
-  static calculateFrameSize(messageType: number, payloadLength: number): number {
-    return this.getMessageTypeSize(messageType) + 2 + payloadLength; // +2 for length field
+const getMessageTypeSize = (messageType: number): number => {
+  if (messageType <= 254) {
+    return 1;
   }
-}
+  return 3;
+};
+
+const calculateFrameSize = (messageType: number, payloadLength: number): number => {
+  return getMessageTypeSize(messageType) + 2 + payloadLength;
+};
+
+export const FrameCodec = {
+  encodeFrame,
+  decodeFrame,
+  getMessageTypeSize,
+  calculateFrameSize,
+};
 
 /**
  * Helper for streaming frame parsing
  */
-export class FrameParser {
-  private buffer: Uint8Array = new Uint8Array(0);
-  private offset: number = 0;
-  private messageType: number | null = null;
-  private payloadLength: number | null = null;
-  private state: "reading_type" | "reading_length" | "reading_payload" = "reading_type";
+export type FrameParser = ReturnType<typeof createFrameParser>;
 
-  /**
-   * Feed data into the parser and try to extract complete frames
-   */
-  parseFrames(data: Uint8Array): Frame[] {
-    this.appendData(data);
+export function createFrameParser() {
+  let buffer: Uint8Array = new Uint8Array(0);
+  let offset = 0;
+  let messageType: number | null = null;
+  let payloadLength: number | null = null;
+  let state: "reading_type" | "reading_length" | "reading_payload" = "reading_type";
 
-    const frames: Frame[] = [];
-
-    while (true) {
-      if (this.state === "reading_type") {
-        if (!this.tryReadMessageType()) break;
-        this.state = "reading_length";
-      }
-
-      if (this.state === "reading_length") {
-        if (!this.tryReadLength()) break;
-        this.state = "reading_payload";
-      }
-
-      if (this.state === "reading_payload") {
-        if (!this.tryReadPayload(frames)) break;
-        this.state = "reading_type";
-      }
-    }
-
-    // Compact buffer by removing consumed data
-    this.compactBuffer();
-
-    return frames;
-  }
-
-  private appendData(data: Uint8Array): void {
+  const appendData = (data: Uint8Array): void => {
     if (data.length === 0) {
       return;
     }
 
-    if (this.buffer.length === 0) {
-      this.buffer = data;
-      this.offset = 0;
+    if (buffer.length === 0) {
+      buffer = data;
+      offset = 0;
       return;
     }
 
-    const newBuffer = new Uint8Array(this.buffer.length + data.length);
-    newBuffer.set(this.buffer);
-    newBuffer.set(data, this.buffer.length);
-    this.buffer = newBuffer;
-    this.offset = 0;
-  }
+    const newBuffer = new Uint8Array(buffer.length + data.length);
+    newBuffer.set(buffer);
+    newBuffer.set(data, buffer.length);
+    buffer = newBuffer;
+    offset = 0;
+  };
 
-  private tryReadMessageType(): boolean {
-    if (this.offset >= this.buffer.length) return false;
+  const tryReadMessageType = (): boolean => {
+    if (offset >= buffer.length) return false;
 
-    const firstByte = this.buffer[this.offset];
+    const firstByte = buffer[offset];
 
     if (firstByte === 0xff) {
-      // Extended message type (3 bytes total)
-      if (this.offset + 3 > this.buffer.length) return false;
+      if (offset + 3 > buffer.length) return false;
 
-      const high = this.buffer[this.offset + 1];
-      const low = this.buffer[this.offset + 2];
-      this.messageType = (high << 8) | low;
-      this.offset += 3;
+      const high = buffer[offset + 1];
+      const low = buffer[offset + 2];
+      messageType = (high << 8) | low;
+      offset += 3;
     } else {
-      // Short message type (1 byte)
-      this.messageType = firstByte;
-      this.offset += 1;
+      messageType = firstByte;
+      offset += 1;
     }
 
     return true;
-  }
+  };
 
-  private tryReadLength(): boolean {
-    if (this.offset + 2 > this.buffer.length) return false;
+  const tryReadLength = (): boolean => {
+    if (offset + 2 > buffer.length) return false;
 
-    const high = this.buffer[this.offset];
-    const low = this.buffer[this.offset + 1];
-    this.payloadLength = (high << 8) | low;
-    this.offset += 2;
+    const high = buffer[offset];
+    const low = buffer[offset + 1];
+    payloadLength = (high << 8) | low;
+    offset += 2;
 
     return true;
-  }
+  };
 
-  private tryReadPayload(frames: Frame[]): boolean {
-    if (this.messageType === null || this.payloadLength === null) return false;
+  const tryReadPayload = (frames: Frame[]): boolean => {
+    if (messageType === null || payloadLength === null) return false;
 
-    if (this.offset + this.payloadLength > this.buffer.length) return false;
+    if (offset + payloadLength > buffer.length) return false;
 
-    const payload = this.buffer.slice(this.offset, this.offset + this.payloadLength);
-    this.offset += this.payloadLength;
+    const payload = buffer.slice(offset, offset + payloadLength);
+    offset += payloadLength;
 
     frames.push({
-      messageType: this.messageType,
+      messageType,
       payload,
     });
 
-    this.messageType = null;
-    this.payloadLength = null;
+    messageType = null;
+    payloadLength = null;
 
     return true;
-  }
+  };
 
-  private compactBuffer(): void {
-    if (this.offset > 0) {
-      this.buffer = this.buffer.slice(this.offset);
-      this.offset = 0;
+  const compactBuffer = (): void => {
+    if (offset > 0) {
+      buffer = buffer.slice(offset);
+      offset = 0;
     }
-  }
+  };
 
-  hasCompleteFrame(): boolean {
-    if (this.state === "reading_type") {
+  const parseFrames = (data: Uint8Array): Frame[] => {
+    appendData(data);
+
+    const frames: Frame[] = [];
+
+    while (true) {
+      if (state === "reading_type") {
+        if (!tryReadMessageType()) break;
+        state = "reading_length";
+      }
+
+      if (state === "reading_length") {
+        if (!tryReadLength()) break;
+        state = "reading_payload";
+      }
+
+      if (state === "reading_payload") {
+        if (!tryReadPayload(frames)) break;
+        state = "reading_type";
+      }
+    }
+
+    compactBuffer();
+
+    return frames;
+  };
+
+  const hasCompleteFrame = (): boolean => {
+    if (state === "reading_type") {
       return false;
     }
-    if (this.state === "reading_length") {
+    if (state === "reading_length") {
       return false;
     }
-    if (this.state === "reading_payload" && this.payloadLength !== null) {
-      return this.offset + this.payloadLength <= this.buffer.length;
+    if (state === "reading_payload" && payloadLength !== null) {
+      return offset + payloadLength <= buffer.length;
     }
     return false;
-  }
+  };
+
+  return {
+    parseFrames,
+    hasCompleteFrame,
+  };
 }
+
+type FrameParserConstructor = {
+  new (): FrameParser;
+};
+
+export const FrameParser: FrameParserConstructor = function () {
+  return createFrameParser();
+} as unknown as FrameParserConstructor;

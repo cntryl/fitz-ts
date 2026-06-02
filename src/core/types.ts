@@ -75,18 +75,30 @@ export type DurabilityMode = "None" | "Async" | "Sync";
 /**
  * Deferred is a Promise wrapper that exposes resolve/reject
  */
-export class Deferred<T = unknown> {
+export interface Deferred<T = unknown> {
   promise: Promise<T>;
-  resolve!: (value: T | PromiseLike<T>) => void;
-  reject!: (reason?: unknown) => void;
-
-  constructor() {
-    this.promise = new Promise((resolve, reject) => {
-      this.resolve = resolve;
-      this.reject = reject;
-    });
-  }
+  resolve: (value: T | PromiseLike<T>) => void;
+  reject: (reason?: unknown) => void;
 }
+
+export function createDeferred<T = unknown>(): Deferred<T> {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+
+  return { promise, resolve, reject };
+}
+
+type DeferredConstructor = {
+  new <T = unknown>(): Deferred<T>;
+  <T = unknown>(): Deferred<T>;
+};
+
+export const Deferred: DeferredConstructor = createDeferred as unknown as DeferredConstructor;
 
 /**
  * Connection state machine

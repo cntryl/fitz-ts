@@ -39,104 +39,86 @@ export type NotificationHandler = (payload: Uint8Array) => void;
  */
 export type RpcCorrelationHandler = (correlationId: Uint8Array, payload: Uint8Array) => void;
 
-export class Multiplexer {
-  // FIFO queue of pending requests per MessageType
-  private pending: Map<number, PendingRequest[]> = new Map();
+export type Multiplexer = ReturnType<typeof createMultiplexer>;
 
-  // Handlers for pushed frames, including the RPC same-type exception.
-  private notificationHandlers: Map<number, NotificationHandler> = new Map();
-  private optionalResponses: Map<number, number> = new Map();
+export function createMultiplexer(observability: MultiplexerObservability = {}) {
+  const pending: Map<number, PendingRequest[]> = new Map();
+  const notificationHandlers: Map<number, NotificationHandler> = new Map();
+  const optionalResponses: Map<number, number> = new Map();
+  let state: ConnectionState = ConnectionState.Disconnected;
 
-  // RPC correlation handler for streaming responses (future use)
-  // private rpcCorrelationHandler?: RpcCorrelationHandler;
+  let requestsInFlight = 0;
+  let requestsTotal = 0;
+  let responsesTotal = 0;
+  let responsesDropped = 0;
+  let responsesIgnored = 0;
 
-  private state: ConnectionState = ConnectionState.Disconnected;
-
-  // Metrics
-  private requestsInFlight = 0;
-  private requestsTotal = 0;
-  private responsesTotal = 0;
-  private responsesDropped = 0;
-  private responsesIgnored = 0;
-
-  constructor(private readonly observability: MultiplexerObservability = {}) {}
-
-  private getOrCreatePendingQueue(messageType: number): PendingRequest[] {
-    const existing = this.pending.get(messageType);
+  const getOrCreatePendingQueue = (messageType: number): PendingRequest[] => {
+    const existing = pending.get(messageType);
     if (existing) {
       return existing;
     }
 
     const created: PendingRequest[] = [];
-    this.pending.set(messageType, created);
+    pending.set(messageType, created);
     return created;
-  }
+  };
 
-  setConnected(): void {
-    this.state = ConnectionState.Authenticated;
-  }
+  const setConnected = (): void => {
+    state = ConnectionState.Authenticated;
+  };
 
-  setDisconnected(): void {
-    this.state = ConnectionState.Disconnected;
-    this.optionalResponses.clear();
-    this.cancelAll();
-  }
+  const setDisconnected = (): void => {
+    state = ConnectionState.Disconnected;
+    optionalResponses.clear();
+    cancelAll();
+  };
 
-  /**
-   * Register a handler for pushed frames.
-   * @param handler Handler function to call when notification arrives
-   */
-  registerNotificationHandler(messageType: number, handler: NotificationHandler): void {
-    this.notificationHandlers.set(messageType, handler);
-  }
+  const registerNotificationHandler = (messageType: number, handler: NotificationHandler): void => {
+    notificationHandlers.set(messageType, handler);
+  };
 
-  /**
-   * Unregister notification handler
-   */
-  unregisterNotificationHandler(messageType: number): void {
-    this.notificationHandlers.delete(messageType);
-  }
+  const unregisterNotificationHandler = (messageType: number): void => {
+    notificationHandlers.delete(messageType);
+  };
 
-  expectOptionalResponse(messageType: number): () => void {
-    const nextCount = (this.optionalResponses.get(messageType) ?? 0) + 1;
-    this.optionalResponses.set(messageType, nextCount);
+  const expectOptionalResponse = (messageType: number): (() => void) => {
+    const nextCount = (optionalResponses.get(messageType) ?? 0) + 1;
+    optionalResponses.set(messageType, nextCount);
 
     return () => {
-      const currentCount = this.optionalResponses.get(messageType) ?? 0;
+      const currentCount = optionalResponses.get(messageType) ?? 0;
       if (currentCount <= 1) {
-        this.optionalResponses.delete(messageType);
+        optionalResponses.delete(messageType);
         return;
       }
-      this.optionalResponses.set(messageType, currentCount - 1);
+      optionalResponses.set(messageType, currentCount - 1);
     };
-  }
+  };
 
-  /**
-   * Send a request and wait for the response (FIFO matching)
-   */
-  async request(
+  const request = async (
     messageType: number,
     frameData: Uint8Array,
     send: (data: Uint8Array) => Promise<void>,
     timeoutMs: number,
     signal?: AbortSignal,
-  ): Promise<Uint8Array> {
+  ): Promise<Uint8Array> => {
     const attributes = { messageType };
-    const span = this.observability.tracer?.startSpan("fitz.request", attributes);
+    const span = observability.tracer?.startSpan("fitz.request", attributes);
     let spanEnded = false;
 
     if (signal?.aborted) {
       const error = abortError();
       span?.recordException(error);
       span?.end();
-      this.observability.meter?.counter("fitz.request.failed", 1, {
+      observability.meter?.counter("fitz.request.failed", 1, {
         ...attributes,
         error: error.name,
       });
       throw error;
     }
 
-    const deferred = new Deferred<Uint8Array>();
+    const deferred = Deferred<Uint8Array>();
     let settled = false;
     let timeout: ReturnType<typeof setTimeout>;
     let onAbort: (() => void) | undefined;
@@ -159,8 +141,8 @@ export class Multiplexer {
         return;
       }
 
-      this.unregisterRequest(messageType, deferred);
-      this.observability.meter?.counter("fitz.request.failed", 1, {
+      unregisterRequest(messageType, deferred);
+      observability.meter?.counter("fitz.request.failed", 1, {
         ...attributes,
         error: error.name,
       });
@@ -173,7 +155,7 @@ export class Multiplexer {
     };
 
     timeout = setTimeout(() => {
-      this.observability.meter?.counter("fitz.request.timeout", 1, attributes);
+      observability.meter?.counter("fitz.request.timeout", 1, attributes);
       failRequest(
         new TimeoutError(`Request timeout for message type ${messageType} after ${timeoutMs}ms`, {
           messageType,
@@ -189,18 +171,18 @@ export class Multiplexer {
       signal.addEventListener("abort", onAbort, { once: true });
     }
 
-    const request: PendingRequest = {
+    const requestEntry: PendingRequest = {
       deferred,
       timeout,
       sentAt: new Date(),
     };
 
-    this.getOrCreatePendingQueue(messageType).push(request);
+    getOrCreatePendingQueue(messageType).push(requestEntry);
 
-    this.requestsInFlight++;
-    this.requestsTotal++;
-    this.observability.meter?.counter("fitz.request.started", 1, attributes);
-    this.observability.meter?.gauge?.("fitz.requests.in_flight", this.requestsInFlight, attributes);
+    requestsInFlight++;
+    requestsTotal++;
+    observability.meter?.counter("fitz.request.started", 1, attributes);
+    observability.meter?.gauge?.("fitz.requests.in_flight", requestsInFlight, attributes);
 
     try {
       await send(frameData);
@@ -213,8 +195,8 @@ export class Multiplexer {
         throw err;
       }
 
-      this.unregisterRequest(messageType, deferred);
-      this.observability.meter?.counter("fitz.request.failed", 1, {
+      unregisterRequest(messageType, deferred);
+      observability.meter?.counter("fitz.request.failed", 1, {
         ...attributes,
         error: err instanceof Error ? err.name : "unknown",
       });
@@ -231,58 +213,51 @@ export class Multiplexer {
 
     const payload = await deferred.promise;
     finalize();
-    const durationMs = Date.now() - request.sentAt.getTime();
+    const durationMs = Date.now() - requestEntry.sentAt.getTime();
     span?.setAttribute("fitz.request.duration_ms", durationMs);
-    this.observability.meter?.histogram("fitz.request.duration", durationMs, attributes);
+    observability.meter?.histogram("fitz.request.duration", durationMs, attributes);
     if (!spanEnded) {
       span?.end();
       spanEnded = true;
     }
     return payload;
-  }
+  };
 
-  /**
-   * Unregister a pending request (on cancel/timeout)
-   */
-  private unregisterRequest(messageType: number, deferred: Deferred<Uint8Array>): void {
-    const queue = this.pending.get(messageType);
+  const unregisterRequest = (messageType: number, deferred: Deferred<Uint8Array>): void => {
+    const queue = pending.get(messageType);
     if (!queue) return;
 
     const index = queue.findIndex((r) => r.deferred === deferred);
     if (index >= 0) {
       queue.splice(index, 1);
-      this.requestsInFlight--;
-      this.observability.meter?.gauge?.("fitz.requests.in_flight", this.requestsInFlight, {
+      requestsInFlight--;
+      observability.meter?.gauge?.("fitz.requests.in_flight", requestsInFlight, {
         messageType,
       });
       if (queue.length === 0) {
-        this.pending.delete(messageType);
+        pending.delete(messageType);
       }
     }
-  }
+  };
 
-  /**
-   * Dispatch incoming frame to appropriate handler
-   */
-  dispatch(messageType: number, payload: Uint8Array): void {
-    const queue = this.pending.get(messageType);
+  const dispatch = (messageType: number, payload: Uint8Array): void => {
+    const queue = pending.get(messageType);
     if (queue && queue.length > 0) {
-      // Match to oldest (FIFO) pending request.
       const request = queue.shift();
       if (!request) {
         return;
       }
       if (queue.length === 0) {
-        this.pending.delete(messageType);
+        pending.delete(messageType);
       }
 
       clearTimeout(request.timeout);
-      this.requestsInFlight--;
-      this.responsesTotal++;
-      this.observability.meter?.counter("fitz.response.received", 1, {
+      requestsInFlight--;
+      responsesTotal++;
+      observability.meter?.counter("fitz.response.received", 1, {
         messageType,
       });
-      this.observability.meter?.gauge?.("fitz.requests.in_flight", this.requestsInFlight, {
+      observability.meter?.gauge?.("fitz.requests.in_flight", requestsInFlight, {
         messageType,
       });
 
@@ -290,7 +265,7 @@ export class Multiplexer {
       return;
     }
 
-    const handler = this.notificationHandlers.get(messageType);
+    const handler = notificationHandlers.get(messageType);
     if (handler) {
       try {
         handler(payload);
@@ -300,94 +275,90 @@ export class Multiplexer {
       return;
     }
 
-    const optionalResponses = this.optionalResponses.get(messageType) ?? 0;
-    if (optionalResponses > 0) {
-      if (optionalResponses === 1) {
-        this.optionalResponses.delete(messageType);
+    const optionalCount = optionalResponses.get(messageType) ?? 0;
+    if (optionalCount > 0) {
+      if (optionalCount === 1) {
+        optionalResponses.delete(messageType);
       } else {
-        this.optionalResponses.set(messageType, optionalResponses - 1);
+        optionalResponses.set(messageType, optionalCount - 1);
       }
-      this.responsesIgnored++;
-      this.observability.meter?.counter("fitz.response.ignored", 1, {
+      responsesIgnored++;
+      observability.meter?.counter("fitz.response.ignored", 1, {
         messageType,
       });
       return;
     }
 
-    if (this.state !== ConnectionState.Authenticated) {
-      this.responsesIgnored++;
-      this.observability.meter?.counter("fitz.response.ignored", 1, {
+    if (state !== ConnectionState.Authenticated) {
+      responsesIgnored++;
+      observability.meter?.counter("fitz.response.ignored", 1, {
         messageType,
-        state: this.state,
+        state,
       });
       return;
     }
 
-    this.responsesDropped++;
-    this.observability.meter?.counter("fitz.response.dropped", 1, {
+    responsesDropped++;
+    observability.meter?.counter("fitz.response.dropped", 1, {
       messageType,
     });
-  }
+  };
 
-  /**
-   * Cancel all in-flight requests
-   */
-  cancelAll(): void {
-    for (const [, queue] of this.pending) {
+  const cancelAll = (): void => {
+    for (const [, queue] of pending) {
       for (const request of queue) {
         clearTimeout(request.timeout);
         request.deferred.reject(
           new ConnectionError("Connection closed or reset", {
-            state: this.state,
+            state,
           }),
         );
       }
     }
-    this.pending.clear();
-    this.requestsInFlight = 0;
-    this.observability.meter?.gauge?.("fitz.requests.in_flight", 0);
-  }
+    pending.clear();
+    requestsInFlight = 0;
+    observability.meter?.gauge?.("fitz.requests.in_flight", 0);
+  };
 
-  /**
-   * Get metrics
-   */
-  getMetrics(): {
-    requestsInFlight: number;
-    requestsTotal: number;
-    responsesTotal: number;
-    responsesDropped: number;
-    responsesIgnored: number;
-  } {
-    return {
-      requestsInFlight: this.requestsInFlight,
-      requestsTotal: this.requestsTotal,
-      responsesTotal: this.responsesTotal,
-      responsesDropped: this.responsesDropped,
-      responsesIgnored: this.responsesIgnored,
-    };
-  }
+  const getMetrics = () => ({
+    requestsInFlight,
+    requestsTotal,
+    responsesTotal,
+    responsesDropped,
+    responsesIgnored,
+  });
 
-  /**
-   * Get number of in-flight requests
-   */
-  getInFlightCount(): number {
-    return this.requestsInFlight;
-  }
+  const getInFlightCount = (): number => requestsInFlight;
 
-  /**
-   * Check if there are pending requests
-   */
-  hasPending(): boolean {
-    return this.requestsInFlight > 0;
-  }
+  const hasPending = (): boolean => requestsInFlight > 0;
 
-  /**
-   * Get current state
-   */
-  getState(): ConnectionState {
-    return this.state;
-  }
+  const getState = (): ConnectionState => state;
+
+  return {
+    setConnected,
+    setDisconnected,
+    registerNotificationHandler,
+    unregisterNotificationHandler,
+    expectOptionalResponse,
+    request,
+    dispatch,
+    cancelAll,
+    getMetrics,
+    getInFlightCount,
+    hasPending,
+    getState,
+  };
 }
+
+interface MultiplexerConstructor {
+  new (observability?: MultiplexerObservability): Multiplexer;
+}
+
+export const Multiplexer: MultiplexerConstructor = function (
+  observability: MultiplexerObservability = {},
+) {
+  return createMultiplexer(observability);
+} as unknown as MultiplexerConstructor;
 
 function abortError(): Error {
   const error = new Error("The operation was aborted");

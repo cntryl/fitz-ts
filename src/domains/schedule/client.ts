@@ -2,7 +2,8 @@
  * Schedule domain client.
  */
 
-import { Connection } from "../../client/connection";
+import { createDomainClient } from "../base";
+import type { Connection } from "../../client/connection";
 import {
   MSG_SCHEDULE_CANCEL,
   MSG_SCHEDULE_CREATE,
@@ -11,7 +12,6 @@ import {
   MSG_SCHEDULE_SUBSCRIBE,
   MSG_SCHEDULE_UNSUBSCRIBE,
 } from "../../frame/types";
-import { DomainClient } from "../base";
 import { parseStandardResponse } from "../../protocol/response";
 import { ScheduleCodec } from "./codec";
 import {
@@ -23,134 +23,120 @@ import {
 } from "./types";
 import { isRouteShape } from "../_routes";
 
-function assertConcreteScheduleRoute(route: string): void {
-  if (!isRouteShape(route, "schedule", 4)) {
-    throw new ScheduleError(
-      `Invalid schedule route: ${route} (expected schedule://{realm}/{area}/{resource}/{operation}, no empty segments or wildcards)`,
-      "INVALID_ROUTE",
-    );
-  }
-}
-
 type ScheduleSubscriptionState = {
   subId: bigint;
   handlers: Map<number, ScheduleHandler>;
 };
 
-export class ScheduleClient extends DomainClient {
-  private readonly subscriptionsByPattern = new Map<string, ScheduleSubscriptionState>();
-  private readonly patternsBySubId = new Map<bigint, string>();
-  private notifyHandlerInitialized = false;
-  private nextHandlerId = 1;
+export type ScheduleClient = ReturnType<typeof createScheduleClient>;
 
-  constructor(connection: Connection) {
-    super(connection);
-    this.connection.onReconnect(async () => {
-      if (this.subscriptionsByPattern.size === 0) {
-        return;
-      }
+export function createScheduleClient(connection: Connection) {
+  const { requestFrame } = createDomainClient(connection);
+  const subscriptionsByPattern = new Map<string, ScheduleSubscriptionState>();
+  const patternsBySubId = new Map<bigint, string>();
+  let notifyHandlerInitialized = false;
+  let nextHandlerId = 1;
 
-      const subscriptions = Array.from(
-        this.subscriptionsByPattern.entries(),
-        ([pattern, state]) => ({
-          pattern,
-          handlers: Array.from(state.handlers.entries()),
-        }),
-      );
-      this.subscriptionsByPattern.clear();
-      this.patternsBySubId.clear();
+  connection.onReconnect(async () => {
+    if (subscriptionsByPattern.size === 0) {
+      return;
+    }
 
-      for (const subscription of subscriptions) {
-        const subId = await this.subscribeWire(subscription.pattern);
-        this.subscriptionsByPattern.set(subscription.pattern, {
-          subId,
-          handlers: new Map(subscription.handlers),
-        });
-        this.patternsBySubId.set(subId, subscription.pattern);
-      }
-    });
-  }
+    const subscriptions = Array.from(subscriptionsByPattern.entries(), ([pattern, state]) => ({
+      pattern,
+      handlers: Array.from(state.handlers.entries()),
+    }));
+    subscriptionsByPattern.clear();
+    patternsBySubId.clear();
 
-  async create(
+    for (const subscription of subscriptions) {
+      const subId = await subscribeWire(subscription.pattern);
+      subscriptionsByPattern.set(subscription.pattern, {
+        subId,
+        handlers: new Map(subscription.handlers),
+      });
+      patternsBySubId.set(subId, subscription.pattern);
+    }
+  });
+
+  const create = async (
     route: string,
     cronExpr: string,
     payload: Uint8Array = new Uint8Array(),
-  ): Promise<string> {
+  ): Promise<string> => {
     assertConcreteScheduleRoute(route);
 
-    const response = await this.requestFrame(
+    const response = await requestFrame(
       MSG_SCHEDULE_CREATE,
       ScheduleCodec.encodeCreate(route, cronExpr, payload),
     );
-    const decoded = ScheduleCodec.decodeCreateResponse(this.assertSuccess(response, "CREATE"));
+    const decoded = ScheduleCodec.decodeCreateResponse(assertSuccess(response, "CREATE"));
     return decoded.scheduleId ?? route;
-  }
+  };
 
-  async cancel(route: string): Promise<void> {
+  const cancel = async (route: string): Promise<void> => {
     assertConcreteScheduleRoute(route);
 
-    const response = await this.requestFrame(
-      MSG_SCHEDULE_CANCEL,
-      ScheduleCodec.encodeCancel(route),
-    );
-    ScheduleCodec.decodeCancelResponse(this.assertSuccess(response, "CANCEL"));
-  }
+    const response = await requestFrame(MSG_SCHEDULE_CANCEL, ScheduleCodec.encodeCancel(route));
+    ScheduleCodec.decodeCancelResponse(assertSuccess(response, "CANCEL"));
+  };
 
-  async list(offset: bigint = 0n, limit: bigint = 0n): Promise<[ScheduleEntry[], bigint]> {
-    const response = await this.requestFrame(
-      MSG_SCHEDULE_LIST,
-      ScheduleCodec.encodeList(offset, limit),
-    );
-    const decoded = ScheduleCodec.decodeListResponse(this.assertSuccess(response, "LIST"));
+  const list = async (
+    offset: bigint = 0n,
+    limit: bigint = 0n,
+  ): Promise<[ScheduleEntry[], bigint]> => {
+    const response = await requestFrame(MSG_SCHEDULE_LIST, ScheduleCodec.encodeList(offset, limit));
+    const decoded = ScheduleCodec.decodeListResponse(assertSuccess(response, "LIST"));
     return [decoded.entries, decoded.totalCount];
-  }
+  };
 
-  async subscribe(pattern: string, handler: ScheduleHandler): Promise<ScheduleSubscription> {
+  const subscribe = async (
+    pattern: string,
+    handler: ScheduleHandler,
+  ): Promise<ScheduleSubscription> => {
     assertConcreteScheduleRoute(pattern);
 
-    this.initNotifyHandler();
-    const existing = this.subscriptionsByPattern.get(pattern);
+    initNotifyHandler();
+    const existing = subscriptionsByPattern.get(pattern);
     if (existing) {
-      return this.addLocalSubscription(pattern, existing.subId, handler);
+      return addLocalSubscription(pattern, existing.subId, handler);
     }
 
-    const subId = await this.subscribeWire(pattern);
-    return this.addLocalSubscription(pattern, subId, handler);
-  }
+    const subId = await subscribeWire(pattern);
+    return addLocalSubscription(pattern, subId, handler);
+  };
 
-  private async subscribeWire(pattern: string): Promise<bigint> {
-    const response = await this.requestFrame(
+  const subscribeWire = async (pattern: string): Promise<bigint> => {
+    const response = await requestFrame(
       MSG_SCHEDULE_SUBSCRIBE,
       ScheduleCodec.encodeSubscribe(pattern),
     );
-    const decoded = ScheduleCodec.decodeSubscribeResponse(
-      this.assertSuccess(response, "SUBSCRIBE"),
-    );
+    const decoded = ScheduleCodec.decodeSubscribeResponse(assertSuccess(response, "SUBSCRIBE"));
 
     return decoded.subId;
-  }
+  };
 
-  private addLocalSubscription(
+  const addLocalSubscription = (
     pattern: string,
     subId: bigint,
     handler: ScheduleHandler,
-  ): ScheduleSubscription {
-    const handlerId = this.nextHandlerId++;
-    let subscription = this.subscriptionsByPattern.get(pattern);
+  ): ScheduleSubscription => {
+    const handlerId = nextHandlerId++;
+    let subscription = subscriptionsByPattern.get(pattern);
     if (!subscription) {
       subscription = { subId, handlers: new Map() };
-      this.subscriptionsByPattern.set(pattern, subscription);
-      this.patternsBySubId.set(subId, pattern);
+      subscriptionsByPattern.set(pattern, subscription);
+      patternsBySubId.set(subId, pattern);
     }
 
     subscription.handlers.set(handlerId, handler);
-    return new ScheduleSubscription(subId, pattern, handler, async () => {
-      await this.unsubscribe(pattern, handlerId);
+    return new ScheduleSubscription(subId, pattern, async () => {
+      await unsubscribe(pattern, handlerId);
     });
-  }
+  };
 
-  private async unsubscribe(pattern: string, handlerId: number): Promise<void> {
-    const subscription = this.subscriptionsByPattern.get(pattern);
+  const unsubscribe = async (pattern: string, handlerId: number): Promise<void> => {
+    const subscription = subscriptionsByPattern.get(pattern);
     if (!subscription) {
       return;
     }
@@ -160,30 +146,30 @@ export class ScheduleClient extends DomainClient {
       return;
     }
 
-    this.subscriptionsByPattern.delete(pattern);
-    this.patternsBySubId.delete(subscription.subId);
-    const response = await this.requestFrame(
+    subscriptionsByPattern.delete(pattern);
+    patternsBySubId.delete(subscription.subId);
+    const response = await requestFrame(
       MSG_SCHEDULE_UNSUBSCRIBE,
       ScheduleCodec.encodeUnsubscribe(pattern),
     );
-    ScheduleCodec.decodeUnsubscribeResponse(this.assertSuccess(response, "UNSUBSCRIBE"));
-  }
+    ScheduleCodec.decodeUnsubscribeResponse(assertSuccess(response, "UNSUBSCRIBE"));
+  };
 
-  private initNotifyHandler(): void {
-    if (this.notifyHandlerInitialized) {
+  const initNotifyHandler = (): void => {
+    if (notifyHandlerInitialized) {
       return;
     }
 
-    this.notifyHandlerInitialized = true;
-    this.connection.registerNotificationHandler(MSG_SCHEDULE_NOTIFY, (payload) => {
+    notifyHandlerInitialized = true;
+    connection.registerNotificationHandler(MSG_SCHEDULE_NOTIFY, (payload) => {
       try {
         const decoded = ScheduleCodec.decodeNotification(payload);
-        const pattern = this.patternsBySubId.get(decoded.subId);
+        const pattern = patternsBySubId.get(decoded.subId);
         if (!pattern) {
           return;
         }
 
-        const subscription = this.subscriptionsByPattern.get(pattern);
+        const subscription = subscriptionsByPattern.get(pattern);
         if (!subscription) {
           return;
         }
@@ -192,7 +178,7 @@ export class ScheduleClient extends DomainClient {
           payload: decoded.payload,
         };
         for (const handler of subscription.handlers.values()) {
-          this.connection.dispatchAsyncHandler(async () => {
+          connection.dispatchAsyncHandler(async () => {
             await handler(notification);
           });
         }
@@ -200,9 +186,9 @@ export class ScheduleClient extends DomainClient {
         // Best-effort notification dispatch.
       }
     });
-  }
+  };
 
-  private assertSuccess(payload: Uint8Array, operation: string): Uint8Array {
+  const assertSuccess = (payload: Uint8Array, operation: string): Uint8Array => {
     const result = parseStandardResponse(payload);
     if (result.success) {
       return result.data;
@@ -210,11 +196,11 @@ export class ScheduleClient extends DomainClient {
 
     throw new ScheduleError(
       `${operation} failed: ${result.error ?? "Unknown error"}`,
-      this.mapErrorCode(result.error),
+      mapErrorCode(result.error),
     );
-  }
+  };
 
-  private mapErrorCode(message?: string): string {
+  const mapErrorCode = (message?: string): string => {
     const normalized = message?.toLowerCase() ?? "";
     if (normalized.includes("not found")) {
       return "NOT_FOUND";
@@ -226,5 +212,32 @@ export class ScheduleClient extends DomainClient {
       return "INVALID_CRON";
     }
     return "REQUEST_FAILED";
+  };
+
+  return {
+    create,
+    cancel,
+    list,
+    subscribe,
+  };
+}
+
+type ScheduleClientConstructor = {
+  new (connection: Connection): ScheduleClient;
+  (connection: Connection): ScheduleClient;
+};
+
+export const ScheduleClient: ScheduleClientConstructor = function (connection: Connection) {
+  return createScheduleClient(connection);
+} as unknown as ScheduleClientConstructor;
+
+export * from "./types";
+
+function assertConcreteScheduleRoute(route: string): void {
+  if (!isRouteShape(route, "schedule", 4)) {
+    throw new ScheduleError(
+      `Invalid schedule route: ${route} (expected schedule://{realm}/{area}/{resource}/{operation}, no empty segments or wildcards)`,
+      "INVALID_ROUTE",
+    );
   }
 }

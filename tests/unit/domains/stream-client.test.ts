@@ -242,20 +242,28 @@ function writeOptionalBytes(writer: BufferWriter, value: Uint8Array | undefined)
   writer.writeBytes(value);
 }
 
-function encodeReadFiltered(offset: bigint, reason?: "server_filter" | "permission" | "projection"): Uint8Array {
+function encodeReadFiltered(
+  offset: bigint,
+  reason?: "server_filter" | "permission" | "projection",
+): Uint8Array {
   const writer = new BufferWriter(16);
   writer.writeU8(1);
   writer.writeU64BE(offset);
-  writer.writeU8(reason === undefined ? 0 : reason === "server_filter" ? 1 : reason === "permission" ? 2 : 3);
+  writer.writeU8(
+    reason === undefined ? 0 : reason === "server_filter" ? 1 : reason === "permission" ? 2 : 3,
+  );
   return writer.getBuffer();
 }
 
-function encodeWrappedReadResponse(items: Uint8Array[], cursor: {
-  lastResourceOffset: bigint;
-  lastAreaOffset?: bigint;
-  lastRealmOffset?: bigint;
-  hasMore: boolean;
-}): Uint8Array {
+function encodeWrappedReadResponse(
+  items: Uint8Array[],
+  cursor: {
+    lastResourceOffset: bigint;
+    lastAreaOffset?: bigint;
+    lastRealmOffset?: bigint;
+    hasMore: boolean;
+  },
+): Uint8Array {
   const data = new BufferWriter(256);
   data.writeU32BE(items.length);
   for (const item of items) {

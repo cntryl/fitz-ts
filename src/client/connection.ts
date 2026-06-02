@@ -44,86 +44,86 @@ type DisconnectListener = () => void;
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
-class AsyncHandlerDispatcher {
-  private activeCount = 0;
-  private readonly queue: Array<() => void> = [];
+function createAsyncHandlerDispatcher(
+  maxConcurrency: number,
+  timeoutMs: number,
+  onError: (error: unknown) => void,
+) {
+  let activeCount = 0;
+  const queue: Array<() => void> = [];
 
-  constructor(
-    private readonly maxConcurrency: number,
-    private readonly timeoutMs: number,
-    private readonly onError: (error: unknown) => void,
-  ) {}
-
-  dispatch(task: () => void | Promise<void>): void {
+  const dispatch = (task: () => void | Promise<void>): void => {
     const run = () => {
-      this.activeCount += 1;
-      void this.runTask(task).finally(() => {
-        this.activeCount -= 1;
-        this.flush();
+      activeCount += 1;
+      void runTask(task).finally(() => {
+        activeCount -= 1;
+        flush();
       });
     };
 
-    if (this.activeCount < this.maxConcurrency) {
+    if (activeCount < maxConcurrency) {
       run();
       return;
     }
 
-    this.queue.push(run);
-  }
+    queue.push(run);
+  };
 
-  private flush(): void {
-    if (this.activeCount >= this.maxConcurrency) {
+  const flush = (): void => {
+    if (activeCount >= maxConcurrency) {
       return;
     }
 
-    const next = this.queue.shift();
+    const next = queue.shift();
     next?.();
-  }
+  };
 
-  private async runTask(task: () => void | Promise<void>): Promise<void> {
+  const runTask = async (task: () => void | Promise<void>): Promise<void> => {
     try {
       await Promise.race([
         Promise.resolve().then(task),
-        sleep(this.timeoutMs).then(() => {
-          throw new Error(`Async handler timeout after ${this.timeoutMs}ms`);
+        sleep(timeoutMs).then(() => {
+          throw new Error(`Async handler timeout after ${timeoutMs}ms`);
         }),
       ]);
     } catch (error) {
-      this.onError(error);
+      onError(error);
     }
-  }
+  };
+
+  return {
+    dispatch,
+  };
 }
 
-class RequestGate {
-  private activeCount = 0;
-  private closed = false;
-  private readonly queue: Array<{
+function createRequestGate(maxConcurrency: number) {
+  let activeCount = 0;
+  let closed = false;
+  const queue: Array<{
     resolve: (release: () => void) => void;
     reject: (error: Error) => void;
     signal?: AbortSignal;
     onAbort?: () => void;
   }> = [];
 
-  constructor(private readonly maxConcurrency: number) {}
-
-  async acquire(signal?: AbortSignal): Promise<() => void> {
+  const acquire = async (signal?: AbortSignal): Promise<() => void> => {
     if (signal?.aborted) {
       throw abortError();
     }
 
-    if (this.closed) {
+    if (closed) {
       throw connectionClosedError();
     }
 
     return await new Promise<() => void>((resolve, reject) => {
       const grant = () => {
-        if (this.closed) {
+        if (closed) {
           reject(connectionClosedError());
           return;
         }
 
-        this.activeCount += 1;
-        resolve(() => this.release());
+        activeCount += 1;
+        resolve(() => release());
       };
 
       const waiter = {
@@ -140,7 +140,7 @@ class RequestGate {
       };
 
       waiter.onAbort = () => {
-        this.removeWaiter(waiter);
+        removeWaiter(waiter);
         cleanup();
         reject(abortError());
       };
@@ -149,38 +149,38 @@ class RequestGate {
         signal.addEventListener("abort", waiter.onAbort, { once: true });
       }
 
-      if (this.activeCount < this.maxConcurrency) {
+      if (activeCount < maxConcurrency) {
         cleanup();
         grant();
         return;
       }
 
-      this.queue.push(waiter);
+      queue.push(waiter);
     });
-  }
+  };
 
-  close(): void {
-    if (this.closed) {
+  const close = (): void => {
+    if (closed) {
       return;
     }
 
-    this.closed = true;
+    closed = true;
     const error = connectionClosedError();
-    for (const waiter of this.queue.splice(0)) {
+    for (const waiter of queue.splice(0)) {
       if (waiter.signal && waiter.onAbort) {
         waiter.signal.removeEventListener("abort", waiter.onAbort);
       }
       waiter.reject(error);
     }
-  }
+  };
 
-  private release(): void {
-    if (this.activeCount > 0) {
-      this.activeCount -= 1;
+  const release = (): void => {
+    if (activeCount > 0) {
+      activeCount -= 1;
     }
 
-    while (!this.closed && this.activeCount < this.maxConcurrency) {
-      const waiter = this.queue.shift();
+    while (!closed && activeCount < maxConcurrency) {
+      const waiter = queue.shift();
       if (!waiter) {
         return;
       }
@@ -196,23 +196,28 @@ class RequestGate {
         waiter.signal.removeEventListener("abort", waiter.onAbort);
       }
 
-      this.activeCount += 1;
-      waiter.resolve(() => this.release());
+      activeCount += 1;
+      waiter.resolve(() => release());
       return;
     }
-  }
+  };
 
-  private removeWaiter(waiter: {
+  const removeWaiter = (waiter: {
     resolve: (release: () => void) => void;
     reject: (error: Error) => void;
     signal?: AbortSignal;
     onAbort?: () => void;
-  }): void {
-    const index = this.queue.indexOf(waiter);
+  }): void => {
+    const index = queue.indexOf(waiter);
     if (index >= 0) {
-      this.queue.splice(index, 1);
+      queue.splice(index, 1);
     }
-  }
+  };
+
+  return {
+    acquire,
+    close,
+  };
 }
 
 function abortError(): Error {
@@ -235,475 +240,53 @@ function isAbortError(error: unknown): boolean {
   return error instanceof Error && error.name === "AbortError";
 }
 
-export class Connection {
-  private readonly transportFactory: TransportFactory;
-  private transport: Transport | null = null;
-  private state: ConnectionState = ConnectionState.Disconnected;
-  private readonly tokenProvider: TokenProvider;
-  private readonly timeout: number;
-  private readonly authSettleDelayMs: number;
-  private readonly reconnectEnabled: boolean;
-  private readonly reconnectMaxAttempts: number;
-  private readonly reconnectBackoffMs: number;
-  private readonly reconnectMaxBackoffMs: number;
-  private readonly maxInFlightRequests: number;
-  private readonly observability?: FitzObservability;
-  private readonly multiplexer: Multiplexer;
-  private readonly asyncHandlerDispatcher: AsyncHandlerDispatcher;
-  private requestGate: RequestGate;
-  private readonly frameParser = new FrameParser();
-  private readonly reconnectListeners = new Set<ReconnectListener>();
-  private readonly disconnectListeners = new Set<DisconnectListener>();
-  private writeChain: Promise<void> = Promise.resolve();
+export type Connection = ReturnType<typeof createConnection>;
 
-  private receiveLoop: Promise<void> | null = null;
-  private receiveLoopAbort = false;
-  private closeRequested = false;
-  private reconnectPromise: Promise<void> | null = null;
-  private authOutcome: Deferred<void> | null = null;
-  private authRejected = false;
+export function createConnection(
+  transportFactory: TransportFactory,
+  tokenProvider: TokenProvider,
+  options: ConnectionOptions = {},
+) {
+  const timeout = options.timeout ?? 30000;
+  const authSettleDelayMs = options.authSettleDelayMs ?? 100;
+  const reconnectEnabled = options.reconnect?.enabled ?? false;
+  const reconnectMaxAttempts = options.reconnect?.maxAttempts ?? Infinity;
+  const reconnectBackoffMs = options.reconnect?.backoffMs ?? 250;
+  const reconnectMaxBackoffMs = options.reconnect?.maxBackoffMs ?? 5000;
+  const maxInFlightRequests = options.maxInFlightRequests ?? 256;
+  const observability = options.observability;
 
-  constructor(
-    transportFactory: TransportFactory,
-    tokenProvider: TokenProvider,
-    options: ConnectionOptions = {},
-  ) {
-    this.transportFactory = transportFactory;
-    this.tokenProvider = tokenProvider;
-    this.timeout = options.timeout ?? 30000;
-    this.authSettleDelayMs = options.authSettleDelayMs ?? 100;
-    this.reconnectEnabled = options.reconnect?.enabled ?? false;
-    this.reconnectMaxAttempts = options.reconnect?.maxAttempts ?? Infinity;
-    this.reconnectBackoffMs = options.reconnect?.backoffMs ?? 250;
-    this.reconnectMaxBackoffMs = options.reconnect?.maxBackoffMs ?? 5000;
-    this.maxInFlightRequests = options.maxInFlightRequests ?? 256;
-    this.observability = options.observability;
-    this.requestGate = new RequestGate(this.maxInFlightRequests);
-    this.asyncHandlerDispatcher = new AsyncHandlerDispatcher(
-      options.asyncHandlers?.maxConcurrency ?? Infinity,
-      options.asyncHandlers?.timeoutMs ?? this.timeout,
-      (error) => {
-        this.log("warn", "fitz.connection.handler_failed", {
-          error: this.describeError(error),
-        });
-      },
-    );
-    this.multiplexer = new Multiplexer({
-      meter: this.observability?.meter,
-      tracer: this.observability?.tracer,
-    });
-  }
+  let transport: Transport | null = null;
+  let state: ConnectionState = ConnectionState.Disconnected;
+  let requestGate = createRequestGate(maxInFlightRequests);
+  const frameParser = new FrameParser();
+  const reconnectListeners = new Set<ReconnectListener>();
+  const disconnectListeners = new Set<DisconnectListener>();
+  let writeChain: Promise<void> = Promise.resolve();
 
-  async connect(options: ConnectOptions = {}): Promise<void> {
-    this.closeRequested = false;
-    this.authRejected = false;
-    await this.openAndAuthenticate(false, options.signal);
-  }
+  let receiveLoop: Promise<void> | null = null;
+  let receiveLoopAbort = false;
+  let closeRequested = false;
+  let reconnectPromise: Promise<void> | null = null;
+  let authOutcome: Deferred<void> | null = null;
+  let authRejected = false;
 
-  async close(): Promise<void> {
-    if (this.state === ConnectionState.Closed && !this.transport) {
-      return;
-    }
-
-    this.closeRequested = true;
-    this.receiveLoopAbort = true;
-    this.setState(ConnectionState.Closed);
-    this.requestGate.close();
-    this.authOutcome?.reject(new ConnectionError("Connection closed", { state: this.state }));
-    this.authOutcome = null;
-    this.multiplexer.setDisconnected();
-    this.emitDisconnect();
-    this.emitLifecycleEvent("closed");
-
-    const receiveLoop = this.receiveLoop;
-    this.receiveLoop = null;
-    if (receiveLoop) {
-      await Promise.race([receiveLoop.catch(() => undefined), sleep(1000)]);
-    }
-
-    if (this.transport) {
-      await this.transport.close();
-      this.transport = null;
-    }
-
-    this.transport = null;
-  }
-
-  async request(
-    messageType: number,
-    requestPayload: Uint8Array,
-    signal?: AbortSignal,
-  ): Promise<Uint8Array> {
-    this.ensureAuthenticated();
-    const releaseRequestSlot = await this.requestGate.acquire(signal);
-    const startedAt = Date.now();
-
-    try {
-      const transport = this.ensureTransport();
-      const frame = FrameCodec.encodeFrame(messageType, requestPayload);
-
-      return await this.multiplexer.request(
-        messageType,
-        frame,
-        (data) => this.sendSerialized(transport, data),
-        this.timeout,
-        signal,
-      );
-    } catch (error) {
-      this.log("error", "fitz.connection.request_failed", {
-        operation: "request",
-        state: this.state,
-        messageType,
-        latencyMs: Date.now() - startedAt,
-        ...this.describeErrorFields(error),
-        error: this.describeError(error),
-      });
-      this.handlePossibleTransportFailure(error);
-      throw error;
-    } finally {
-      releaseRequestSlot();
-    }
-  }
-
-  async send(messageType: number, requestPayload: Uint8Array): Promise<void> {
-    this.ensureAuthenticated();
-    const releaseRequestSlot = await this.requestGate.acquire();
-    const startedAt = Date.now();
-
-    try {
-      const transport = this.ensureTransport();
-      const frame = FrameCodec.encodeFrame(messageType, requestPayload);
-
-      await this.sendSerialized(transport, frame);
-    } catch (error) {
-      this.log("error", "fitz.connection.send_failed", {
-        operation: "send",
-        state: this.state,
-        messageType,
-        latencyMs: Date.now() - startedAt,
-        ...this.describeErrorFields(error),
-        error: this.describeError(error),
-      });
-      this.handlePossibleTransportFailure(error);
-      throw error;
-    } finally {
-      releaseRequestSlot();
-    }
-  }
-
-  async sendFireAndForget(messageType: number, requestPayload: Uint8Array): Promise<void> {
-    await this.send(messageType, requestPayload);
-  }
-
-  registerNotificationHandler(messageType: number, handler: (payload: Uint8Array) => void): void {
-    this.multiplexer.registerNotificationHandler(messageType, handler);
-  }
-
-  unregisterNotificationHandler(messageType: number): void {
-    this.multiplexer.unregisterNotificationHandler(messageType);
-  }
-
-  onReconnect(listener: ReconnectListener): () => void {
-    this.reconnectListeners.add(listener);
-    return () => {
-      this.reconnectListeners.delete(listener);
-    };
-  }
-
-  onDisconnect(listener: DisconnectListener): () => void {
-    this.disconnectListeners.add(listener);
-    return () => {
-      this.disconnectListeners.delete(listener);
-    };
-  }
-
-  getMultiplexer(): Multiplexer {
-    return this.multiplexer;
-  }
-
-  dispatchAsyncHandler(task: () => void | Promise<void>): void {
-    this.asyncHandlerDispatcher.dispatch(task);
-  }
-
-  getState(): ConnectionState {
-    return this.state;
-  }
-
-  isConnected(): boolean {
-    return this.state === ConnectionState.Authenticated;
-  }
-
-  getUrl(): string {
-    return this.ensureTransport().getUrl();
-  }
-
-  private async openAndAuthenticate(isReconnect: boolean, signal?: AbortSignal): Promise<void> {
-    throwIfAborted(signal);
-    this.receiveLoopAbort = false;
-    this.frameParser.parseFrames(new Uint8Array(0));
-    this.requestGate = new RequestGate(this.maxInFlightRequests);
-    const transport = this.transportFactory();
-    this.transport = transport;
-    this.setState(isReconnect ? ConnectionState.Reconnecting : ConnectionState.Connecting);
-    this.emitLifecycleEvent(isReconnect ? "reconnect_start" : "connect_start");
-
-    await transport.connect();
-    if (this.closeRequested) {
-      await transport.close().catch(() => undefined);
-      if (this.transport === transport) {
-        this.transport = null;
-      }
-      throw connectionClosedError();
-    }
-    throwIfAborted(signal);
-    this.receiveLoop = this.startReceiveLoop();
-
-    this.setState(ConnectionState.Connected);
-    this.setState(ConnectionState.Authenticating);
-    this.emitLifecycleEvent("auth_start");
-    this.authOutcome = new Deferred<void>();
-
-    try {
-      await this.sendConnect();
-      if (this.closeRequested) {
-        throw connectionClosedError();
-      }
-      throwIfAborted(signal);
-      await Promise.race([this.authOutcome.promise, sleep(this.authSettleDelayMs)]);
-      if (this.closeRequested) {
-        throw connectionClosedError();
-      }
-      throwIfAborted(signal);
-      this.authOutcome?.resolve();
-      this.authOutcome = null;
-      if (isReconnect) {
-        await this.restoreReconnectState();
-        if (this.closeRequested) {
-          throw connectionClosedError();
-        }
-      }
-      this.setState(ConnectionState.Authenticated);
-      this.multiplexer.setConnected();
-      this.emitLifecycleEvent(isReconnect ? "reconnect_succeeded" : "connect_succeeded");
-    } catch (error) {
-      this.authOutcome = null;
-      this.multiplexer.setDisconnected();
-      this.emitDisconnect();
-      if (transport) {
-        await transport.close().catch(() => undefined);
-      }
-      if (this.transport === transport) {
-        this.transport = null;
-      }
-      const rejectedAuth = error instanceof AuthenticationError;
-      this.authRejected = rejectedAuth;
-      if (this.closeRequested) {
-        this.setState(ConnectionState.Closed);
-      } else {
-        this.setState(rejectedAuth ? ConnectionState.Closed : ConnectionState.Disconnected);
-      }
-      this.emitLifecycleEvent(isReconnect ? "reconnect_failed" : "connect_failed", error);
-      if (isAbortError(error)) {
-        throw abortError();
-      }
-      throw error;
-    }
-  }
-
-  private async sendConnect(): Promise<void> {
-    const token = await this.tokenProvider();
-    const frame = FrameCodec.encodeFrame(MSG_CONNECT, utf8Encoder.encode(token));
-    await this.ensureTransport().send(frame);
-  }
-
-  private async startReceiveLoop(): Promise<void> {
-    while (!this.receiveLoopAbort && !this.closeRequested) {
-      try {
-        const transport = this.ensureTransport();
-        const data = await transport.receive();
-        const frames = this.frameParser.parseFrames(data);
-
-        for (const frame of frames) {
-          this.multiplexer.dispatch(frame.messageType, frame.payload);
-        }
-      } catch (error) {
-        if (this.receiveLoopAbort || this.closeRequested) {
-          return;
-        }
-
-        await this.handleConnectionLoss(error);
-        return;
-      }
-    }
-  }
-
-  private async handleConnectionLoss(error: unknown): Promise<void> {
-    this.multiplexer.setDisconnected();
-    this.requestGate.close();
-    this.emitDisconnect();
-    this.log("warn", "fitz.connection.lost", {
-      error: this.describeError(error),
-      state: this.state,
-    });
-
-    if (this.state === ConnectionState.Authenticating && this.authOutcome) {
-      this.authRejected = true;
-      this.authOutcome.reject(
-        new AuthenticationError(this.describeConnectionLoss(error), {
-          state: this.state,
-        }),
-      );
-    }
-
-    if (this.closeRequested) {
-      this.setState(ConnectionState.Closed);
-      return;
-    }
-
-    if (this.authRejected) {
-      this.setState(ConnectionState.Closed);
-      this.emitLifecycleEvent("auth_rejected", error);
-      return;
-    }
-
-    this.setState(ConnectionState.Disconnected);
-    this.emitLifecycleEvent("connection_lost", error);
-
-    if (!this.reconnectEnabled) {
-      return;
-    }
-
-    if (!this.reconnectPromise) {
-      this.reconnectPromise = this.reconnectLoop().finally(() => {
-        this.reconnectPromise = null;
-      });
-    }
-
-    await this.reconnectPromise;
-  }
-
-  private async reconnectLoop(): Promise<void> {
-    let attempts = 0;
-    let delayMs = this.reconnectBackoffMs;
-
-    while (!this.closeRequested && attempts < this.reconnectMaxAttempts) {
-      attempts += 1;
-      this.setState(ConnectionState.Reconnecting);
-      this.emitLifecycleEvent("reconnect_scheduled", undefined, attempts);
-
-      try {
-        await sleep(delayMs);
-        if (this.closeRequested) {
-          return;
-        }
-        await this.openAndAuthenticate(true);
-        return;
-      } catch (error) {
-        if (this.closeRequested) {
-          return;
-        }
-        this.log("warn", "fitz.connection.reconnect_retry", {
-          attempts,
-          delayMs,
-          error: this.describeError(error),
-        });
-        delayMs = Math.min(delayMs * 2, this.reconnectMaxBackoffMs);
-      }
-    }
-
-    if (this.closeRequested) {
-      this.setState(ConnectionState.Closed);
-      return;
-    }
-
-    this.setState(ConnectionState.Disconnected);
-    this.emitLifecycleEvent("reconnect_exhausted", undefined, attempts);
-  }
-
-  private async restoreReconnectState(): Promise<void> {
-    for (const listener of this.reconnectListeners) {
-      await listener();
-    }
-  }
-
-  private ensureTransport(): Transport {
-    if (!this.transport) {
-      throw new ConnectionError("No active transport", { state: this.state });
-    }
-    return this.transport;
-  }
-
-  private ensureAuthenticated(): void {
-    if (this.closeRequested || this.state !== ConnectionState.Authenticated) {
-      throw new ConnectionError(`Cannot use connection while state is ${this.state}`, {
-        state: this.state,
-      });
-    }
-  }
-
-  private setState(newState: ConnectionState): void {
-    this.state = newState;
-  }
-
-  private async sendSerialized(transport: Transport, data: Uint8Array): Promise<void> {
-    const prior = this.writeChain;
-    let release!: () => void;
-    this.writeChain = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-
-    await prior;
-    try {
-      await transport.send(data);
-    } finally {
-      release();
-    }
-  }
-
-  private emitLifecycleEvent(event: string, error?: unknown, attempt?: number): void {
-    const payload = {
-      event,
-      state: this.state,
-      transport: this.transport?.constructor.name,
-      url: this.transport?.getUrl(),
-      attempt,
-      error: error ? this.describeError(error) : undefined,
-    };
-
-    this.observability?.onLifecycleEvent?.(payload);
-    this.log("info", `fitz.connection.${event}`, payload);
-    this.observability?.meter?.counter("fitz.connection.lifecycle", 1, {
-      event,
-      state: this.state,
-    });
-  }
-
-  private emitDisconnect(): void {
-    for (const listener of this.disconnectListeners) {
-      try {
-        listener();
-      } catch {
-        // Best-effort disconnect fanout.
-      }
-    }
-  }
-
-  private log(
+  const log = (
     level: "debug" | "info" | "warn" | "error",
     event: string,
     fields?: Record<string, unknown>,
-  ): void {
-    this.observability?.logger?.log(level, event, fields);
-  }
+  ): void => {
+    observability?.logger?.log(level, event, fields);
+  };
 
-  private describeError(error: unknown): string {
+  const describeError = (error: unknown): string => {
     if (error instanceof Error) {
       return error.message;
     }
     return String(error);
-  }
+  };
 
-  private describeErrorFields(error: unknown): Record<string, unknown> {
+  const describeErrorFields = (error: unknown): Record<string, unknown> => {
     if (error instanceof FitzError) {
       return {
         errorName: error.name,
@@ -725,10 +308,17 @@ export class Connection {
       code: undefined,
       domainCode: undefined,
     };
-  }
+  };
 
-  private handlePossibleTransportFailure(error: unknown): void {
-    if (this.closeRequested) {
+  const describeConnectionLoss = (error: unknown): string => {
+    if (error instanceof Error) {
+      return error.message;
+    }
+    return "connection closed during CONNECT";
+  };
+
+  const handlePossibleTransportFailure = (error: unknown): void => {
+    if (closeRequested) {
       return;
     }
 
@@ -737,14 +327,455 @@ export class Connection {
       error instanceof ConnectionError ||
       error instanceof AuthenticationError
     ) {
-      void this.handleConnectionLoss(error);
+      void handleConnectionLoss(error);
     }
-  }
+  };
 
-  private describeConnectionLoss(error: unknown): string {
-    if (error instanceof Error) {
-      return error.message;
+  const multiplexer = new Multiplexer({
+    meter: observability?.meter,
+    tracer: observability?.tracer,
+  });
+
+  const asyncHandlerDispatcher = createAsyncHandlerDispatcher(
+    options.asyncHandlers?.maxConcurrency ?? Infinity,
+    options.asyncHandlers?.timeoutMs ?? timeout,
+    (error) => {
+      log("warn", "fitz.connection.handler_failed", {
+        error: describeError(error),
+      });
+    },
+  );
+
+  const connect = async (options: ConnectOptions = {}): Promise<void> => {
+    closeRequested = false;
+    authRejected = false;
+    await openAndAuthenticate(false, options.signal);
+  };
+
+  const close = async (): Promise<void> => {
+    if (state === ConnectionState.Closed && !transport) {
+      return;
     }
-    return "connection closed during CONNECT";
-  }
+
+    closeRequested = true;
+    receiveLoopAbort = true;
+    setState(ConnectionState.Closed);
+    requestGate.close();
+    authOutcome?.reject(new ConnectionError("Connection closed", { state }));
+    authOutcome = null;
+    multiplexer.setDisconnected();
+    emitDisconnect();
+    emitLifecycleEvent("closed");
+
+    const activeReceiveLoop = receiveLoop;
+    receiveLoop = null;
+    if (activeReceiveLoop) {
+      await Promise.race([activeReceiveLoop.catch(() => undefined), sleep(1000)]);
+    }
+
+    if (transport) {
+      await transport.close();
+      transport = null;
+    }
+
+    transport = null;
+  };
+
+  const request = async (
+    messageType: number,
+    requestPayload: Uint8Array,
+    signal?: AbortSignal,
+  ): Promise<Uint8Array> => {
+    ensureAuthenticated();
+    const releaseRequestSlot = await requestGate.acquire(signal);
+    const startedAt = Date.now();
+
+    try {
+      const activeTransport = ensureTransport();
+      const frame = FrameCodec.encodeFrame(messageType, requestPayload);
+
+      return await multiplexer.request(
+        messageType,
+        frame,
+        (data) => sendSerialized(activeTransport, data),
+        timeout,
+        signal,
+      );
+    } catch (error) {
+      log("error", "fitz.connection.request_failed", {
+        operation: "request",
+        state,
+        messageType,
+        latencyMs: Date.now() - startedAt,
+        ...describeErrorFields(error),
+        error: describeError(error),
+      });
+      handlePossibleTransportFailure(error);
+      throw error;
+    } finally {
+      releaseRequestSlot();
+    }
+  };
+
+  const send = async (messageType: number, requestPayload: Uint8Array): Promise<void> => {
+    ensureAuthenticated();
+    const releaseRequestSlot = await requestGate.acquire();
+    const startedAt = Date.now();
+
+    try {
+      const activeTransport = ensureTransport();
+      const frame = FrameCodec.encodeFrame(messageType, requestPayload);
+
+      await sendSerialized(activeTransport, frame);
+    } catch (error) {
+      log("error", "fitz.connection.send_failed", {
+        operation: "send",
+        state,
+        messageType,
+        latencyMs: Date.now() - startedAt,
+        ...describeErrorFields(error),
+        error: describeError(error),
+      });
+      handlePossibleTransportFailure(error);
+      throw error;
+    } finally {
+      releaseRequestSlot();
+    }
+  };
+
+  const sendFireAndForget = async (
+    messageType: number,
+    requestPayload: Uint8Array,
+  ): Promise<void> => {
+    await send(messageType, requestPayload);
+  };
+
+  const registerNotificationHandler = (
+    messageType: number,
+    handler: (payload: Uint8Array) => void,
+  ): void => {
+    multiplexer.registerNotificationHandler(messageType, handler);
+  };
+
+  const unregisterNotificationHandler = (messageType: number): void => {
+    multiplexer.unregisterNotificationHandler(messageType);
+  };
+
+  const onReconnect = (listener: ReconnectListener): (() => void) => {
+    reconnectListeners.add(listener);
+    return () => {
+      reconnectListeners.delete(listener);
+    };
+  };
+
+  const onDisconnect = (listener: DisconnectListener): (() => void) => {
+    disconnectListeners.add(listener);
+    return () => {
+      disconnectListeners.delete(listener);
+    };
+  };
+
+  const getMultiplexer = (): Multiplexer => multiplexer;
+
+  const dispatchAsyncHandler = (task: () => void | Promise<void>): void => {
+    asyncHandlerDispatcher.dispatch(task);
+  };
+
+  const getState = (): ConnectionState => state;
+
+  const isConnected = (): boolean => state === ConnectionState.Authenticated;
+
+  const getUrl = (): string => ensureTransport().getUrl();
+
+  const openAndAuthenticate = async (isReconnect: boolean, signal?: AbortSignal): Promise<void> => {
+    throwIfAborted(signal);
+    receiveLoopAbort = false;
+    frameParser.parseFrames(new Uint8Array(0));
+    requestGate = createRequestGate(maxInFlightRequests);
+    const activeTransport = transportFactory();
+    transport = activeTransport;
+    setState(isReconnect ? ConnectionState.Reconnecting : ConnectionState.Connecting);
+    emitLifecycleEvent(isReconnect ? "reconnect_start" : "connect_start");
+
+    await activeTransport.connect();
+    if (closeRequested) {
+      await activeTransport.close().catch(() => undefined);
+      if (transport === activeTransport) {
+        transport = null;
+      }
+      throw connectionClosedError();
+    }
+    throwIfAborted(signal);
+    receiveLoop = startReceiveLoop();
+
+    setState(ConnectionState.Connected);
+    setState(ConnectionState.Authenticating);
+    emitLifecycleEvent("auth_start");
+    authOutcome = new Deferred<void>();
+
+    try {
+      await sendConnect();
+      if (closeRequested) {
+        throw connectionClosedError();
+      }
+      throwIfAborted(signal);
+      await Promise.race([authOutcome.promise, sleep(authSettleDelayMs)]);
+      if (closeRequested) {
+        throw connectionClosedError();
+      }
+      throwIfAborted(signal);
+      authOutcome?.resolve();
+      authOutcome = null;
+      if (isReconnect) {
+        await restoreReconnectState();
+        if (closeRequested) {
+          throw connectionClosedError();
+        }
+      }
+      setState(ConnectionState.Authenticated);
+      multiplexer.setConnected();
+      emitLifecycleEvent(isReconnect ? "reconnect_succeeded" : "connect_succeeded");
+    } catch (error) {
+      authOutcome = null;
+      multiplexer.setDisconnected();
+      emitDisconnect();
+      if (activeTransport) {
+        await activeTransport.close().catch(() => undefined);
+      }
+      if (transport === activeTransport) {
+        transport = null;
+      }
+      const rejectedAuth = error instanceof AuthenticationError;
+      authRejected = rejectedAuth;
+      if (closeRequested) {
+        setState(ConnectionState.Closed);
+      } else {
+        setState(rejectedAuth ? ConnectionState.Closed : ConnectionState.Disconnected);
+      }
+      emitLifecycleEvent(isReconnect ? "reconnect_failed" : "connect_failed", error);
+      if (isAbortError(error)) {
+        throw abortError();
+      }
+      throw error;
+    }
+  };
+
+  const sendConnect = async (): Promise<void> => {
+    const token = await tokenProvider();
+    const frame = FrameCodec.encodeFrame(MSG_CONNECT, utf8Encoder.encode(token));
+    await ensureTransport().send(frame);
+  };
+
+  const startReceiveLoop = async (): Promise<void> => {
+    while (!receiveLoopAbort && !closeRequested) {
+      try {
+        const activeTransport = ensureTransport();
+        const data = await activeTransport.receive();
+        const frames = frameParser.parseFrames(data);
+
+        for (const frame of frames) {
+          multiplexer.dispatch(frame.messageType, frame.payload);
+        }
+      } catch (error) {
+        if (receiveLoopAbort || closeRequested) {
+          return;
+        }
+
+        await handleConnectionLoss(error);
+        return;
+      }
+    }
+  };
+
+  const handleConnectionLoss = async (error: unknown): Promise<void> => {
+    multiplexer.setDisconnected();
+    requestGate.close();
+    emitDisconnect();
+    log("warn", "fitz.connection.lost", {
+      error: describeError(error),
+      state,
+    });
+
+    if (state === ConnectionState.Authenticating && authOutcome) {
+      authRejected = true;
+      authOutcome.reject(
+        new AuthenticationError(describeConnectionLoss(error), {
+          state,
+        }),
+      );
+    }
+
+    if (closeRequested) {
+      setState(ConnectionState.Closed);
+      return;
+    }
+
+    if (authRejected) {
+      setState(ConnectionState.Closed);
+      emitLifecycleEvent("auth_rejected", error);
+      return;
+    }
+
+    setState(ConnectionState.Disconnected);
+    emitLifecycleEvent("connection_lost", error);
+
+    if (!reconnectEnabled) {
+      return;
+    }
+
+    if (!reconnectPromise) {
+      reconnectPromise = reconnectLoop().finally(() => {
+        reconnectPromise = null;
+      });
+    }
+
+    await reconnectPromise;
+  };
+
+  const reconnectLoop = async (): Promise<void> => {
+    let attempts = 0;
+    let delayMs = reconnectBackoffMs;
+
+    while (!closeRequested && attempts < reconnectMaxAttempts) {
+      attempts += 1;
+      setState(ConnectionState.Reconnecting);
+      emitLifecycleEvent("reconnect_scheduled", undefined, attempts);
+
+      try {
+        await sleep(delayMs);
+        if (closeRequested) {
+          return;
+        }
+        await openAndAuthenticate(true);
+        return;
+      } catch (error) {
+        if (closeRequested) {
+          return;
+        }
+        log("warn", "fitz.connection.reconnect_retry", {
+          attempts,
+          delayMs,
+          error: describeError(error),
+        });
+        delayMs = Math.min(delayMs * 2, reconnectMaxBackoffMs);
+      }
+    }
+
+    if (closeRequested) {
+      setState(ConnectionState.Closed);
+      return;
+    }
+
+    setState(ConnectionState.Disconnected);
+    emitLifecycleEvent("reconnect_exhausted", undefined, attempts);
+  };
+
+  const restoreReconnectState = async (): Promise<void> => {
+    for (const listener of reconnectListeners) {
+      await listener();
+    }
+  };
+
+  const ensureTransport = (): Transport => {
+    if (!transport) {
+      throw new ConnectionError("No active transport", { state });
+    }
+    return transport;
+  };
+
+  const ensureAuthenticated = (): void => {
+    if (closeRequested || state !== ConnectionState.Authenticated) {
+      throw new ConnectionError(`Cannot use connection while state is ${state}`, {
+        state,
+      });
+    }
+  };
+
+  const setState = (newState: ConnectionState): void => {
+    state = newState;
+  };
+
+  const sendSerialized = async (transport: Transport, data: Uint8Array): Promise<void> => {
+    const prior = writeChain;
+    let release!: () => void;
+    writeChain = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+
+    await prior;
+    try {
+      await transport.send(data);
+    } finally {
+      release();
+    }
+  };
+
+  const emitLifecycleEvent = (event: string, error?: unknown, attempt?: number): void => {
+    const payload = {
+      event,
+      state,
+      transport: transport?.constructor.name,
+      url: transport?.getUrl(),
+      attempt,
+      error: error ? describeError(error) : undefined,
+    };
+
+    observability?.onLifecycleEvent?.(payload);
+    log("info", `fitz.connection.${event}`, payload);
+    observability?.meter?.counter("fitz.connection.lifecycle", 1, {
+      event,
+      state,
+    });
+  };
+
+  const emitDisconnect = (): void => {
+    for (const listener of disconnectListeners) {
+      try {
+        listener();
+      } catch {
+        // Best-effort disconnect fanout.
+      }
+    }
+  };
+
+  return {
+    connect,
+    close,
+    request,
+    send,
+    sendFireAndForget,
+    registerNotificationHandler,
+    unregisterNotificationHandler,
+    onReconnect,
+    onDisconnect,
+    getMultiplexer,
+    dispatchAsyncHandler,
+    getState,
+    isConnected,
+    getUrl,
+  };
 }
+
+interface ConnectionConstructor {
+  new (
+    transportFactory: TransportFactory,
+    tokenProvider: TokenProvider,
+    options?: ConnectionOptions,
+  ): Connection;
+  (
+    transportFactory: TransportFactory,
+    tokenProvider: TokenProvider,
+    options?: ConnectionOptions,
+  ): Connection;
+  prototype: any;
+}
+
+export const Connection: ConnectionConstructor = function (
+  transportFactory: TransportFactory,
+  tokenProvider: TokenProvider,
+  options: ConnectionOptions = {},
+) {
+  const connection = createConnection(transportFactory, tokenProvider, options);
+  Object.setPrototypeOf(connection, Connection.prototype);
+  return connection;
+} as unknown as ConnectionConstructor;

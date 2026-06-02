@@ -22,7 +22,7 @@ export type ChangeHandler = (notif: ChangeNotification) => Promise<void>;
  */
 export class LeaseSubscription {
   constructor(
-    private readonly subId: bigint,
+    public readonly subId: bigint,
     public readonly pattern: string,
     private readonly unsubscribeFn: (subId: bigint) => Promise<void>,
   ) {}

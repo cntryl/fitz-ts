@@ -2,7 +2,8 @@
  * Lease domain client.
  */
 
-import { Connection } from "../../client/connection";
+import { createDomainClient } from "../base";
+import type { Connection } from "../../client/connection";
 import { LeaseError } from "../../core/errors";
 import {
   MSG_LEASE_ACQUIRE,
@@ -11,7 +12,6 @@ import {
   MSG_LEASE_SUBSCRIBE,
   MSG_LEASE_UNSUBSCRIBE,
 } from "../../frame/types";
-import { DomainClient } from "../base";
 import { isRouteShape } from "../_routes";
 import { LeaseCodec } from "./codec";
 import { ChangeHandler, ChangeNotification, Lease, LeaseInfo, LeaseSubscription } from "./types";
@@ -21,44 +21,41 @@ type LeaseSubscriptionState = {
   handlers: Map<number, ChangeHandler>;
 };
 
-export class LeaseClient extends DomainClient {
-  private readonly subscriptionsByPattern = new Map<string, LeaseSubscriptionState>();
-  private readonly patternsBySubId = new Map<bigint, string>();
-  private initialized = false;
-  private nextHandlerId = 1;
+export type LeaseClient = ReturnType<typeof createLeaseClient>;
 
-  constructor(connection: Connection) {
-    super(connection);
-    this.connection.onReconnect(async () => {
-      if (this.subscriptionsByPattern.size === 0) {
-        return;
-      }
+export function createLeaseClient(connection: Connection) {
+  const { requestFrame } = createDomainClient(connection);
+  const subscriptionsByPattern = new Map<string, LeaseSubscriptionState>();
+  const patternsBySubId = new Map<bigint, string>();
+  let initialized = false;
+  let nextHandlerId = 1;
 
-      const subscriptions = Array.from(
-        this.subscriptionsByPattern.entries(),
-        ([pattern, state]) => ({
-          pattern,
-          handlers: Array.from(state.handlers.entries()),
-        }),
-      );
-      this.subscriptionsByPattern.clear();
-      this.patternsBySubId.clear();
+  connection.onReconnect(async () => {
+    if (subscriptionsByPattern.size === 0) {
+      return;
+    }
 
-      for (const subscription of subscriptions) {
-        const subId = await this.subscribeWire(subscription.pattern);
-        this.subscriptionsByPattern.set(subscription.pattern, {
-          subId,
-          handlers: new Map(subscription.handlers),
-        });
-        this.patternsBySubId.set(subId, subscription.pattern);
-      }
-    });
-  }
+    const subscriptions = Array.from(subscriptionsByPattern.entries(), ([pattern, state]) => ({
+      pattern,
+      handlers: Array.from(state.handlers.entries()),
+    }));
+    subscriptionsByPattern.clear();
+    patternsBySubId.clear();
 
-  async acquire(route: string, ttlSecs: number): Promise<Lease> {
+    for (const subscription of subscriptions) {
+      const subId = await subscribeWire(subscription.pattern);
+      subscriptionsByPattern.set(subscription.pattern, {
+        subId,
+        handlers: new Map(subscription.handlers),
+      });
+      patternsBySubId.set(subId, subscription.pattern);
+    }
+  });
+
+  const acquire = async (route: string, ttlSecs: number): Promise<Lease> => {
     assertExactLeaseRoute(route);
     const payload = LeaseCodec.encodeAcquire(route, ttlSecs);
-    const response = await this.requestFrame(MSG_LEASE_ACQUIRE, payload);
+    const response = await requestFrame(MSG_LEASE_ACQUIRE, payload);
     const decoded = LeaseCodec.decodeAcquireResponse(response);
 
     if (decoded.token === undefined) {
@@ -66,13 +63,13 @@ export class LeaseClient extends DomainClient {
     }
 
     const expiresAt = decoded.expiresAt ?? BigInt(Math.floor(Date.now() / 1000)) + BigInt(ttlSecs);
-    return new Lease(decoded.token, expiresAt, route, this.connection);
-  }
+    return new Lease(decoded.token, expiresAt, route, connection);
+  };
 
-  async query(route: string): Promise<LeaseInfo> {
+  const query = async (route: string): Promise<LeaseInfo> => {
     assertExactLeaseRoute(route);
     const payload = LeaseCodec.encodeQuery(route);
-    const response = await this.requestFrame(MSG_LEASE_QUERY, payload);
+    const response = await requestFrame(MSG_LEASE_QUERY, payload);
     const decoded = LeaseCodec.decodeQueryResponse(response);
     if (decoded.status !== 0) {
       throw new LeaseError("QUERY failed", "QUERY_FAILED", decoded.status);
@@ -84,23 +81,23 @@ export class LeaseClient extends DomainClient {
       ttlRemainingSecs: decoded.ttlRemainingSecs,
       expiresAt: decoded.expiresAt,
     };
-  }
+  };
 
-  async subscribe(pattern: string, handler: ChangeHandler): Promise<LeaseSubscription> {
+  const subscribe = async (pattern: string, handler: ChangeHandler): Promise<LeaseSubscription> => {
     assertExactLeaseRoute(pattern);
-    this.initNotifyHandler();
-    const existing = this.subscriptionsByPattern.get(pattern);
+    initNotifyHandler();
+    const existing = subscriptionsByPattern.get(pattern);
     if (existing) {
-      return this.addLocalSubscription(pattern, existing.subId, handler);
+      return addLocalSubscription(pattern, existing.subId, handler);
     }
 
-    const subId = await this.subscribeWire(pattern);
-    return this.addLocalSubscription(pattern, subId, handler);
-  }
+    const subId = await subscribeWire(pattern);
+    return addLocalSubscription(pattern, subId, handler);
+  };
 
-  private async subscribeWire(pattern: string): Promise<bigint> {
+  const subscribeWire = async (pattern: string): Promise<bigint> => {
     const payload = LeaseCodec.encodeSubscribe(pattern);
-    const response = await this.requestFrame(MSG_LEASE_SUBSCRIBE, payload);
+    const response = await requestFrame(MSG_LEASE_SUBSCRIBE, payload);
     const decoded = LeaseCodec.decodeSubscribeResponse(response);
 
     if (decoded.subId === undefined) {
@@ -108,29 +105,29 @@ export class LeaseClient extends DomainClient {
     }
 
     return decoded.subId;
-  }
+  };
 
-  private addLocalSubscription(
+  const addLocalSubscription = (
     pattern: string,
     subId: bigint,
     handler: ChangeHandler,
-  ): LeaseSubscription {
-    const handlerId = this.nextHandlerId++;
-    let subscription = this.subscriptionsByPattern.get(pattern);
+  ): LeaseSubscription => {
+    const handlerId = nextHandlerId++;
+    let subscription = subscriptionsByPattern.get(pattern);
     if (!subscription) {
       subscription = { subId, handlers: new Map() };
-      this.subscriptionsByPattern.set(pattern, subscription);
-      this.patternsBySubId.set(subId, pattern);
+      subscriptionsByPattern.set(pattern, subscription);
+      patternsBySubId.set(subId, pattern);
     }
 
     subscription.handlers.set(handlerId, handler);
     return new LeaseSubscription(subId, pattern, async () => {
-      await this.unsubscribe(pattern, handlerId);
+      await unsubscribe(pattern, handlerId);
     });
-  }
+  };
 
-  private async unsubscribe(pattern: string, handlerId: number): Promise<void> {
-    const subscription = this.subscriptionsByPattern.get(pattern);
+  const unsubscribe = async (pattern: string, handlerId: number): Promise<void> => {
+    const subscription = subscriptionsByPattern.get(pattern);
     if (!subscription) {
       return;
     }
@@ -140,34 +137,34 @@ export class LeaseClient extends DomainClient {
       return;
     }
 
-    this.subscriptionsByPattern.delete(pattern);
-    this.patternsBySubId.delete(subscription.subId);
+    subscriptionsByPattern.delete(pattern);
+    patternsBySubId.delete(subscription.subId);
     const payload = LeaseCodec.encodeUnsubscribe(pattern);
-    await this.requestFrame(MSG_LEASE_UNSUBSCRIBE, payload);
-  }
+    await requestFrame(MSG_LEASE_UNSUBSCRIBE, payload);
+  };
 
-  private initNotifyHandler(): void {
-    if (this.initialized) {
+  const initNotifyHandler = (): void => {
+    if (initialized) {
       return;
     }
 
-    this.initialized = true;
-    this.connection.registerNotificationHandler(MSG_LEASE_NOTIFY, (payload) => {
+    initialized = true;
+    connection.registerNotificationHandler(MSG_LEASE_NOTIFY, (payload) => {
       try {
         const { subId, route } = LeaseCodec.decodeNotification(payload);
-        const pattern = this.patternsBySubId.get(subId);
+        const pattern = patternsBySubId.get(subId);
         if (!pattern) {
           return;
         }
 
-        const subscription = this.subscriptionsByPattern.get(pattern);
+        const subscription = subscriptionsByPattern.get(pattern);
         if (!subscription) {
           return;
         }
 
         const notification: ChangeNotification = { route };
         for (const handler of subscription.handlers.values()) {
-          this.connection.dispatchAsyncHandler(async () => {
+          connection.dispatchAsyncHandler(async () => {
             await handler(notification);
           });
         }
@@ -175,8 +172,23 @@ export class LeaseClient extends DomainClient {
         // Best-effort notification dispatch.
       }
     });
-  }
+  };
+
+  return {
+    acquire,
+    query,
+    subscribe,
+  };
 }
+
+type LeaseClientConstructor = {
+  new (connection: Connection): LeaseClient;
+  (connection: Connection): LeaseClient;
+};
+
+export const LeaseClient: LeaseClientConstructor = function (connection: Connection) {
+  return createLeaseClient(connection);
+} as unknown as LeaseClientConstructor;
 
 export * from "./types";
 

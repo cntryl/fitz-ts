@@ -2,12 +2,11 @@
  * RPC domain client.
  */
 
-import { DomainClient } from "../base";
+import { createDomainClient } from "../base";
 import { RpcCodec } from "./codec";
 import {
   RequestOptions,
   ResponseFrame,
-  InboundRequest,
   RpcHandler,
   RpcSubscription,
   ResponseWriter,
@@ -29,6 +28,7 @@ import {
 import { ConnectionState } from "../../core/types";
 import { utf8Encoder } from "../../core/buffer";
 import { isConcreteRouteShape } from "../_routes";
+import type { Connection } from "../../client/connection";
 
 type DecodedInboundRequest = {
   correlationId: Uint8Array;
@@ -37,35 +37,31 @@ type DecodedInboundRequest = {
   body: Uint8Array;
 };
 
-/**
- * `ResponseWriter` implementation used by worker handlers.
- */
-class RpcResponseWriter implements ResponseWriter {
-  private sequence = 0n;
+function createRpcResponseWriter(
+  connection: Connection,
+  correlationId: Uint8Array,
+): ResponseWriter {
+  let sequence = 0n;
 
-  constructor(
-    private readonly connection: import("../../client/connection").Connection,
-    private readonly correlationId: Uint8Array,
-  ) {}
-
-  async send(body: Uint8Array, isEnd: boolean): Promise<void> {
-    const payload = RpcCodec.encodeResponse(this.correlationId, this.sequence++, body, isEnd);
+  const send = async (body: Uint8Array, isEnd: boolean): Promise<void> => {
+    const payload = RpcCodec.encodeResponse(correlationId, sequence++, body, isEnd);
 
     try {
-      await this.connection.send(MSG_RPC_RESPONSE, payload);
+      await connection.send(MSG_RPC_RESPONSE, payload);
     } catch (error) {
-      if (isBenignShutdownError(error, this.connection)) {
+      if (isBenignShutdownError(error, connection)) {
         return;
       }
       throw error;
     }
-  }
+  };
+
+  return {
+    send,
+  };
 }
 
-function isBenignShutdownError(
-  error: unknown,
-  connection: import("../../client/connection").Connection,
-): boolean {
+function isBenignShutdownError(error: unknown, connection: Connection): boolean {
   if (connection.getState() !== ConnectionState.Authenticated) {
     return true;
   }
@@ -81,116 +77,108 @@ function isBenignShutdownError(
   return /closed|not connected|reset/i.test(error.message);
 }
 
-/**
- * Async iterator for streaming RPC responses.
- */
-class RpcIterator implements AsyncIterableIterator<ResponseFrame> {
-  private buffer: ResponseFrame[] = [];
-  private done = false;
-  private resolveNext: ((frame: ResponseFrame | null) => void) | null = null;
-  private rejectNext: ((reason?: unknown) => void) | null = null;
-  private abortListener: (() => void) | null = null;
+type RpcIterator = AsyncIterableIterator<ResponseFrame> & {
+  push(frame: ResponseFrame): void;
+  end(): void;
+  fail(reason: unknown): void;
+};
 
-  constructor(
-    private readonly correlationId: Uint8Array,
-    private readonly client: RpcClient,
-    private readonly timeoutMs: number,
-    private readonly signal?: AbortSignal,
-  ) {}
+function createRpcIterator(
+  cleanupPendingRpc: () => void,
+  timeoutMs: number,
+  signal?: AbortSignal,
+): RpcIterator {
+  const buffer: ResponseFrame[] = [];
+  let done = false;
+  let resolveNext: ((frame: ResponseFrame | null) => void) | null = null;
+  let rejectNext: ((reason?: unknown) => void) | null = null;
+  let abortListener: (() => void) | null = null;
 
-  /**
-   * Push a response frame to the iterator.
-   */
-  push(frame: ResponseFrame): void {
-    if (this.resolveNext) {
-      const resolve = this.resolveNext;
-      this.resolveNext = null;
+  const push = (frame: ResponseFrame): void => {
+    if (resolveNext) {
+      const resolve = resolveNext;
+      resolveNext = null;
       resolve(frame);
     } else {
-      this.buffer.push(frame);
+      buffer.push(frame);
     }
-  }
+  };
 
-  /**
-   * Mark the iterator as done (end of stream).
-   */
-  end(): void {
-    this.done = true;
-    this.detachAbortListener();
-    if (this.resolveNext) {
-      const resolve = this.resolveNext;
-      this.resolveNext = null;
-      this.rejectNext = null;
+  const end = (): void => {
+    done = true;
+    detachAbortListener();
+    if (resolveNext) {
+      const resolve = resolveNext;
+      resolveNext = null;
+      rejectNext = null;
       resolve(null);
     }
-  }
+  };
 
-  fail(reason: unknown): void {
-    this.done = true;
-    this.detachAbortListener();
-    if (this.rejectNext) {
-      const reject = this.rejectNext;
-      this.resolveNext = null;
-      this.rejectNext = null;
+  const fail = (reason: unknown): void => {
+    done = true;
+    detachAbortListener();
+    if (rejectNext) {
+      const reject = rejectNext;
+      resolveNext = null;
+      rejectNext = null;
       reject(reason);
       return;
     }
-    this.client.cleanupPendingRpc(this.correlationId);
-  }
+    cleanupPendingRpc();
+  };
 
-  async next(): Promise<IteratorResult<ResponseFrame>> {
-    if (this.buffer.length > 0) {
-      const value = this.buffer.shift();
+  const next = async (): Promise<IteratorResult<ResponseFrame>> => {
+    if (buffer.length > 0) {
+      const value = buffer.shift();
       if (!value) {
         return { value: undefined, done: true };
       }
       return { value, done: false };
     }
 
-    if (this.done) {
+    if (done) {
       return { value: undefined, done: true };
     }
 
-    if (this.signal?.aborted) {
-      this.done = true;
-      this.client.cleanupPendingRpc(this.correlationId);
-      throw this.abortError();
+    if (signal?.aborted) {
+      done = true;
+      cleanupPendingRpc();
+      throw abortError();
     }
 
     const frame = await new Promise<ResponseFrame | null>((resolve, reject) => {
-      this.resolveNext = resolve;
-      this.rejectNext = reject;
-
       const timer = setTimeout(() => {
-        this.resolveNext = null;
-        this.rejectNext = null;
-        this.done = true;
-        this.detachAbortListener();
-        this.client.cleanupPendingRpc(this.correlationId);
+        resolveNext = null;
+        rejectNext = null;
+        done = true;
+        detachAbortListener();
+        cleanupPendingRpc();
         reject(new RpcError("RPC call timeout", "TIMEOUT", RpcStatus.Timeout));
-      }, this.timeoutMs);
+      }, timeoutMs);
 
-      if (this.signal) {
-        const onAbort = () => {
-          clearTimeout(timer);
-          this.resolveNext = null;
-          this.rejectNext = null;
-          this.done = true;
-          this.client.cleanupPendingRpc(this.correlationId);
-          reject(this.abortError());
-        };
-        this.signal.addEventListener("abort", onAbort, { once: true });
-        this.abortListener = () => {
-          this.signal?.removeEventListener("abort", onAbort);
+      const onAbort = () => {
+        clearTimeout(timer);
+        resolveNext = null;
+        rejectNext = null;
+        done = true;
+        cleanupPendingRpc();
+        reject(abortError());
+      };
+
+      if (signal) {
+        signal.addEventListener("abort", onAbort, { once: true });
+        abortListener = () => {
+          signal.removeEventListener("abort", onAbort);
         };
       }
 
-      const originalResolve = this.resolveNext;
-      this.resolveNext = (f) => {
+      resolveNext = (f) => {
         clearTimeout(timer);
-        this.detachAbortListener();
-        originalResolve?.(f);
+        detachAbortListener();
+        resolve(f);
       };
+      rejectNext = reject;
     });
 
     if (frame === null) {
@@ -198,90 +186,110 @@ class RpcIterator implements AsyncIterableIterator<ResponseFrame> {
     }
 
     return { value: frame, done: false };
-  }
+  };
 
-  async return(): Promise<IteratorResult<ResponseFrame>> {
-    this.done = true;
-    this.detachAbortListener();
-    this.client.cleanupPendingRpc(this.correlationId);
+  const returnMethod = async (): Promise<IteratorResult<ResponseFrame>> => {
+    done = true;
+    detachAbortListener();
+    cleanupPendingRpc();
     return { value: undefined, done: true };
-  }
+  };
 
-  [Symbol.asyncIterator](): AsyncIterableIterator<ResponseFrame> {
-    return this;
-  }
+  const detachAbortListener = (): void => {
+    abortListener?.();
+    abortListener = null;
+  };
 
-  private detachAbortListener(): void {
-    this.abortListener?.();
-    this.abortListener = null;
-  }
-
-  private abortError(): Error {
+  const abortError = (): Error => {
     const error = new Error("The operation was aborted");
     error.name = "AbortError";
     return error;
-  }
+  };
+
+  return {
+    push,
+    end,
+    fail,
+    next,
+    return: returnMethod,
+    [Symbol.asyncIterator]() {
+      return this;
+    },
+  };
 }
 
-/**
- * RPC client with streaming call support and worker registration.
- */
-export class RpcClient extends DomainClient {
-  private pendingRpcs: Map<string, RpcIterator> = new Map();
-  private workers: Map<string, RpcHandler> = new Map();
-  private initialized = false;
+export type RpcClient = ReturnType<typeof createRpcClient>;
 
-  constructor(connection: import("../../client/connection").Connection) {
-    super(connection);
-    this.connection.onDisconnect(() => {
-      const pending = Array.from(this.pendingRpcs.values());
-      this.pendingRpcs.clear();
-      for (const iterator of pending) {
-        iterator.fail(new ConnectionError("Connection closed while RPC response was pending"));
+type RpcClientConstructor = {
+  new (connection: Connection): RpcClient;
+  (connection: Connection): RpcClient;
+};
+
+export const RpcClient: RpcClientConstructor = function (connection: Connection) {
+  return createRpcClient(connection);
+} as unknown as RpcClientConstructor;
+
+export function createRpcClient(connection: Connection) {
+  const { requestFrame } = createDomainClient(connection);
+  const pendingRpcs = new Map<string, RpcIterator>();
+  const workers = new Map<string, RpcHandler>();
+  let initialized = false;
+
+  const cleanupPendingRpc = (correlationId: Uint8Array): void => {
+    const key = correlationIdToKey(correlationId);
+    pendingRpcs.delete(key);
+  };
+
+  connection.onDisconnect(() => {
+    const pending = Array.from(pendingRpcs.values());
+    pendingRpcs.clear();
+    for (const iterator of pending) {
+      if (typeof (iterator as any).fail === "function") {
+        (iterator as any).fail(
+          new ConnectionError("Connection closed while RPC response was pending"),
+        );
       }
-    });
+    }
+  });
 
-    this.connection.onReconnect(async () => {
-      if (this.workers.size === 0) {
-        return;
-      }
+  connection.onReconnect(async () => {
+    if (workers.size === 0) {
+      return;
+    }
 
-      const workers = Array.from(this.workers.entries());
-      this.workers.clear();
-      for (const [route, handler] of workers) {
-        await this.registerWorker(route, handler);
-      }
-    });
-  }
+    const registeredWorkers = Array.from(workers.entries());
+    workers.clear();
+    for (const [route, handler] of registeredWorkers) {
+      await registerWorker(route, handler);
+    }
+  });
 
-  /**
-   * Send a remote procedure call and return an async iterator of response frames.
-   * @param route RPC route (e.g., "rpc://realm/area/method")
-   * @param body Request body
-   * @param options Call options such as timeout and cancellation.
-   * @returns AsyncIterableIterator over response frames
-   */
-  async call(
+  const call = async (
     route: string,
     body: Uint8Array,
     options?: RequestOptions,
-  ): Promise<AsyncIterableIterator<ResponseFrame>> {
+  ): Promise<AsyncIterableIterator<ResponseFrame>> => {
     assertRpcRoute(route);
-    this.initRpcHandler();
+    initRpcHandler();
 
     const timeoutMs = options?.timeoutMs ?? 30000;
     const correlationId = RpcCodec.generateCorrelationId();
-    const correlationKey = this.correlationIdToKey(correlationId);
+    const correlationKey = correlationIdToKey(correlationId);
 
-    const iterator = new RpcIterator(correlationId, this, timeoutMs, options?.signal);
-    this.pendingRpcs.set(correlationKey, iterator);
+    const iterator = createRpcIterator(
+      () => cleanupPendingRpc(correlationId),
+      timeoutMs,
+      options?.signal,
+    );
+    pendingRpcs.set(correlationKey, iterator);
+
     try {
       const payload = RpcCodec.encodeRequest(correlationId, route, "", body);
-      const response = await this.requestFrame(MSG_RPC_REQUEST, payload, options?.signal);
+      const response = await requestFrame(MSG_RPC_REQUEST, payload, options?.signal);
 
       const decoded = RpcCodec.decodeRequestResponse(response);
       if (decoded.status !== RpcStatus.Ok) {
-        this.pendingRpcs.delete(correlationKey);
+        pendingRpcs.delete(correlationKey);
         throw new RpcError(
           `RPC REQUEST failed: status ${decoded.status}`,
           "REQUEST_FAILED",
@@ -291,22 +299,16 @@ export class RpcClient extends DomainClient {
 
       return iterator;
     } catch (error) {
-      this.pendingRpcs.delete(correlationKey);
+      pendingRpcs.delete(correlationKey);
       throw error;
     }
-  }
+  };
 
-  /**
-   * Register as a worker to handle incoming RPC requests.
-   * @param route Worker route pattern
-   * @param handler Handler function to process requests
-   * @returns Worker registration with `unsubscribe()`.
-   */
-  async registerWorker(route: string, handler: RpcHandler): Promise<RpcSubscription> {
+  const registerWorker = async (route: string, handler: RpcHandler): Promise<RpcSubscription> => {
     assertRpcRoute(route);
-    this.initRpcHandler();
+    initRpcHandler();
     const payload = RpcCodec.encodeSubscribeWorker(route);
-    const response = await this.requestFrame(MSG_RPC_SUBSCRIBE_WORKER, payload);
+    const response = await requestFrame(MSG_RPC_SUBSCRIBE_WORKER, payload);
     const decoded = RpcCodec.decodeSubscribeWorkerResponse(response);
 
     if (decoded.status !== RpcStatus.Ok) {
@@ -317,24 +319,21 @@ export class RpcClient extends DomainClient {
       );
     }
 
-    this.workers.set(route, handler);
+    workers.set(route, handler);
 
     const unsubscribeFn = async (registeredRoute: string) => {
-      await this.unregisterWorker(registeredRoute);
+      await unregisterWorker(registeredRoute);
     };
 
     return new RpcSubscription(route, unsubscribeFn);
-  }
+  };
 
-  /**
-   * Remove a worker registration from the current connection.
-   */
-  private async unregisterWorker(route: string): Promise<void> {
-    this.workers.delete(route);
+  const unregisterWorker = async (route: string): Promise<void> => {
+    workers.delete(route);
 
     try {
       const payload = RpcCodec.encodeUnsubscribeWorker(route);
-      const response = await this.requestFrame(MSG_RPC_UNSUBSCRIBE_WORKER, payload);
+      const response = await requestFrame(MSG_RPC_UNSUBSCRIBE_WORKER, payload);
       const decoded = RpcCodec.decodeUnsubscribeWorkerResponse(response);
 
       if (decoded.status !== RpcStatus.Ok) {
@@ -343,60 +342,46 @@ export class RpcClient extends DomainClient {
     } catch {
       return;
     }
-  }
+  };
 
-  /**
-   * Clean up a pending RPC when an iterator is closed or canceled.
-   */
-  cleanupPendingRpc(correlationId: Uint8Array): void {
-    const key = this.correlationIdToKey(correlationId);
-    this.pendingRpcs.delete(key);
-  }
-
-  /**
-   * Initialize RPC handlers lazily on first use.
-   */
-  private initRpcHandler(): void {
-    if (this.initialized) {
+  const initRpcHandler = (): void => {
+    if (initialized) {
       return;
     }
-    this.initialized = true;
+    initialized = true;
 
-    this.connection.registerNotificationHandler(MSG_RPC_RESPONSE, (payload: Uint8Array) => {
+    connection.registerNotificationHandler(MSG_RPC_RESPONSE, (payload: Uint8Array) => {
       try {
         const { correlationId, sequence, body, streamEnd } = RpcCodec.decodeResponse(payload);
-        this.handleRpcResponse(correlationId, sequence, body, streamEnd);
+        handleRpcResponse(correlationId, sequence, body, streamEnd);
       } catch {
         // Best-effort decode for background frames.
       }
     });
 
-    this.connection.registerNotificationHandler(MSG_RPC_ACK, () => {
+    connection.registerNotificationHandler(MSG_RPC_ACK, () => {
       // Worker ACK frames are broker-internal flow control signals. The current
       // public RPC API does not surface them.
     });
 
-    this.connection.registerNotificationHandler(MSG_RPC_REQUEST, (payload: Uint8Array) => {
+    connection.registerNotificationHandler(MSG_RPC_REQUEST, (payload: Uint8Array) => {
       try {
         const request = RpcCodec.decodeInboundRequest(payload);
-        this.handleRpcRequest(request);
+        handleRpcRequest(request);
       } catch {
         // Best-effort decode for background frames.
       }
     });
-  }
+  };
 
-  /**
-   * Handle an incoming `RPC_RESPONSE` frame.
-   */
-  private handleRpcResponse(
+  const handleRpcResponse = (
     correlationId: Uint8Array,
     sequence: bigint,
     body: Uint8Array,
     streamEnd: boolean,
-  ): void {
-    const key = this.correlationIdToKey(correlationId);
-    const iterator = this.pendingRpcs.get(key);
+  ): void => {
+    const key = correlationIdToKey(correlationId);
+    const iterator = pendingRpcs.get(key) as any;
 
     if (!iterator) {
       return;
@@ -404,7 +389,7 @@ export class RpcClient extends DomainClient {
 
     const terminalError = RpcCodec.decodeErrorBody(body);
     if (terminalError?.code === ErrCodeRpcWorkerNotFound) {
-      this.pendingRpcs.delete(key);
+      pendingRpcs.delete(key);
       return;
     }
 
@@ -412,29 +397,27 @@ export class RpcClient extends DomainClient {
       if (body.length > 0) {
         iterator.push({ body, sequence });
       }
-      this.pendingRpcs.delete(key);
+      pendingRpcs.delete(key);
       iterator.end();
     } else {
       iterator.push({ body, sequence });
     }
-  }
+  };
 
-  /**
-   * Handle an incoming `RPC_REQUEST` frame for worker mode.
-   */
-  private handleRpcRequest(req: DecodedInboundRequest): void {
-    const handler = this.workers.get(req.route);
+  const handleRpcRequest = (req: DecodedInboundRequest): void => {
+    const handler = workers.get(req.route);
 
     if (!handler) {
       return;
     }
 
-    const writer = new RpcResponseWriter(this.connection, req.correlationId);
+    const writer = createRpcResponseWriter(connection, req.correlationId);
 
-    this.connection.dispatchAsyncHandler(async () => {
+    connection.dispatchAsyncHandler(async () => {
       try {
         await handler(
           {
+            correlationId: req.correlationId,
             route: req.route,
             replyRoute: req.replyRoute,
             body: req.body,
@@ -442,7 +425,7 @@ export class RpcClient extends DomainClient {
           writer,
         );
       } catch (error) {
-        if (isBenignShutdownError(error, this.connection)) {
+        if (isBenignShutdownError(error, connection)) {
           return;
         }
 
@@ -454,16 +437,18 @@ export class RpcClient extends DomainClient {
         }
       }
     });
-  }
+  };
 
-  /**
-   * Convert a correlation ID into a stable string key for the pending map.
-   */
-  private correlationIdToKey(correlationId: Uint8Array): string {
+  const correlationIdToKey = (correlationId: Uint8Array): string => {
     return Array.from(correlationId)
       .map((b) => b.toString(16).padStart(2, "0"))
       .join("");
-  }
+  };
+
+  return {
+    call,
+    registerWorker,
+  };
 }
 
 export * from "./types";

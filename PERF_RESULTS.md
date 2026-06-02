@@ -4,7 +4,14 @@ This document tracks the benchmark evidence used to grade fitz-ts performance-re
 
 ## Scope
 
-Current benchmark coverage is implemented in `benches/hotpath.bench.ts` and focuses on hot-path client-side costs that can be measured without broker/network noise:
+The benchmark suite is organized into four tiers:
+
+- `tier1`: hot-path microbenchmarks for core frame encoding/decoding, domain codec payload encoding, request correlation, and multiplexer/parser runtime costs.
+- `tier2`: subsystem benchmarks for domain-level payload and client primitive workloads across KV, Notice, Lease, Queue, Schedule, Stream, and RPC.
+- `tier3`: system benchmarks for combined protocol and client flow payloads that represent multi-message or multi-domain internal paths.
+- `tier4`: integration benchmarks for realistic multi-message encode and frame assembly scenarios intended to capture broader client payload composition.
+
+Current coverage includes hot-path client-side costs that can be measured without broker/network noise:
 
 - frame encode and decode
 - notice publish encoding
@@ -19,7 +26,7 @@ Current benchmark coverage is implemented in `benches/hotpath.bench.ts` and focu
 ## Run
 
 ```bash
-npm run bench -- --run benches/hotpath.bench.ts
+npm run bench
 ```
 
 ## Evidence Policy
@@ -28,12 +35,13 @@ npm run bench -- --run benches/hotpath.bench.ts
 - Use the same Node major version as CI when comparing runs.
 - Treat benchmark regressions as evidence to investigate, not as proof of production impact without context.
 - Keep broker-backed latency measurements separate from these microbenchmarks; network variance belongs in a different report.
+- Run the full suite multiple times, especially `tier4`, before promoting any bench results or threshold behavior into CI.
 
 ## Status
 
 - Benchmark suite exists and covers the primary hot paths needed for initial evidence.
-- Fresh benchmark run captured on 2026-03-25 with `npm run bench -- --run benches/hotpath.bench.ts`.
-- Numeric targets are now formalized and enforced by `tests/unit/perf/hotpath-thresholds.test.ts`, so the evidence supports `PASS` grading for the stronger performance requirements.
+- Fresh benchmark run captured on 2026-03-25 with `npm run bench`.
+- Numeric targets are now formalized and enforced by `tests/unit/perf/hotpath-thresholds.test.ts`, `tests/unit/perf/subsystem-thresholds.test.ts`, and `tests/unit/perf/system-thresholds.test.ts`.
 
 ## Release Thresholds
 
@@ -52,12 +60,21 @@ The following budgets are enforced by `tests/unit/perf/hotpath-thresholds.test.t
 | multiplexer 1k in-flight FIFO drain     | <= 25 ms for one drain               |
 | frame parser fragmented stream          | <= 150 ms over 10k fragmented parses |
 | notice publish frame encode throughput  | <= 150 ms over 100k iterations       |
+| queue enqueue encode                    | <= 200 ms over 100k iterations       |
+| queue reserve encode                    | <= 150 ms over 100k iterations       |
+| stream append encode                    | <= 200 ms over 100k iterations       |
+| schedule create encode                  | <= 200 ms over 100k iterations       |
+| rpc request encode                      | <= 400 ms over 100k iterations       |
+| rpc decode inbound request              | <= 250 ms over 100k iterations       |
+| frame batch encode + parse              | <= 250 ms over 10k iterations        |
+| kv begin + frame encode                 | <= 150 ms over 100k iterations       |
+| mixed payload encode batch              | <= 200 ms over 50k iterations        |
 
 ## Latest Captured Results
 
 Environment:
 
-- Command: `npm run bench -- --run benches/hotpath.bench.ts`
+- Command: `npm run bench`
 - Date: 2026-03-25
 - Runner: Vitest bench
 
