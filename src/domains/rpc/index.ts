@@ -4,8 +4,8 @@
 
 export { RpcClient } from "./client";
 export { RpcCodec } from "./codec";
+export type { RpcSubscription } from "./types";
 export {
-  RpcSubscription,
   RpcStatus,
   type ResponseFrame,
   type InboundRequest,

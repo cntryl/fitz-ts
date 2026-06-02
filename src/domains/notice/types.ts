@@ -19,16 +19,22 @@ export type NoticeHandler = (msg: NoticeMsg) => Promise<void> | void;
 /**
  * Active notice subscription
  */
-export class NoticeSubscription {
-  constructor(
-    public readonly subId: bigint,
-    public readonly pattern: string,
-    private readonly unsubscribeFn: (subId: bigint) => Promise<void>,
-  ) {}
+export type NoticeSubscription = ReturnType<typeof createNoticeSubscription>;
 
-  async unsubscribe(): Promise<void> {
-    await this.unsubscribeFn(this.subId);
-  }
+export function createNoticeSubscription(
+  subId: bigint,
+  pattern: string,
+  unsubscribeFn: (subId: bigint) => Promise<void>,
+) {
+  const unsubscribe = async (): Promise<void> => {
+    await unsubscribeFn(subId);
+  };
+
+  return {
+    subId,
+    pattern,
+    unsubscribe,
+  };
 }
 
 /**

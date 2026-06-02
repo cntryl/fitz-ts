@@ -80,7 +80,8 @@ export {
 } from "./core/errors";
 
 // Domain clients
-export { KvClient, KvTransaction } from "./domains/kv/client";
+export { KvClient } from "./domains/kv/client";
+export type { KvTransaction } from "./domains/kv/client";
 export type {
   TxMode,
   DurabilityMode,

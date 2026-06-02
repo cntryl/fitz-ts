@@ -6,34 +6,34 @@
 import { BufferWriter, BufferReader } from "../../core/buffer";
 import { SubscribeResponse, UnsubscribeResponse } from "./types";
 
-export class NoticeCodec {
+export const NoticeCodec = {
   /**
    * Encode PUBLISH request (fire-and-forget, no response)
    * Payload: [string route][bytes body]
    */
-  static encodePublish(route: string, body: Uint8Array): Uint8Array {
+  encodePublish(route: string, body: Uint8Array): Uint8Array {
     const writer = new BufferWriter(256);
     writer.writeRoute(route);
     writer.writeU32BE(body.length);
     writer.writeBytes(body);
     return writer.getBuffer();
-  }
+  },
 
   /**
    * Encode SUBSCRIBE request
    * Payload: [string pattern]
    */
-  static encodeSubscribe(pattern: string): Uint8Array {
+  encodeSubscribe(pattern: string): Uint8Array {
     const writer = new BufferWriter(64);
     writer.writeRoute(pattern);
     return writer.getBuffer();
-  }
+  },
 
   /**
    * Decode SUBSCRIBE response
    * Standard response: [u8 status=0][u8 has_sub_id][u64 sub_id if has=1]
    */
-  static decodeSubscribeResponse(payload: Uint8Array): SubscribeResponse {
+  decodeSubscribeResponse(payload: Uint8Array): SubscribeResponse {
     if (payload.length < 2) {
       throw new Error("SUBSCRIBE response too short");
     }
@@ -52,31 +52,31 @@ export class NoticeCodec {
 
     const subId = reader.readU64BE();
     return { status, subId };
-  }
+  },
 
   /**
    * Encode UNSUBSCRIBE request
    * Payload: [u64 subscription_id]
    */
-  static encodeUnsubscribe(subId: bigint): Uint8Array {
+  encodeUnsubscribe(subId: bigint): Uint8Array {
     const writer = new BufferWriter(64);
     writer.writeU64BE(subId);
     return writer.getBuffer();
-  }
+  },
 
   /**
    * Decode UNSUBSCRIBE response
    * Standard response: [u8 status=0]
    */
-  static decodeUnsubscribeResponse(): UnsubscribeResponse {
+  decodeUnsubscribeResponse(): UnsubscribeResponse {
     return { status: 0 };
-  }
+  },
 
   /**
    * Decode NOTIFY (504) message
    * Payload: [u64 subscription_id][string route][bytes body]
    */
-  static decodeNotification(payload: Uint8Array): {
+  decodeNotification(payload: Uint8Array): {
     subId: bigint;
     route: string;
     body: Uint8Array;
@@ -89,4 +89,4 @@ export class NoticeCodec {
 
     return { subId, route, body };
   }
-}
+};

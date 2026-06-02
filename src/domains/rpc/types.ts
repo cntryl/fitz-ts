@@ -15,7 +15,6 @@ export interface ResponseFrame {
  * Inbound RPC request received by a worker
  */
 export interface InboundRequest {
-  correlationId: Uint8Array;
   route: string;
   replyRoute: string;
   body: Uint8Array;
@@ -36,15 +35,20 @@ export type RpcHandler = (req: InboundRequest, writer: ResponseWriter) => Promis
 /**
  * Active worker registration
  */
-export class RpcSubscription {
-  constructor(
-    public readonly route: string,
-    private readonly unsubscribeFn: (route: string) => Promise<void>,
-  ) {}
+export type RpcSubscription = ReturnType<typeof createRpcSubscription>;
 
-  async unsubscribe(): Promise<void> {
-    await this.unsubscribeFn(this.route);
-  }
+export function createRpcSubscription(
+  route: string,
+  unsubscribeFn: (route: string) => Promise<void>,
+) {
+  const unsubscribe = async (): Promise<void> => {
+    await unsubscribeFn(route);
+  };
+
+  return {
+    route,
+    unsubscribe,
+  };
 }
 
 /**

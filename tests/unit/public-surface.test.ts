@@ -38,6 +38,7 @@ describe("public surface", () => {
     const source = readSource("../../src/index.ts");
     expect(collectExportNames(source)).toEqual([
       "Client",
+      "createClient",
       "AsyncHandlerOptions",
       "ClientConfig",
       "FitzLifecycleEvent",
@@ -168,28 +169,33 @@ describe("public surface", () => {
     expect(source).not.toContain("correlationId");
   });
 
-  it("keeps queue item ids private and exposes subscription ids readonly", () => {
+  it("keeps queue item ids private and exposes subscription factories", () => {
     const source = readSource("../../src/domains/queue/types.ts");
-    expect(source).toContain("private id: bigint;");
-    expect(source).toContain("private token: bigint;");
-    expect(source).toContain("public readonly subId: bigint");
+    expect(source).not.toContain("private id: bigint;");
+    expect(source).not.toContain("private token: bigint;");
+    expect(source).toContain("export type QueueItem = ReturnType<typeof createQueueItem>");
+    expect(source).toContain("export function createQueueItem(");
+    expect(source).toContain("export type QueueSubscription = ReturnType<typeof createQueueSubscription>");
+    expect(source).toContain("export function createQueueSubscription(");
   });
 
-  it("keeps lease tokens private and exposes subscription ids readonly", () => {
+  it("keeps lease tokens private and exposes lease factories", () => {
     const source = readSource("../../src/domains/lease/types.ts");
-    expect(source).toContain("private token: bigint;");
-    expect(source).toContain("public readonly subId: bigint");
+    expect(source).not.toContain("private token: bigint;");
+    expect(source).toContain("export type Lease = ReturnType<typeof createLease>");
+    expect(source).toContain("export function createLease(");
+    expect(source).toContain("export type LeaseSubscription = ReturnType<typeof createLeaseSubscription>");
+    expect(source).toContain("export function createLeaseSubscription(");
   });
 
-  it("exposes notice, schedule, and stream subscription ids as readonly", () => {
-    expect(readSource("../../src/domains/notice/types.ts")).toContain(
-      "public readonly subId: bigint",
-    );
+  it("exposes notice, schedule, and stream subscription factories", () => {
+    const noticeSource = readSource("../../src/domains/notice/types.ts");
+    expect(noticeSource).toContain("export function createNoticeSubscription(");
+
     const scheduleSource = readSource("../../src/domains/schedule/types.ts");
-    expect(scheduleSource).toContain("public readonly subId: bigint");
-    expect(scheduleSource).toContain("private readonly handler: ScheduleHandler");
-    expect(readSource("../../src/domains/stream/types.ts")).toContain(
-      "public readonly subId: bigint",
-    );
+    expect(scheduleSource).toContain("export function createScheduleSubscription(");
+
+    const streamSource = readSource("../../src/domains/stream/types.ts");
+    expect(streamSource).toContain("export function createStreamSubscription(");
   });
 });

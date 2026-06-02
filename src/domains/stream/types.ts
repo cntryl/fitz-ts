@@ -116,16 +116,21 @@ export interface StreamCommitNotification {
 
 export type StreamCommitHandler = (notification: StreamCommitNotification) => void | Promise<void>;
 
-export class StreamSubscription {
-  constructor(
-    public readonly subId: bigint,
-    private readonly pattern: string,
-    private readonly unsubscribeFn: (pattern: string) => Promise<void>,
-  ) {}
+export type StreamSubscription = ReturnType<typeof createStreamSubscription>;
 
-  async unsubscribe(): Promise<void> {
-    await this.unsubscribeFn(this.pattern);
-  }
+export function createStreamSubscription(
+  subId: bigint,
+  pattern: string,
+  unsubscribeFn: (pattern: string) => Promise<void>,
+) {
+  const unsubscribe = async (): Promise<void> => {
+    await unsubscribeFn(pattern);
+  };
+
+  return {
+    subId,
+    unsubscribe,
+  };
 }
 
 /**

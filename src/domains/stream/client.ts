@@ -19,10 +19,11 @@ import {
   StreamCommitHandler,
   StreamCommitNotification,
   StreamSubscription,
+  createStreamSubscription,
 } from "./types";
-import { StreamSessionImpl } from "./session";
+import { createStreamSession } from "./session";
 import { StreamError } from "../../core/errors";
-import { SliceIterator, AsyncIterableIterator } from "../../core/iterator";
+import { createSliceIterator, createAsyncIterableIterator } from "../../core/iterator";
 import {
   MSG_STREAM_BEGIN,
   MSG_STREAM_READ,
@@ -83,7 +84,7 @@ export function createStreamClient(connection: Connection) {
       throw new StreamError("BEGIN response missing sessionId", "MISSING_SESSION_ID");
     }
 
-    return new StreamSessionImpl(connection, route, decoded.sessionId);
+    return createStreamSession(connection, route, decoded.sessionId);
   };
 
   const readPage = async (
@@ -127,8 +128,7 @@ export function createStreamClient(connection: Connection) {
     options?: StreamReadOptions,
   ): Promise<AsyncIterable<StreamRecord>> => {
     const records = await read(route, startOffset, limit, options);
-    const iterator = new SliceIterator(records);
-    return new AsyncIterableIterator(iterator);
+    return createAsyncIterableIterator(createSliceIterator(records));
   };
 
   const peek = async (route: string): Promise<StreamRecord | null> => {
@@ -201,7 +201,7 @@ export function createStreamClient(connection: Connection) {
     }
 
     subscription.handlers.set(handlerId, handler);
-    return new StreamSubscription(subId, pattern, async () => {
+    return createStreamSubscription(subId, pattern, async () => {
       await unsubscribe(pattern, handlerId);
     });
   };

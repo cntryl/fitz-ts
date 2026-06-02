@@ -66,12 +66,12 @@ class BincodeWriter {
   }
 }
 
-export class StreamCodec {
+export const StreamCodec = {
   /**
    * Encode BEGIN request
    * Payload: [route: string][has_ingest_metadata: u8][ingest_metadata?: bytes]
    */
-  static encodeBegin(route: string, ingestMetadata?: Uint8Array): Uint8Array {
+  encodeBegin(route: string, ingestMetadata?: Uint8Array): Uint8Array {
     const writer = new BufferWriter(256);
     writer.writeRoute(route);
     if (ingestMetadata && ingestMetadata.length > 0) {
@@ -82,25 +82,25 @@ export class StreamCodec {
       writer.writeU8(0);
     }
     return writer.getBuffer();
-  }
+  },
 
   /**
    * Decode BEGIN response
    * Payload: [status: u8][has_session_id: u8][session_id?: u64][data: bytes]
    */
-  static decodeBeginResponse(payload: Uint8Array): {
+  decodeBeginResponse(payload: Uint8Array): {
     status: number;
     sessionId?: bigint;
   } {
     const decoded = this.decodeWrappedResponse(payload);
     return { status: decoded.status, sessionId: decoded.sessionId };
-  }
+  },
 
   /**
    * Encode APPEND request
    * Payload: [session_id: u64][expected_offset: u64][body: bytes][has_metadata: u8][metadata?: bytes][has_discriminator: u8][discriminator?: string]
    */
-  static encodeAppend(
+  encodeAppend(
     sessionId: bigint,
     expectedOffset: bigint,
     body: Uint8Array,
@@ -128,13 +128,13 @@ export class StreamCodec {
     }
 
     return writer.getBuffer();
-  }
+  },
 
   /**
    * Decode APPEND response
    * Payload: [status: u8][has_session_id: u8][session_id?: u64][data: bytes]
    */
-  static decodeAppendResponse(payload: Uint8Array): {
+  decodeAppendResponse(payload: Uint8Array): {
     status: number;
     offset?: bigint;
   } {
@@ -145,54 +145,54 @@ export class StreamCodec {
 
     const reader = new BufferReader(decoded.data);
     return { status: decoded.status, offset: reader.readU64BE() };
-  }
+  },
 
   /**
    * Encode COMMIT request
    * Payload: [session_id: u64][mode: u8]
    */
-  static encodeCommit(sessionId: bigint, mode: StreamCommitMode): Uint8Array {
+  encodeCommit(sessionId: bigint, mode: StreamCommitMode): Uint8Array {
     const writer = new BufferWriter(64);
     writer.writeU64BE(sessionId);
     writer.writeU8(mode === "Sync" ? 1 : 0);
     return writer.getBuffer();
-  }
+  },
 
   /**
    * Decode COMMIT response
    * Payload: [status: u8]
    */
-  static decodeCommitResponse(payload: Uint8Array): { status: number } {
+  decodeCommitResponse(payload: Uint8Array): { status: number } {
     const reader = new BufferReader(payload);
     const status = reader.readU8();
     return { status };
-  }
+  },
 
   /**
    * Encode ROLLBACK request
    * Payload: [session_id: u64]
    */
-  static encodeRollback(sessionId: bigint): Uint8Array {
+  encodeRollback(sessionId: bigint): Uint8Array {
     const writer = new BufferWriter(64);
     writer.writeU64BE(sessionId);
     return writer.getBuffer();
-  }
+  },
 
   /**
    * Decode ROLLBACK response
    * Payload: [status: u8]
    */
-  static decodeRollbackResponse(payload: Uint8Array): { status: number } {
+  decodeRollbackResponse(payload: Uint8Array): { status: number } {
     const reader = new BufferReader(payload);
     const status = reader.readU8();
     return { status };
-  }
+  },
 
   /**
    * Encode READ request
    * Payload: [route: string][start_offset: u64][limit: u64][has_max_bytes: u8][max_bytes?: u64][has_filter: u8][filter_length?: u32][filter?: bincode]
    */
-  static encodeRead(
+  encodeRead(
     route: string,
     startOffset: bigint,
     limit: number,
@@ -220,13 +220,13 @@ export class StreamCodec {
       writer.writeU8(0);
     }
     return writer.getBuffer();
-  }
+  },
 
   /**
    * Decode READ response
    * Payload: [status: u8][has_session_id: u8][session_id?: u64][data: bytes]
    */
-  static decodeReadResponse(payload: Uint8Array): {
+  decodeReadResponse(payload: Uint8Array): {
     status: number;
     items: StreamReadItem[];
     cursor?: StreamReadCursor;
@@ -260,23 +260,23 @@ export class StreamCodec {
     }
 
     return { status: decoded.status, items, cursor };
-  }
+  },
 
   /**
    * Encode LAST request
    * Payload: [route: string]
    */
-  static encodeLast(route: string): Uint8Array {
+  encodeLast(route: string): Uint8Array {
     const writer = new BufferWriter(128);
     writer.writeRoute(route);
     return writer.getBuffer();
-  }
+  },
 
   /**
    * Decode LAST response
    * Payload: [status: u8][has_session_id: u8][session_id?: u64][data: bytes]
    */
-  static decodeLastResponse(payload: Uint8Array): {
+  decodeLastResponse(payload: Uint8Array): {
     status: number;
     record?: StreamRecord;
   } {
@@ -289,23 +289,23 @@ export class StreamCodec {
     const record = this.decodeStreamRecord(reader);
 
     return { status: decoded.status, record };
-  }
+  },
 
   /**
    * Encode METADATA request.
    * Payload: [route: string]
    */
-  static encodeMetadata(route: string): Uint8Array {
+  encodeMetadata(route: string): Uint8Array {
     const writer = new BufferWriter(128);
     writer.writeRoute(route);
     return writer.getBuffer();
-  }
+  },
 
   /**
    * Decode METADATA response.
    * Payload: [status: u8][has_session_id: u8][session_id?: u64][data: bytes]
    */
-  static decodeMetadataResponse(payload: Uint8Array): {
+  decodeMetadataResponse(payload: Uint8Array): {
     status: number;
     metadata?: StreamMetadata;
   } {
@@ -337,15 +337,15 @@ export class StreamCodec {
         realmWatermark,
       },
     };
-  }
+  },
 
-  static encodeSubscribe(pattern: string): Uint8Array {
+  encodeSubscribe(pattern: string): Uint8Array {
     const writer = new BufferWriter(128);
     writer.writeRoute(pattern);
     return writer.getBuffer();
-  }
+  },
 
-  static decodeSubscribeResponse(payload: Uint8Array): {
+  decodeSubscribeResponse(payload: Uint8Array): {
     status: number;
     subId?: bigint;
   } {
@@ -361,20 +361,20 @@ export class StreamCodec {
     }
 
     return { status, subId: reader.readU64BE() };
-  }
+  },
 
-  static encodeUnsubscribe(pattern: string): Uint8Array {
+  encodeUnsubscribe(pattern: string): Uint8Array {
     const writer = new BufferWriter(128);
     writer.writeRoute(pattern);
     return writer.getBuffer();
-  }
+  },
 
-  static decodeUnsubscribeResponse(payload: Uint8Array): { status: number } {
+  decodeUnsubscribeResponse(payload: Uint8Array): { status: number } {
     const reader = new BufferReader(payload);
     return { status: reader.readU8() };
-  }
+  },
 
-  static decodeNotification(payload: Uint8Array): {
+  decodeNotification(payload: Uint8Array): {
     subId: bigint;
     route: string;
     rawPayload: Uint8Array;
@@ -398,9 +398,9 @@ export class StreamCodec {
       rawPayload,
       parsedPayload,
     };
-  }
+  },
 
-  private static decodeStreamRecord(reader: BufferReader): StreamRecord {
+  decodeStreamRecord(reader: BufferReader): StreamRecord {
     const offset = reader.readU64BE();
     const areaOffset = reader.readOptionalU64();
     const realmOffset = reader.readOptionalU64();
@@ -416,13 +416,13 @@ export class StreamCodec {
       realmOffset,
       metadata,
     };
-  }
+  },
 
-  static flattenStreamReadItems(items: StreamReadItem[]): StreamRecord[] {
+  flattenStreamReadItems(items: StreamReadItem[]): StreamRecord[] {
     return items.flatMap((item) => (item.kind === "event" ? [item.record] : []));
-  }
+  },
 
-  private static decodeStreamReadItem(reader: BufferReader): StreamReadItem {
+  decodeStreamReadItem(reader: BufferReader): StreamReadItem {
     const tag = reader.readU8();
     switch (tag) {
       case 0:
@@ -443,9 +443,9 @@ export class StreamCodec {
       default:
         throw new Error(`unknown stream read item tag: ${tag}`);
     }
-  }
+  },
 
-  private static decodeStreamFilteredReason(
+  decodeStreamFilteredReason(
     reader: BufferReader,
   ): StreamFilteredReason | undefined {
     const tag = reader.readU8();
@@ -461,9 +461,9 @@ export class StreamCodec {
       default:
         throw new Error(`unknown stream filtered reason tag: ${tag}`);
     }
-  }
+  },
 
-  private static readOptionalBytes(reader: BufferReader): Uint8Array | undefined {
+  readOptionalBytes(reader: BufferReader): Uint8Array | undefined {
     const hasValue = reader.readU8();
     if (hasValue !== 1) {
       return undefined;
@@ -471,9 +471,9 @@ export class StreamCodec {
 
     const length = reader.readU32BE();
     return reader.readBytes(length);
-  }
+  },
 
-  private static decodeWrappedResponse(payload: Uint8Array): {
+  decodeWrappedResponse(payload: Uint8Array): {
     status: number;
     sessionId?: bigint;
     data: Uint8Array;
@@ -500,7 +500,7 @@ export class StreamCodec {
     const data = reader.readBytes(dataLength);
     return { status, sessionId, data };
   }
-}
+};
 
 function encodeStreamFilterSet(filter: StreamFilterSet): Uint8Array {
   const writer = new BincodeWriter();

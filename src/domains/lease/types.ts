@@ -20,100 +20,95 @@ export type ChangeHandler = (notif: ChangeNotification) => Promise<void>;
 /**
  * Active lease change subscription
  */
-export class LeaseSubscription {
-  constructor(
-    public readonly subId: bigint,
-    public readonly pattern: string,
-    private readonly unsubscribeFn: (subId: bigint) => Promise<void>,
-  ) {}
+export type LeaseSubscription = ReturnType<typeof createLeaseSubscription>;
 
-  async unsubscribe(): Promise<void> {
-    await this.unsubscribeFn(this.subId);
-  }
+export function createLeaseSubscription(
+  subId: bigint,
+  pattern: string,
+  unsubscribeFn: (subId: bigint) => Promise<void>,
+) {
+  const unsubscribe = async (): Promise<void> => {
+    await unsubscribeFn(subId);
+  };
+
+  return {
+    subId,
+    pattern,
+    unsubscribe,
+  };
 }
 
 /**
  * Lease handle representing an acquired lease
  * Provides renew() and release() methods
  */
-export class Lease {
-  private token: bigint;
-  private expiresAt: bigint;
+export type Lease = ReturnType<typeof createLease>;
 
-  constructor(
-    token: bigint,
-    expiresAt: bigint,
-    private readonly route: string,
-    private readonly connection: Connection,
-  ) {
-    this.token = token;
-    this.expiresAt = expiresAt;
-  }
+export function createLease(
+  token: bigint,
+  expiresAt: bigint,
+  route: string,
+  connection: Connection,
+) {
+  let currentToken = token;
+  let currentExpiry = expiresAt;
 
-  /**
-   * Extend the lease TTL
-   * @param ttlSecs Lease duration in seconds
-   * @returns New expiry timestamp (seconds since epoch)
-   */
-  async extend(ttlSecs: number, signal?: AbortSignal): Promise<bigint> {
-    const requestPayload = LeaseCodec.encodeExtend(this.route, this.token, ttlSecs);
-    const response = await this.connection.request(MSG_LEASE_RENEW, requestPayload, signal);
+  const extend = async (ttlSecs: number, signal?: AbortSignal): Promise<bigint> => {
+    const requestPayload = LeaseCodec.encodeExtend(route, currentToken, ttlSecs);
+    const response = await connection.request(MSG_LEASE_RENEW, requestPayload, signal);
     const data = assertSuccess(response, "EXTEND");
 
-    // Parse new fencing token: [u64 BE new_fencing_token]
     if (data && data.length >= 8) {
       const reader = new BufferReader(data);
-      const newToken = reader.readU64BE();
-      this.token = newToken;
+      currentToken = reader.readU64BE();
     }
 
-    const newExpiry = BigInt(Math.floor(Date.now() / 1000)) + BigInt(ttlSecs);
-    this.expiresAt = newExpiry;
-    return newExpiry;
-  }
+    currentExpiry = BigInt(Math.floor(Date.now() / 1000)) + BigInt(ttlSecs);
+    return currentExpiry;
+  };
 
-  /**
-   * Release the lease
-   */
-  async release(signal?: AbortSignal): Promise<void> {
-    const payload = LeaseCodec.encodeRelease(this.route, this.token);
-    const response = await this.connection.request(MSG_LEASE_RELEASE, payload, signal);
+  const release = async (signal?: AbortSignal): Promise<void> => {
+    const payload = LeaseCodec.encodeRelease(route, currentToken);
+    const response = await connection.request(MSG_LEASE_RELEASE, payload, signal);
     assertSuccess(response, "RELEASE");
-  }
+  };
 
-  getExpiry(): bigint {
-    return this.expiresAt;
-  }
+  const getExpiry = (): bigint => currentExpiry;
 
-  testOnlyInvalidToken(): bigint {
-    return this.token + 1n;
-  }
+  const testOnlyInvalidToken = (): bigint => currentToken + 1n;
 
-  async testOnlyExtendWithToken(
-    token: bigint,
+  const testOnlyExtendWithToken = async (
+    tokenToUse: bigint,
     ttlSecs: number,
     signal?: AbortSignal,
-  ): Promise<bigint> {
-    const requestPayload = LeaseCodec.encodeExtend(this.route, token, ttlSecs);
-    const response = await this.connection.request(MSG_LEASE_RENEW, requestPayload, signal);
+  ): Promise<bigint> => {
+    const requestPayload = LeaseCodec.encodeExtend(route, tokenToUse, ttlSecs);
+    const response = await connection.request(MSG_LEASE_RENEW, requestPayload, signal);
     const data = assertSuccess(response, "EXTEND");
 
     if (data && data.length >= 8) {
       const reader = new BufferReader(data);
-      const newToken = reader.readU64BE();
-      this.token = newToken;
+      currentToken = reader.readU64BE();
     }
 
-    const newExpiry = BigInt(Math.floor(Date.now() / 1000)) + BigInt(ttlSecs);
-    this.expiresAt = newExpiry;
-    return newExpiry;
-  }
+    currentExpiry = BigInt(Math.floor(Date.now() / 1000)) + BigInt(ttlSecs);
+    return currentExpiry;
+  };
 
-  async testOnlyReleaseWithToken(token: bigint, signal?: AbortSignal): Promise<void> {
-    const payload = LeaseCodec.encodeRelease(this.route, token);
-    const response = await this.connection.request(MSG_LEASE_RELEASE, payload, signal);
+  const testOnlyReleaseWithToken = async (tokenToUse: bigint, signal?: AbortSignal): Promise<void> => {
+    const payload = LeaseCodec.encodeRelease(route, tokenToUse);
+    const response = await connection.request(MSG_LEASE_RELEASE, payload, signal);
     assertSuccess(response, "RELEASE");
-  }
+  };
+
+  return {
+    extend,
+    release,
+    getExpiry,
+    testOnlyInvalidToken,
+    testOnlyExtendWithToken,
+    testOnlyReleaseWithToken,
+  };
 }
 
 /**

@@ -3,8 +3,8 @@
  */
 
 import { Transport, TransportOptions } from "./types";
-import { WebSocketTransport } from "./websocket";
-import { TcpTransport } from "./tcp";
+import { createWebSocketTransport } from "./websocket";
+import { createTcpTransport } from "./tcp";
 import { TransportError } from "../core/errors";
 
 type NodeLikeProcess = {
@@ -35,7 +35,7 @@ export function createTransport(
   if (transportType === "auto") {
     // Detect from URL
     if (url.startsWith("ws://") || url.startsWith("wss://")) {
-      return new WebSocketTransport(url, options);
+      return createWebSocketTransport(url, options);
     }
     if (url.startsWith("tcp://")) {
       if (!isNode()) {
@@ -43,29 +43,29 @@ export function createTransport(
           "TCP transport requires Node.js. Use WebSocket (ws://) for browser",
         );
       }
-      return new TcpTransport(url, options);
+      return createTcpTransport(url, options);
     }
     if (url.startsWith("http://") || url.startsWith("https://")) {
       // Convert HTTP to WebSocket
       const wsUrl = url.replace(/^https?:\/\//, (match) => {
         return match === "https://" ? "wss://" : "ws://";
       });
-      return new WebSocketTransport(wsUrl, options);
+      return createWebSocketTransport(wsUrl, options);
     }
 
     // Default to WebSocket
-    return new WebSocketTransport(url, options);
+    return createWebSocketTransport(url, options);
   }
 
   if (transportType === "ws") {
-    return new WebSocketTransport(url, options);
+    return createWebSocketTransport(url, options);
   }
 
   if (transportType === "tcp") {
     if (!isNode()) {
       throw new TransportError("TCP transport requires Node.js. Use WebSocket (ws://) for browser");
     }
-    return new TcpTransport(url, options);
+    return createTcpTransport(url, options);
   }
 
   throw new TransportError("Unknown transport type");

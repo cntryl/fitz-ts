@@ -13,12 +13,12 @@ import {
   EnqueueOptions,
 } from "./types";
 
-export class QueueCodec {
+export const QueueCodec = {
   /**
    * Encode ENQUEUE request.
    * Payload: [route: string][body_len: u32][body: bytes][has_delay: u8][delay_seconds: u64 if has_delay]
    */
-  static encodeEnqueue(route: string, body: Uint8Array, options?: EnqueueOptions): Uint8Array {
+  encodeEnqueue(route: string, body: Uint8Array, options?: EnqueueOptions): Uint8Array {
     const writer = new BufferWriter(512);
     writer.writeRoute(route);
     writer.writeU32BE(body.length);
@@ -32,13 +32,13 @@ export class QueueCodec {
     }
 
     return writer.getBuffer();
-  }
+  },
 
   /**
    * Decode ENQUEUE response.
    * Payload: [status: u8][message_id: u64]
    */
-  static decodeEnqueueResponse(payload: Uint8Array): QueueEnqueueResponse {
+  decodeEnqueueResponse(payload: Uint8Array): QueueEnqueueResponse {
     const reader = new BufferReader(payload);
     const status = reader.readU8();
     if (status !== 0) {
@@ -50,7 +50,7 @@ export class QueueCodec {
       messageId = reader.readU64BE();
     }
     return { status, messageId };
-  }
+  },
 
   /**
    * Encode RESERVE request.
@@ -58,7 +58,7 @@ export class QueueCodec {
    *
    * Long polling is handled client-side by QueueClient.reserve().
    */
-  static encodeReserve(route: string, leaseSeconds: number, batchSize?: number): Uint8Array {
+  encodeReserve(route: string, leaseSeconds: number, batchSize?: number): Uint8Array {
     const writer = new BufferWriter(256);
     writer.writeRoute(route);
     writer.writeU64BE(BigInt(leaseSeconds));
@@ -70,13 +70,13 @@ export class QueueCodec {
     }
 
     return writer.getBuffer();
-  }
+  },
 
   /**
    * Decode RESERVE response.
    * Payload: [status: u8][lease_count: u32]([message_id: u64][lease_token: u64][body_len: u32][body: bytes] ...)
    */
-  static decodeReserveResponse(payload: Uint8Array): QueueReserveResponse {
+  decodeReserveResponse(payload: Uint8Array): QueueReserveResponse {
     const reader = new BufferReader(payload);
     const status = reader.readU8();
 
@@ -101,25 +101,25 @@ export class QueueCodec {
     }
 
     return { status, items };
-  }
+  },
 
   /**
    * Encode COMPLETE request.
    * Payload: [route: string][message_id: u64][lease_token: u64]
    */
-  static encodeComplete(route: string, messageId: bigint, leaseToken: bigint): Uint8Array {
+  encodeComplete(route: string, messageId: bigint, leaseToken: bigint): Uint8Array {
     const writer = new BufferWriter(128);
     writer.writeRoute(route);
     writer.writeU64BE(messageId);
     writer.writeU64BE(leaseToken);
     return writer.getBuffer();
-  }
+  },
 
   /**
    * Decode COMPLETE response.
    * Payload: [status: u8]
    */
-  static decodeCompleteResponse(payload: Uint8Array): QueueCompleteResponse {
+  decodeCompleteResponse(payload: Uint8Array): QueueCompleteResponse {
     const reader = new BufferReader(payload);
     const status = reader.readU8();
     if (status !== 0) {
@@ -127,13 +127,13 @@ export class QueueCodec {
     }
 
     return { status };
-  }
+  },
 
   /**
    * Encode EXTEND request.
    * Payload: [route: string][message_id: u64][lease_token: u64][lease_seconds: u64]
    */
-  static encodeExtend(
+  encodeExtend(
     route: string,
     messageId: bigint,
     leaseToken: bigint,
@@ -145,13 +145,13 @@ export class QueueCodec {
     writer.writeU64BE(leaseToken);
     writer.writeU64BE(BigInt(leaseSeconds));
     return writer.getBuffer();
-  }
+  },
 
   /**
    * Decode EXTEND response.
    * Payload: [status: u8]
    */
-  static decodeExtendResponse(payload: Uint8Array): QueueExtendResponse {
+  decodeExtendResponse(payload: Uint8Array): QueueExtendResponse {
     const reader = new BufferReader(payload);
     const status = reader.readU8();
     if (status !== 0) {
@@ -159,23 +159,23 @@ export class QueueCodec {
     }
 
     return { status };
-  }
+  },
 
   /**
    * Encode SUBSCRIBE request.
    * Payload: [pattern: string]
    */
-  static encodeSubscribe(pattern: string): Uint8Array {
+  encodeSubscribe(pattern: string): Uint8Array {
     const writer = new BufferWriter(128);
     writer.writeRoute(pattern);
     return writer.getBuffer();
-  }
+  },
 
   /**
    * Decode SUBSCRIBE response.
    * Payload: [status: u8][sub_id: u64]
    */
-  static decodeSubscribeResponse(payload: Uint8Array): QueueSubscribeResponse {
+  decodeSubscribeResponse(payload: Uint8Array): QueueSubscribeResponse {
     const reader = new BufferReader(payload);
     const status = reader.readU8();
     if (status !== 0) {
@@ -198,23 +198,23 @@ export class QueueCodec {
     }
 
     return { status };
-  }
+  },
 
   /**
    * Encode UNSUBSCRIBE request.
    * Payload: [pattern: string]
    */
-  static encodeUnsubscribe(pattern: string): Uint8Array {
+  encodeUnsubscribe(pattern: string): Uint8Array {
     const writer = new BufferWriter(128);
     writer.writeRoute(pattern);
     return writer.getBuffer();
-  }
+  },
 
   /**
    * Decode UNSUBSCRIBE response.
    * Payload: [status: u8]
    */
-  static decodeUnsubscribeResponse(payload: Uint8Array): QueueUnsubscribeResponse {
+  decodeUnsubscribeResponse(payload: Uint8Array): QueueUnsubscribeResponse {
     const reader = new BufferReader(payload);
     const status = reader.readU8();
     if (status !== 0) {
@@ -222,13 +222,13 @@ export class QueueCodec {
     }
 
     return { status };
-  }
+  },
 
   /**
    * Decode notification payload.
    * Payload: [sub_id: u64][route: string]
    */
-  static decodeNotification(payload: Uint8Array): {
+  decodeNotification(payload: Uint8Array): {
     subId: bigint;
     route: string;
   } {
@@ -237,9 +237,9 @@ export class QueueCodec {
     const route = reader.readRoute();
 
     return { subId, route };
-  }
+  },
 
-  private static decodeErrorResponse(reader: BufferReader): {
+  decodeErrorResponse(reader: BufferReader): {
     errorCode?: number;
     errorMessage?: string;
   } {
@@ -258,4 +258,4 @@ export class QueueCodec {
 
     return {};
   }
-}
+};

@@ -50,61 +50,51 @@ export interface Iterator<T> {
  * SliceIterator iterates over an in-memory slice/array.
  * Used for batch results like KV SCAN where all items arrive in one response.
  */
-export class SliceIterator<T> implements Iterator<T> {
-  private items: T[];
-  private index: number = -1;
+export function createSliceIterator<T>(items: T[]): Iterator<T> {
+  let index = -1;
 
-  constructor(items: T[]) {
-    this.items = items;
-  }
+  const next = (): boolean => {
+    index += 1;
+    return index < items.length;
+  };
 
-  next(): boolean {
-    this.index++;
-    return this.index < this.items.length;
-  }
-
-  value(): T {
-    if (this.index < 0 || this.index >= this.items.length) {
+  const value = (): T => {
+    if (index < 0 || index >= items.length) {
       throw new Error("SliceIterator.value() called in invalid state");
     }
-    return this.items[this.index];
-  }
+    return items[index];
+  };
 
-  err(): Error | null {
-    return null; // Slice iteration never produces errors
-  }
+  const err = (): Error | null => null;
 
-  close(): void {
+  const close = (): void => {
     // No-op: no resources to release
-  }
+  };
+
+  return {
+    next,
+    value,
+    err,
+    close,
+  };
 }
 
-/**
- * AsyncIterableIterator is a JavaScript
- * AsyncIterable/AsyncIterator that wraps an Iterator[T].
- * Useful for for-await-of loops in TypeScript.
- */
-export class AsyncIterableIterator<T> implements AsyncIterable<T> {
-  constructor(private iterator: Iterator<T>) {}
+export type AsyncIterableIterator<T> = AsyncIterable<T>;
 
-  [Symbol.asyncIterator](): AsyncIterator<T> {
-    return {
-      next: async () => {
-        if (this.iterator.next()) {
-          return {
-            done: false,
-            value: this.iterator.value(),
-          };
-        }
-        const err = this.iterator.err();
-        this.iterator.close();
-        if (err) {
-          throw err;
-        }
-        return { done: true, value: undefined };
-      },
-    };
-  }
+export function createAsyncIterableIterator<T>(iterator: Iterator<T>): AsyncIterableIterator<T> {
+  return {
+    async *[Symbol.asyncIterator]() {
+      while (iterator.next()) {
+        yield iterator.value();
+      }
+
+      const err = iterator.err();
+      iterator.close();
+      if (err) {
+        throw err;
+      }
+    },
+  };
 }
 
 /**

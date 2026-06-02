@@ -16,114 +16,27 @@ import {
   MSG_KV_SCAN,
 } from "../../frame/types";
 import { KvError } from "../../core/errors";
-import { SliceIterator, AsyncIterableIterator } from "../../core/iterator";
+import { createSliceIterator, createAsyncIterableIterator } from "../../core/iterator";
 
-export class KvTransaction {
-  private closed = false;
-  private readonly unsubscribeDisconnect: () => void;
+export type KvTransaction = ReturnType<typeof createKvTransaction>;
 
-  constructor(
-    private readonly connection: Connection,
-    private readonly route: string,
-    private readonly txId: bigint,
-  ) {
-    this.unsubscribeDisconnect = this.connection.onDisconnect(() => {
-      this.closed = true;
-    });
-  }
+export function createKvTransaction(
+  connection: Connection,
+  route: string,
+  txId: bigint,
+) {
+  let closed = false;
+  const unsubscribeDisconnect = connection.onDisconnect(() => {
+    closed = true;
+  });
 
-  async put(key: Uint8Array, value: Uint8Array, signal?: AbortSignal): Promise<void> {
-    this.ensureOpen();
-    const payload = KvCodec.encodePut(this.txId, this.route, key, value);
-    const response = await this.connection.request(MSG_KV_PUT, payload, signal);
-    this.checkStatus(KvCodec.decodeStatusResponse(response).status, "PUT");
-  }
-
-  async insert(key: Uint8Array, value: Uint8Array, signal?: AbortSignal): Promise<void> {
-    this.ensureOpen();
-    const payload = KvCodec.encodeInsert(this.txId, this.route, key, value);
-    const response = await this.connection.request(MSG_KV_INSERT, payload, signal);
-    this.checkStatus(KvCodec.decodeStatusResponse(response).status, "INSERT");
-  }
-
-  async get(key: Uint8Array, signal?: AbortSignal): Promise<KvGetResult> {
-    this.ensureOpen();
-    const payload = KvCodec.encodeGet(this.txId, this.route, key);
-    const response = await this.connection.request(MSG_KV_GET, payload, signal);
-    const decoded = KvCodec.decodeGetResponse(response);
-    this.checkStatus(decoded.status, "GET");
-    if (!decoded.found || !decoded.value) {
-      return { type: "not-found" };
-    }
-    return { type: "found", value: decoded.value };
-  }
-
-  async delete(key: Uint8Array, signal?: AbortSignal): Promise<void> {
-    this.ensureOpen();
-    const payload = KvCodec.encodeDelete(this.txId, this.route, key);
-    const response = await this.connection.request(MSG_KV_DELETE, payload, signal);
-    this.checkStatus(KvCodec.decodeStatusResponse(response).status, "DELETE");
-  }
-
-  async deleteRange(startKey: Uint8Array, endKey: Uint8Array, signal?: AbortSignal): Promise<void> {
-    this.ensureOpen();
-    const payload = KvCodec.encodeDeleteRange(this.txId, this.route, startKey, endKey);
-    const response = await this.connection.request(MSG_KV_DELETE_RANGE, payload, signal);
-    this.checkStatus(KvCodec.decodeStatusResponse(response).status, "DELETE_RANGE");
-  }
-
-  async scan(
-    options: KvScanOptions = {},
-    signal?: AbortSignal,
-  ): Promise<AsyncIterable<Uint8Array>> {
-    this.ensureOpen();
-    const payload = KvCodec.encodeScan(this.txId, this.route, options);
-    const response = await this.connection.request(MSG_KV_SCAN, payload, signal);
-    const decoded = KvCodec.decodeScanResponse(response);
-    this.checkStatus(decoded.status, "SCAN");
-    return new AsyncIterableIterator(new SliceIterator(decoded.keys));
-  }
-
-  async commit(signal?: AbortSignal): Promise<void> {
-    this.ensureOpen();
-    this.closed = true;
-    this.unsubscribeDisconnect();
-    const payload = KvCodec.encodeCommit(this.txId, this.route);
-    const response = await this.connection.request(MSG_KV_COMMIT, payload, signal);
-    this.checkStatus(KvCodec.decodeStatusResponse(response).status, "COMMIT");
-  }
-
-  async rollback(signal?: AbortSignal): Promise<void> {
-    if (this.closed) {
-      return;
-    }
-
-    this.closed = true;
-    this.unsubscribeDisconnect();
-    const payload = KvCodec.encodeRollback(this.txId, this.route);
-    try {
-      const response = await this.connection.request(MSG_KV_ROLLBACK, payload, signal);
-      this.checkStatus(KvCodec.decodeStatusResponse(response).status, "ROLLBACK");
-    } catch {
-      // Best-effort cleanup.
-    }
-  }
-
-  getTxId(): bigint {
-    return this.txId;
-  }
-
-  isOpen(): boolean {
-    return !this.closed;
-  }
-
-  private ensureOpen(): void {
-    if (this.closed) {
+  const ensureOpen = (): void => {
+    if (closed) {
       throw new KvError("Transaction already closed", "TX_CLOSED");
     }
-  }
+  };
 
-  private checkStatus(status: number, operation: string): void {
+  const checkStatus = (status: number, operation: string): void => {
     if (status === KvStatus.Ok) {
       return;
     }
@@ -141,5 +54,103 @@ export class KvTransaction {
       operation,
       status,
     );
-  }
+  };
+
+  const put = async (key: Uint8Array, value: Uint8Array, signal?: AbortSignal): Promise<void> => {
+    ensureOpen();
+    const payload = KvCodec.encodePut(txId, route, key, value);
+    const response = await connection.request(MSG_KV_PUT, payload, signal);
+    checkStatus(KvCodec.decodeStatusResponse(response).status, "PUT");
+  };
+
+  const insert = async (key: Uint8Array, value: Uint8Array, signal?: AbortSignal): Promise<void> => {
+    ensureOpen();
+    const payload = KvCodec.encodeInsert(txId, route, key, value);
+    const response = await connection.request(MSG_KV_INSERT, payload, signal);
+    checkStatus(KvCodec.decodeStatusResponse(response).status, "INSERT");
+  };
+
+  const get = async (key: Uint8Array, signal?: AbortSignal): Promise<KvGetResult> => {
+    ensureOpen();
+    const payload = KvCodec.encodeGet(txId, route, key);
+    const response = await connection.request(MSG_KV_GET, payload, signal);
+    const decoded = KvCodec.decodeGetResponse(response);
+    checkStatus(decoded.status, "GET");
+    if (!decoded.found || !decoded.value) {
+      return { type: "not-found" };
+    }
+    return { type: "found", value: decoded.value };
+  };
+
+  const deleteItem = async (key: Uint8Array, signal?: AbortSignal): Promise<void> => {
+    ensureOpen();
+    const payload = KvCodec.encodeDelete(txId, route, key);
+    const response = await connection.request(MSG_KV_DELETE, payload, signal);
+    checkStatus(KvCodec.decodeStatusResponse(response).status, "DELETE");
+  };
+
+  const deleteRange = async (
+    startKey: Uint8Array,
+    endKey: Uint8Array,
+    signal?: AbortSignal,
+  ): Promise<void> => {
+    ensureOpen();
+    const payload = KvCodec.encodeDeleteRange(txId, route, startKey, endKey);
+    const response = await connection.request(MSG_KV_DELETE_RANGE, payload, signal);
+    checkStatus(KvCodec.decodeStatusResponse(response).status, "DELETE_RANGE");
+  };
+
+  const scan = async (
+    options: KvScanOptions = {},
+    signal?: AbortSignal,
+  ): Promise<AsyncIterable<Uint8Array>> => {
+    ensureOpen();
+    const payload = KvCodec.encodeScan(txId, route, options);
+    const response = await connection.request(MSG_KV_SCAN, payload, signal);
+    const decoded = KvCodec.decodeScanResponse(response);
+    checkStatus(decoded.status, "SCAN");
+    return createAsyncIterableIterator(createSliceIterator(decoded.keys));
+  };
+
+  const commit = async (signal?: AbortSignal): Promise<void> => {
+    ensureOpen();
+    closed = true;
+    unsubscribeDisconnect();
+    const payload = KvCodec.encodeCommit(txId, route);
+    const response = await connection.request(MSG_KV_COMMIT, payload, signal);
+    checkStatus(KvCodec.decodeStatusResponse(response).status, "COMMIT");
+  };
+
+  const rollback = async (signal?: AbortSignal): Promise<void> => {
+    if (closed) {
+      return;
+    }
+
+    closed = true;
+    unsubscribeDisconnect();
+    const payload = KvCodec.encodeRollback(txId, route);
+    try {
+      const response = await connection.request(MSG_KV_ROLLBACK, payload, signal);
+      checkStatus(KvCodec.decodeStatusResponse(response).status, "ROLLBACK");
+    } catch {
+      // Best-effort cleanup.
+    }
+  };
+
+  const getTxId = (): bigint => txId;
+
+  const isOpen = (): boolean => !closed;
+
+  return {
+    put,
+    insert,
+    get,
+    delete: deleteItem,
+    deleteRange,
+    scan,
+    commit,
+    rollback,
+    getTxId,
+    isOpen,
+  };
 }

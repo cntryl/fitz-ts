@@ -21,6 +21,8 @@ import {
   QueueItem,
   QueueStatus,
   QueueSubscription,
+  createQueueItem,
+  createQueueSubscription,
 } from "./types";
 
 type QueueSubscriptionState = {
@@ -153,8 +155,8 @@ export function createQueueClient(connection: Connection) {
     const decoded = QueueCodec.decodeReserveResponse(response);
     checkStatus(decoded, "RESERVE");
 
-    return (decoded.items ?? []).map(
-      (item) => new QueueItem(item.id, item.token, item.body, route, connection),
+    return (decoded.items ?? []).map((item) =>
+      createQueueItem(item.id, item.token, item.body, route, connection),
     );
   };
 
@@ -201,7 +203,7 @@ export function createQueueClient(connection: Connection) {
 
     subscription.handlers.set(handlerId, handler);
 
-    return new QueueSubscription(subId, pattern, async () => {
+    return createQueueSubscription(subId, pattern, async () => {
       await unsubscribe(pattern, handlerId);
     });
   };

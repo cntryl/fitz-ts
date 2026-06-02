@@ -11,6 +11,7 @@ import {
   RpcSubscription,
   ResponseWriter,
   RpcStatus,
+  createRpcSubscription,
 } from "./types";
 import {
   MSG_RPC_REQUEST,
@@ -325,7 +326,7 @@ export function createRpcClient(connection: Connection) {
       await unregisterWorker(registeredRoute);
     };
 
-    return new RpcSubscription(route, unsubscribeFn);
+    return createRpcSubscription(route, unsubscribeFn);
   };
 
   const unregisterWorker = async (route: string): Promise<void> => {
@@ -417,7 +418,6 @@ export function createRpcClient(connection: Connection) {
       try {
         await handler(
           {
-            correlationId: req.correlationId,
             route: req.route,
             replyRoute: req.replyRoute,
             body: req.body,

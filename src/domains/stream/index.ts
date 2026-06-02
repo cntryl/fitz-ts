@@ -4,7 +4,6 @@
 
 export { StreamClient } from "./client";
 export { StreamCodec } from "./codec";
-export { StreamSessionImpl } from "./session";
 export type {
   StreamSession,
   StreamRecord,

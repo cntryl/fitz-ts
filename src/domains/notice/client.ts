@@ -12,7 +12,7 @@ import {
 } from "../../frame/types";
 import { isRouteShape, isSelectorRouteShape } from "../_routes";
 import { NoticeCodec } from "./codec";
-import { NoticeHandler, NoticeMsg, NoticeSubscription } from "./types";
+import { createNoticeSubscription, NoticeHandler, NoticeMsg, NoticeSubscription } from "./types";
 import type { Connection as ConnectionType } from "../../client/connection";
 
 type NoticeSubscriptionState = {
@@ -106,7 +106,7 @@ export function createNoticeClient(connection: ConnectionType) {
     }
 
     subscription.handlers.set(handlerId, handler);
-    return new NoticeSubscription(subId, pattern, async (_subId: bigint) => {
+    return createNoticeSubscription(subId, pattern, async (_subId: bigint) => {
       await unsubscribe(pattern, handlerId);
     });
   };

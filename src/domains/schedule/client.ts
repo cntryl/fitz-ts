@@ -20,6 +20,7 @@ import {
   ScheduleHandler,
   ScheduleNotification,
   ScheduleSubscription,
+  createScheduleSubscription,
 } from "./types";
 import { isRouteShape } from "../_routes";
 
@@ -130,7 +131,7 @@ export function createScheduleClient(connection: Connection) {
     }
 
     subscription.handlers.set(handlerId, handler);
-    return new ScheduleSubscription(subId, pattern, async () => {
+    return createScheduleSubscription(subId, pattern, async () => {
       await unsubscribe(pattern, handlerId);
     });
   };

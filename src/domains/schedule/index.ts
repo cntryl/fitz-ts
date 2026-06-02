@@ -13,5 +13,6 @@ export type {
   ScheduleListResponse,
   ScheduleSubscribeResponse,
   ScheduleUnsubscribeResponse,
+  ScheduleSubscription,
 } from "./types";
-export { ScheduleSubscription, ScheduleError } from "./types";
+export { ScheduleError } from "./types";

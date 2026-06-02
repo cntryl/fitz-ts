@@ -4,7 +4,7 @@
 
 import { createDomainClient } from "../base";
 import { KvCodec } from "./codec";
-import { KvTransaction } from "./transaction";
+import { createKvTransaction, KvTransaction } from "./transaction";
 import { KvBeginOptions, KvStatus } from "./types";
 import { MSG_KV_BEGIN } from "../../frame/types";
 import { KvError } from "../../core/errors";
@@ -35,7 +35,7 @@ export function createKvClient(connection: Connection) {
       throw new KvError("BEGIN failed", "BEGIN_FAILED", decoded.status);
     }
 
-    return new KvTransaction(connection, route, decoded.txId);
+    return createKvTransaction(connection, route, decoded.txId);
   };
 
   return {
@@ -52,5 +52,5 @@ export const KvClient: KvClientConstructor = function (connection: Connection) {
   return createKvClient(connection);
 } as unknown as KvClientConstructor;
 
-export { KvTransaction } from "./transaction";
+export type { KvTransaction } from "./transaction";
 export * from "./types";

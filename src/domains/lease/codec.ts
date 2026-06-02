@@ -7,25 +7,25 @@ import { BufferWriter, BufferReader } from "../../core/buffer";
 import { ProtocolError } from "../../core/errors";
 import { AcquireResponse, QueryResponse, SubscribeResponse, UnsubscribeResponse } from "./types";
 
-export class LeaseCodec {
+export const LeaseCodec = {
   /**
    * Encode ACQUIRE request
    * Payload: [string route][string client_id (empty)][u64 ttl_seconds]
    */
-  static encodeAcquire(route: string, ttlSecs: number): Uint8Array {
+  encodeAcquire(route: string, ttlSecs: number): Uint8Array {
     const writer = new BufferWriter(128);
     writer.writeRoute(route);
     writer.writeRoute(""); // client_id (empty = server assigns)
     writer.writeU64BE(BigInt(ttlSecs));
     return writer.getBuffer();
-  }
+  },
 
   /**
    * Decode ACQUIRE response
    * Standard response: [u8 status=0][u8 response_type][u64 fencing_token]
    * response_type: 0=Acquired, 1=AlreadyHeld (idempotent)
    */
-  static decodeAcquireResponse(payload: Uint8Array): AcquireResponse {
+  decodeAcquireResponse(payload: Uint8Array): AcquireResponse {
     if (payload.length < 10) {
       throw new ProtocolError(
         `ACQUIRE response too short: got ${payload.length} bytes, expected >= 10`,
@@ -48,53 +48,53 @@ export class LeaseCodec {
     // response_type: 0=Acquired, 1=AlreadyHeld
     // For now, treat both as success
     return { token: fencingToken };
-  }
+  },
 
   /**
    * Encode EXTEND request
    * Payload: [string route][string client_id (empty)][u64 fencing_token][u64 ttl_seconds]
    */
-  static encodeExtend(route: string, token: bigint, ttlSecs: number): Uint8Array {
+  encodeExtend(route: string, token: bigint, ttlSecs: number): Uint8Array {
     const writer = new BufferWriter(128);
     writer.writeRoute(route);
     writer.writeRoute(""); // client_id (empty = use existing)
     writer.writeU64BE(token);
     writer.writeU64BE(BigInt(ttlSecs));
     return writer.getBuffer();
-  }
+  },
 
-  static encodeRenew(route: string, token: bigint, ttlSecs: number): Uint8Array {
+  encodeRenew(route: string, token: bigint, ttlSecs: number): Uint8Array {
     return this.encodeExtend(route, token, ttlSecs);
-  }
+  },
 
   /**
    * Encode RELEASE request
    * Payload: [string route][string client_id (empty)][u64 fencing_token]
    */
-  static encodeRelease(route: string, token: bigint): Uint8Array {
+  encodeRelease(route: string, token: bigint): Uint8Array {
     const writer = new BufferWriter(128);
     writer.writeRoute(route);
     writer.writeRoute(""); // client_id (empty = use existing)
     writer.writeU64BE(token);
     return writer.getBuffer();
-  }
+  },
 
   /**
    * Encode QUERY request
    * Payload: [string route]
    */
-  static encodeQuery(route: string): Uint8Array {
+  encodeQuery(route: string): Uint8Array {
     const writer = new BufferWriter(64);
     writer.writeRoute(route);
     return writer.getBuffer();
-  }
+  },
 
   /**
    * Decode QUERY response
    * Free: [u8 has_holder=0][u32 pending_waiters]
    * Held: [u8 has_holder=1][string owner_id][u64 ttl_remaining_secs][u32 pending_waiters]
    */
-  static decodeQueryResponse(payload: Uint8Array): QueryResponse {
+  decodeQueryResponse(payload: Uint8Array): QueryResponse {
     const reader = new BufferReader(payload);
     const status = reader.readU8();
     if (status !== 0) {
@@ -121,23 +121,23 @@ export class LeaseCodec {
       ttlRemainingSecs,
       expiresAt: BigInt(Math.floor(Date.now() / 1000)) + ttlRemainingSecs,
     };
-  }
+  },
 
   /**
    * Encode SUBSCRIBE request
    * Payload: [string pattern]
    */
-  static encodeSubscribe(pattern: string): Uint8Array {
+  encodeSubscribe(pattern: string): Uint8Array {
     const writer = new BufferWriter(64);
     writer.writeRoute(pattern);
     return writer.getBuffer();
-  }
+  },
 
   /**
    * Decode SUBSCRIBE response
    * Standard response: [u8 status=0][u64 subscription_id]
    */
-  static decodeSubscribeResponse(payload: Uint8Array): SubscribeResponse {
+  decodeSubscribeResponse(payload: Uint8Array): SubscribeResponse {
     if (payload.length < 9) {
       throw new ProtocolError(
         `SUBSCRIBE response too short: got ${payload.length} bytes, expected >= 9`,
@@ -154,36 +154,36 @@ export class LeaseCodec {
     const subId = reader.readU64BE();
 
     return { status, subId };
-  }
+  },
 
   /**
    * Encode UNSUBSCRIBE request
    * Payload: [string pattern]
    */
-  static encodeUnsubscribe(pattern: string): Uint8Array {
+  encodeUnsubscribe(pattern: string): Uint8Array {
     const writer = new BufferWriter(64);
     writer.writeRoute(pattern);
     return writer.getBuffer();
-  }
+  },
 
   /**
    * Decode UNSUBSCRIBE response
    * Standard response: [u8 status=0]
    */
-  static decodeUnsubscribeResponse(payload: Uint8Array): UnsubscribeResponse {
+  decodeUnsubscribeResponse(payload: Uint8Array): UnsubscribeResponse {
     if (payload.length === 0) {
       return { status: 0 };
     }
 
     const reader = new BufferReader(payload);
     return { status: reader.readU8() };
-  }
+  },
 
   /**
    * Decode NOTIFY (409) message
    * Payload: [u64 subscription_id][string route][bytes payload]
    */
-  static decodeNotification(payload: Uint8Array): {
+  decodeNotification(payload: Uint8Array): {
     subId: bigint;
     route: string;
   } {
@@ -193,4 +193,4 @@ export class LeaseCodec {
 
     return { subId, route };
   }
-}
+};

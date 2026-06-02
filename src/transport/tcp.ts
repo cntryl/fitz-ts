@@ -48,38 +48,88 @@ if (isNode()) {
   netModule = require("net") as NetModule;
 }
 
-export class TcpTransport implements Transport {
-  private socket: TcpSocket | null = null;
-  private readonly url: string;
-  private connected = false;
-  private receiveQueue: Uint8Array[] = [];
-  private receiverResolve: ((data: Uint8Array) => void) | null = null;
-  private readonly timeout: number;
-  private readonly maxFrameSize: number;
-  private readonly host: string;
-  private readonly port: number;
-  private lengthBuffer: Uint8Array = new Uint8Array(4);
-  private lengthOffset = 0;
-  private currentMessageLength: number | null = null;
-  private messageBuffer: Uint8Array | null = null;
-  private messageOffset = 0;
-
-  constructor(url: string, options: TransportOptions = {}) {
-    if (!isNode()) {
-      throw new Error("TCP transport is only available in Node.js");
-    }
-
-    this.url = url;
-    this.timeout = options.timeout ?? 30000;
-    this.maxFrameSize = options.maxFrameSize ?? 65535;
-
-    // Parse URL: tcp://host:port
-    const urlObj = new URL(url.startsWith("tcp://") ? url : `tcp://${url}`);
-    this.host = urlObj.hostname || "localhost";
-    this.port = parseInt(urlObj.port || "4090", 10);
+export function createTcpTransport(url: string, options: TransportOptions = {}): Transport {
+  if (!isNode()) {
+    throw new Error("TCP transport is only available in Node.js");
   }
 
-  async connect(): Promise<void> {
+  let socket: TcpSocket | null = null;
+  let connected = false;
+  const receiveQueue: Uint8Array[] = [];
+  let receiverResolve: ((data: Uint8Array) => void) | null = null;
+  const timeout = options.timeout ?? 30000;
+  const maxFrameSize = options.maxFrameSize ?? 65535;
+  let lengthBuffer = new Uint8Array(4);
+  let lengthOffset = 0;
+  let currentMessageLength: number | null = null;
+  let messageBuffer: Uint8Array | null = null;
+  let messageOffset = 0;
+
+  const urlObj = new URL(url.startsWith("tcp://") ? url : `tcp://${url}`);
+  const host = urlObj.hostname || "localhost";
+  const port = parseInt(urlObj.port || "4090", 10);
+
+  const handleData = (chunk: Uint8Array) => {
+    let offset = 0;
+
+    while (offset < chunk.length) {
+      if (currentMessageLength === null) {
+        const needed = 4 - lengthOffset;
+        const available = chunk.length - offset;
+        const toCopy = Math.min(needed, available);
+
+        lengthBuffer.set(chunk.slice(offset, offset + toCopy), lengthOffset);
+        lengthOffset += toCopy;
+        offset += toCopy;
+
+        if (lengthOffset === 4) {
+          const lengthView = new DataView(lengthBuffer.buffer);
+          currentMessageLength = lengthView.getUint32(0, false);
+          if (currentMessageLength > maxFrameSize) {
+            socket?.destroy(
+              new Error(
+                `TCP frame length ${currentMessageLength} exceeds max frame size ${maxFrameSize}`,
+              ),
+            );
+            currentMessageLength = null;
+            lengthOffset = 0;
+            return;
+          }
+          messageBuffer = new Uint8Array(currentMessageLength);
+          messageOffset = 0;
+        }
+      }
+
+      if (currentMessageLength !== null && messageBuffer !== null) {
+        const needed = currentMessageLength - messageOffset;
+        const available = chunk.length - offset;
+        const toCopy = Math.min(needed, available);
+
+        messageBuffer.set(chunk.slice(offset, offset + toCopy), messageOffset);
+        messageOffset += toCopy;
+        offset += toCopy;
+
+        if (messageOffset === currentMessageLength) {
+          enqueueMessage(messageBuffer);
+          currentMessageLength = null;
+          lengthOffset = 0;
+          messageBuffer = null;
+          messageOffset = 0;
+        }
+      }
+    }
+  };
+
+  const enqueueMessage = (data: Uint8Array) => {
+    if (receiverResolve) {
+      receiverResolve(data);
+      receiverResolve = null;
+    } else {
+      receiveQueue.push(data);
+    }
+  };
+
+  const connect = async (): Promise<void> => {
     return new Promise((resolve, reject) => {
       try {
         if (!netModule) {
@@ -87,51 +137,51 @@ export class TcpTransport implements Transport {
           return;
         }
 
-        this.socket = netModule.createConnection({
-          host: this.host,
-          port: this.port,
-          timeout: this.timeout,
+        socket = netModule.createConnection({
+          host,
+          port,
+          timeout,
         });
 
         const connectTimeout = setTimeout(() => {
-          this.socket?.destroy();
-          reject(new TimeoutError(`TCP connection timeout after ${this.timeout}ms`));
-        }, this.timeout);
+          socket?.destroy();
+          reject(new TimeoutError(`TCP connection timeout after ${timeout}ms`));
+        }, timeout);
 
-        const socket = this.socket;
+        const activeSocket = socket;
 
-        socket.on("connect", () => {
+        activeSocket.on("connect", () => {
           clearTimeout(connectTimeout);
-          this.connected = true;
-          socket.setNoDelay(true);
-          socket.setTimeout(this.timeout);
+          connected = true;
+          activeSocket.setNoDelay(true);
+          activeSocket.setTimeout(timeout);
           resolve();
         });
 
-        socket.on("data", (chunk: Uint8Array | Buffer) => {
-          this.handleData(chunk instanceof Uint8Array ? chunk : new Uint8Array(chunk));
+        activeSocket.on("data", (chunk: Uint8Array | Buffer) => {
+          handleData(chunk instanceof Uint8Array ? chunk : new Uint8Array(chunk));
         });
 
-        socket.on("error", (err: Error) => {
+        activeSocket.on("error", (err: Error) => {
           clearTimeout(connectTimeout);
-          this.connected = false;
+          connected = false;
           const error = new TransportError(`TCP error: ${err.message || "unknown error"}`);
-          if (this.receiverResolve) {
-            this.receiverResolve(new Uint8Array(0)); // Signal error
+          if (receiverResolve) {
+            receiverResolve(new Uint8Array(0));
           }
           reject(error);
         });
 
-        socket.on("close", () => {
-          this.connected = false;
-          if (this.receiverResolve) {
-            this.receiverResolve(new Uint8Array(0)); // Signal close
+        activeSocket.on("close", () => {
+          connected = false;
+          if (receiverResolve) {
+            receiverResolve(new Uint8Array(0));
           }
         });
 
-        socket.on("timeout", () => {
-          socket.destroy();
-          this.connected = false;
+        activeSocket.on("timeout", () => {
+          activeSocket.destroy();
+          connected = false;
         });
       } catch (err) {
         reject(
@@ -141,93 +191,28 @@ export class TcpTransport implements Transport {
         );
       }
     });
-  }
+  };
 
-  private handleData(chunk: Uint8Array) {
-    let offset = 0;
-
-    while (offset < chunk.length) {
-      // Read length header if we don't have a message length yet
-      if (this.currentMessageLength === null) {
-        const needed = 4 - this.lengthOffset;
-        const available = chunk.length - offset;
-        const toCopy = Math.min(needed, available);
-
-        this.lengthBuffer.set(chunk.slice(offset, offset + toCopy), this.lengthOffset);
-        this.lengthOffset += toCopy;
-        offset += toCopy;
-
-        if (this.lengthOffset === 4) {
-          // We have the full length header
-          const lengthView = new DataView(this.lengthBuffer.buffer);
-          this.currentMessageLength = lengthView.getUint32(0, false); // Big-endian
-          if (this.currentMessageLength > this.maxFrameSize) {
-            this.socket?.destroy(
-              new Error(
-                `TCP frame length ${this.currentMessageLength} exceeds max frame size ${this.maxFrameSize}`,
-              ),
-            );
-            this.currentMessageLength = null;
-            this.lengthOffset = 0;
-            return;
-          }
-          this.messageBuffer = new Uint8Array(this.currentMessageLength);
-          this.messageOffset = 0;
-        }
-      }
-
-      // Read message body if we have a message length
-      if (this.currentMessageLength !== null && this.messageBuffer !== null) {
-        const needed = this.currentMessageLength - this.messageOffset;
-        const available = chunk.length - offset;
-        const toCopy = Math.min(needed, available);
-
-        this.messageBuffer.set(chunk.slice(offset, offset + toCopy), this.messageOffset);
-        this.messageOffset += toCopy;
-        offset += toCopy;
-
-        if (this.messageOffset === this.currentMessageLength) {
-          // Message is complete
-          this.enqueueMessage(this.messageBuffer);
-          this.currentMessageLength = null;
-          this.lengthOffset = 0;
-          this.messageBuffer = null;
-          this.messageOffset = 0;
-        }
-      }
-    }
-  }
-
-  private enqueueMessage(data: Uint8Array) {
-    if (this.receiverResolve) {
-      this.receiverResolve(data);
-      this.receiverResolve = null;
-    } else {
-      this.receiveQueue.push(data);
-    }
-  }
-
-  async send(data: Uint8Array): Promise<void> {
-    if (!this.connected) {
+  const send = async (data: Uint8Array): Promise<void> => {
+    if (!connected) {
       throw new TransportError("TCP socket is not connected");
     }
 
     return new Promise((resolve, reject) => {
-      // Prepare length-prefixed message
       const lengthBuffer = new Uint8Array(4);
       const lengthView = new DataView(lengthBuffer.buffer);
-      lengthView.setUint32(0, data.length, false); // Big-endian
+      lengthView.setUint32(0, data.length, false);
 
       const fullMessage = new Uint8Array(lengthBuffer.length + data.length);
       fullMessage.set(lengthBuffer, 0);
       fullMessage.set(data, lengthBuffer.length);
 
-      const timeout = setTimeout(() => {
-        reject(new TimeoutError(`TCP send timeout after ${this.timeout}ms`));
-      }, this.timeout);
+      const timeoutId = setTimeout(() => {
+        reject(new TimeoutError(`TCP send timeout after ${timeout}ms`));
+      }, timeout);
 
-      this.socket?.write(fullMessage, (err?: Error | null) => {
-        clearTimeout(timeout);
+      socket?.write(fullMessage, (err?: Error | null) => {
+        clearTimeout(timeoutId);
         if (err) {
           reject(new TransportError(`TCP send failed: ${err.message}`));
         } else {
@@ -235,28 +220,26 @@ export class TcpTransport implements Transport {
         }
       });
     });
-  }
+  };
 
-  async receive(): Promise<Uint8Array> {
-    // Return queued message if available
-    if (this.receiveQueue.length > 0) {
-      const message = this.receiveQueue.shift();
+  const receive = async (): Promise<Uint8Array> => {
+    if (receiveQueue.length > 0) {
+      const message = receiveQueue.shift();
       if (!message) {
         throw new TransportError("TCP receive queue was unexpectedly empty");
       }
       return message;
     }
 
-    // Wait for next message
     return new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        this.receiverResolve = null;
-        reject(new TimeoutError(`TCP receive timeout after ${this.timeout}ms`));
-      }, this.timeout);
+      const timeoutId = setTimeout(() => {
+        receiverResolve = null;
+        reject(new TimeoutError(`TCP receive timeout after ${timeout}ms`));
+      }, timeout);
 
-      this.receiverResolve = (data: Uint8Array) => {
-        clearTimeout(timeout);
-        this.receiverResolve = null;
+      receiverResolve = (data: Uint8Array) => {
+        clearTimeout(timeoutId);
+        receiverResolve = null;
         if (data.length === 0) {
           reject(new TransportError("Connection closed"));
         } else {
@@ -264,36 +247,40 @@ export class TcpTransport implements Transport {
         }
       };
     });
-  }
+  };
 
-  async close(): Promise<void> {
-    if (this.socket) {
-      const socket = this.socket;
+  const close = async (): Promise<void> => {
+    if (socket) {
+      const activeSocket = socket;
       return new Promise<void>((resolve) => {
-        const timeout = setTimeout(() => {
-          socket.destroy();
-          this.connected = false;
+        const timeoutId = setTimeout(() => {
+          activeSocket.destroy();
+          connected = false;
           resolve();
         }, 5000);
 
-        socket.on("close", () => {
-          clearTimeout(timeout);
-          this.connected = false;
+        activeSocket.on("close", () => {
+          clearTimeout(timeoutId);
+          connected = false;
           resolve();
         });
 
-        socket.end();
+        activeSocket.end();
       });
     }
 
-    this.connected = false;
-  }
+    connected = false;
+  };
 
-  getUrl(): string {
-    return this.url;
-  }
+  const getUrl = (): string => url;
+  const isConnected = (): boolean => connected;
 
-  isConnected(): boolean {
-    return this.connected;
-  }
+  return {
+    connect,
+    send,
+    receive,
+    close,
+    getUrl,
+    isConnected,
+  };
 }

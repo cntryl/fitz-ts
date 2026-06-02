@@ -14,7 +14,15 @@ import {
 } from "../../frame/types";
 import { isRouteShape } from "../_routes";
 import { LeaseCodec } from "./codec";
-import { ChangeHandler, ChangeNotification, Lease, LeaseInfo, LeaseSubscription } from "./types";
+import {
+  ChangeHandler,
+  ChangeNotification,
+  Lease,
+  LeaseInfo,
+  LeaseSubscription,
+  createLease,
+  createLeaseSubscription,
+} from "./types";
 
 type LeaseSubscriptionState = {
   subId: bigint;
@@ -63,7 +71,7 @@ export function createLeaseClient(connection: Connection) {
     }
 
     const expiresAt = decoded.expiresAt ?? BigInt(Math.floor(Date.now() / 1000)) + BigInt(ttlSecs);
-    return new Lease(decoded.token, expiresAt, route, connection);
+    return createLease(decoded.token, expiresAt, route, connection);
   };
 
   const query = async (route: string): Promise<LeaseInfo> => {
@@ -121,7 +129,7 @@ export function createLeaseClient(connection: Connection) {
     }
 
     subscription.handlers.set(handlerId, handler);
-    return new LeaseSubscription(subId, pattern, async () => {
+    return createLeaseSubscription(subId, pattern, async () => {
       await unsubscribe(pattern, handlerId);
     });
   };

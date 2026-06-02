@@ -35,16 +35,22 @@ export type ScheduleHandler = (notification: ScheduleNotification) => void | Pro
 /**
  * ScheduleSubscription represents an active subscription to schedule fire notifications
  */
-export class ScheduleSubscription {
-  constructor(
-    public readonly subId: bigint,
-    public readonly pattern: string,
-    private unsubscribeFn: () => Promise<void>,
-  ) {}
+export type ScheduleSubscription = ReturnType<typeof createScheduleSubscription>;
 
-  async unsubscribe(): Promise<void> {
-    return this.unsubscribeFn();
-  }
+export function createScheduleSubscription(
+  subId: bigint,
+  pattern: string,
+  unsubscribeFn: () => Promise<void>,
+) {
+  const unsubscribe = async (): Promise<void> => {
+    return unsubscribeFn();
+  };
+
+  return {
+    subId,
+    pattern,
+    unsubscribe,
+  };
 }
 
 export interface ScheduleCreateResponse {

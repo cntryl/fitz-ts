@@ -12,29 +12,18 @@ import { MSG_QUEUE_EXTEND, MSG_QUEUE_COMPLETE } from "../../frame/types";
  * Queue item represents a reserved queue message.
  * It carries the route and token required for `extend()` and `complete()`.
  */
-export class QueueItem {
-  readonly body: Uint8Array;
+export type QueueItem = ReturnType<typeof createQueueItem>;
 
-  private id: bigint;
-  private token: bigint;
-  private readonly route: string;
-  private readonly connection: Connection;
-
-  constructor(id: bigint, token: bigint, body: Uint8Array, route: string, connection: Connection) {
-    this.id = id;
-    this.token = token;
-    this.body = body;
-    this.route = route;
-    this.connection = connection;
-  }
-
-  /**
-   * Extend the lease on this queue item.
-   * @param leaseSecs Lease duration in seconds
-   */
-  async extend(leaseSecs: number, signal?: AbortSignal): Promise<void> {
-    const payload = QueueCodec.encodeExtend(this.route, this.id, this.token, leaseSecs);
-    const response = await this.connection.request(MSG_QUEUE_EXTEND, payload, signal);
+export function createQueueItem(
+  id: bigint,
+  token: bigint,
+  body: Uint8Array,
+  route: string,
+  connection: Connection,
+) {
+  const extend = async (leaseSecs: number, signal?: AbortSignal): Promise<void> => {
+    const payload = QueueCodec.encodeExtend(route, id, token, leaseSecs);
+    const response = await connection.request(MSG_QUEUE_EXTEND, payload, signal);
     const decoded = QueueCodec.decodeExtendResponse(response);
 
     if (decoded.status !== QueueStatus.Ok) {
@@ -43,14 +32,11 @@ export class QueueItem {
       const reason = decoded.errorMessage ?? statusName;
       throw new QueueError(`EXTEND failed: ${reason}`, statusName, errorCode);
     }
-  }
+  };
 
-  /**
-   * Complete processing of this queue item and remove it from the queue.
-   */
-  async complete(signal?: AbortSignal): Promise<void> {
-    const requestPayload = QueueCodec.encodeComplete(this.route, this.id, this.token);
-    const response = await this.connection.request(MSG_QUEUE_COMPLETE, requestPayload, signal);
+  const complete = async (signal?: AbortSignal): Promise<void> => {
+    const requestPayload = QueueCodec.encodeComplete(route, id, token);
+    const response = await connection.request(MSG_QUEUE_COMPLETE, requestPayload, signal);
     const decoded = QueueCodec.decodeCompleteResponse(response);
 
     if (decoded.status !== QueueStatus.Ok) {
@@ -59,15 +45,13 @@ export class QueueItem {
       const reason = decoded.errorMessage ?? statusName;
       throw new QueueError(`COMPLETE failed: ${reason}`, statusName, errorCode);
     }
-  }
+  };
 
-  testOnlyInvalidToken(): bigint {
-    return this.token + 1n;
-  }
+  const testOnlyInvalidToken = (): bigint => id + 1n;
 
-  async testOnlyCompleteWithToken(token: bigint, signal?: AbortSignal): Promise<void> {
-    const requestPayload = QueueCodec.encodeComplete(this.route, this.id, token);
-    const response = await this.connection.request(MSG_QUEUE_COMPLETE, requestPayload, signal);
+  const testOnlyCompleteWithToken = async (tokenToUse: bigint, signal?: AbortSignal): Promise<void> => {
+    const requestPayload = QueueCodec.encodeComplete(route, id, tokenToUse);
+    const response = await connection.request(MSG_QUEUE_COMPLETE, requestPayload, signal);
     const decoded = QueueCodec.decodeCompleteResponse(response);
 
     if (decoded.status !== QueueStatus.Ok) {
@@ -76,7 +60,15 @@ export class QueueItem {
       const reason = decoded.errorMessage ?? statusName;
       throw new QueueError(`COMPLETE failed: ${reason}`, statusName, errorCode);
     }
-  }
+  };
+
+  return {
+    body,
+    extend,
+    complete,
+    testOnlyInvalidToken,
+    testOnlyCompleteWithToken,
+  };
 }
 
 /**
@@ -94,19 +86,22 @@ export type AvailabilityHandler = (notification: AvailabilityNotification) => vo
 /**
  * Queue availability subscription.
  */
-export class QueueSubscription {
-  constructor(
-    public readonly subId: bigint,
-    public readonly pattern: string,
-    private readonly unsubscribeFn: (subId: bigint) => Promise<void>,
-  ) {}
+export type QueueSubscription = ReturnType<typeof createQueueSubscription>;
 
-  /**
-   * Unsubscribe from availability notifications.
-   */
-  async unsubscribe(): Promise<void> {
-    await this.unsubscribeFn(this.subId);
-  }
+export function createQueueSubscription(
+  subId: bigint,
+  pattern: string,
+  unsubscribeFn: (subId: bigint) => Promise<void>,
+) {
+  const unsubscribe = async (): Promise<void> => {
+    await unsubscribeFn(subId);
+  };
+
+  return {
+    subId,
+    pattern,
+    unsubscribe,
+  };
 }
 
 /**

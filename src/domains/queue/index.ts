@@ -4,7 +4,8 @@
 
 export { QueueClient } from "./client";
 export { QueueCodec } from "./codec";
-export { QueueItem, QueueSubscription, QueueStatus } from "./types";
+export type { QueueItem, QueueSubscription } from "./types";
+export { QueueStatus } from "./types";
 export type {
   EnqueueOptions,
   QueueEnqueueResponse,
