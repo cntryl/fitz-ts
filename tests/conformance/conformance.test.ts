@@ -888,23 +888,42 @@ describe(`Fitz conformance â€” fitz-ts [transport=${TRANSPORT}, auth=${AUTH
         await withClient({ timeout: 750, maxInFlightRequests: 16 }, async (client) => {
           const route = uniqueRoute("rpc");
 
-          const firstCall = client.rpc().call(route, b("first"), { timeoutMs: 750 });
-          firstCall.catch(() => undefined);
+          const workerClient = new Client({
+            url: BROKER_ADDR,
+            transport: TRANSPORT,
+            tokenProvider: tokenProvider(),
+            timeout: 10000,
+          });
 
-          const secondCall = client.rpc().call(route, b("second"), { timeoutMs: 750 });
-          secondCall.catch(() => undefined);
+          try {
+            await workerClient.connect();
+            const sub = await workerClient.rpc().registerWorker(route, async (_req, writer) => {
+              await pause(500);
+              await writer.send(b("ok"), true);
+            });
 
-          const secondState = await Promise.race([
-            secondCall.then(
-              () => "settled",
-              () => "settled",
-            ),
-            pause(100).then(() => "pending"),
-          ]);
+            const firstCall = client.rpc().call(route, b("first"), { timeoutMs: 750 });
+            firstCall.catch(() => undefined);
 
-          expect(secondState).toBe("pending");
-          evidence.push("second RPC call remained pending while first was in flight");
-          evidence.push("configured maxInFlightRequests=16 and burst size=2");
+            const secondCall = client.rpc().call(route, b("second"), { timeoutMs: 750 });
+            secondCall.catch(() => undefined);
+
+            const secondState = await Promise.race([
+              secondCall.then(
+                () => "settled",
+                () => "settled",
+              ),
+              pause(100).then(() => "pending"),
+            ]);
+
+            expect(secondState).toBe("pending");
+            evidence.push("second RPC call remained pending while first was in flight");
+            evidence.push("configured maxInFlightRequests=16 and burst size=2");
+
+            await sub.unsubscribe();
+          } finally {
+            await workerClient.close().catch(() => undefined);
+          }
         });
 
         return { verdict: "pass", evidence };
