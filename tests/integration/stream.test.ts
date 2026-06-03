@@ -171,6 +171,16 @@ describe("Stream integration", () => {
       await f.connectOrFail();
 
       const route = f.uniqueRoute("stream");
+      let resolveNotification!: (value: {
+        route: string;
+        event?: string;
+        firstResourceOffset?: bigint;
+        firstAreaOffset?: bigint;
+        firstRealmOffset?: bigint;
+        batchSize?: number;
+      }) => void;
+      let timer: ReturnType<typeof setTimeout>;
+      let subscription: { unsubscribe(): Promise<void> } | null = null;
       const notification = new Promise<{
         route: string;
         event?: string;
@@ -179,25 +189,26 @@ describe("Stream integration", () => {
         firstRealmOffset?: bigint;
         batchSize?: number;
       }>((resolve, reject) => {
-        const timer = setTimeout(() => {
+        resolveNotification = resolve;
+        timer = setTimeout(() => {
           reject(new Error("timed out waiting for stream notification"));
         }, 5000);
-
-        void f
-          .client()
-          .stream()
-          .subscribe(route, async (notif) => {
-            clearTimeout(timer);
-            resolve({
-              route: notif.route,
-              event: notif.event,
-              firstResourceOffset: notif.firstResourceOffset,
-              firstAreaOffset: notif.firstAreaOffset,
-              firstRealmOffset: notif.firstRealmOffset,
-              batchSize: notif.batchSize,
-            });
-          });
       });
+
+      subscription = await f
+        .client()
+        .stream()
+        .subscribe(route, async (notif) => {
+          clearTimeout(timer);
+          resolveNotification({
+            route: notif.route,
+            event: notif.event,
+            firstResourceOffset: notif.firstResourceOffset,
+            firstAreaOffset: notif.firstAreaOffset,
+            firstRealmOffset: notif.firstRealmOffset,
+            batchSize: notif.batchSize,
+          });
+        });
 
       const session = await f.client().stream().begin(route);
       await session.append(0n, b("notify"));
@@ -211,6 +222,7 @@ describe("Stream integration", () => {
         firstRealmOffset: 0n,
         batchSize: 1,
       });
+      await subscription.unsubscribe();
     });
   });
 });

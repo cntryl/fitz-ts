@@ -28,6 +28,7 @@ export function createClient(config: ClientConfig) {
     maxFrameSize: 65535,
     authSettleDelayMs: 100,
     maxInFlightRequests: 256,
+    maxRequestQueueSize: 1024,
     observability: config.observability ?? {},
     reconnect: {
       enabled: false,
@@ -93,6 +94,7 @@ export function createClient(config: ClientConfig) {
         timeout: resolvedConfig.timeout,
         authSettleDelayMs: resolvedConfig.authSettleDelayMs,
         maxInFlightRequests: resolvedConfig.maxInFlightRequests,
+        maxRequestQueueSize: resolvedConfig.maxRequestQueueSize,
         reconnect: resolvedConfig.reconnect,
         observability,
         asyncHandlers: resolvedConfig.asyncHandlers,

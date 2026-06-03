@@ -19,7 +19,7 @@ export interface MultiplexerObservability {
 export interface PendingRequest {
   deferred: Deferred<Uint8Array>;
   timeout: ReturnType<typeof setTimeout>;
-  sentAt: Date;
+  sentAt: number | undefined;
 }
 
 /**
@@ -42,7 +42,14 @@ export type RpcCorrelationHandler = (correlationId: Uint8Array, payload: Uint8Ar
 export type Multiplexer = ReturnType<typeof createMultiplexer>;
 
 export function createMultiplexer(observability: MultiplexerObservability = {}) {
-  const pending: Map<number, PendingRequest[]> = new Map();
+  type PendingQueue = {
+    queue: Array<PendingRequest | undefined>;
+    head: number;
+    tail: number;
+    size: number;
+  };
+
+  const pending: Map<number, PendingQueue> = new Map();
   const notificationHandlers: Map<number, NotificationHandler> = new Map();
   const optionalResponses: Map<number, number> = new Map();
   let state: ConnectionState = ConnectionState.Disconnected;
@@ -53,15 +60,59 @@ export function createMultiplexer(observability: MultiplexerObservability = {}) 
   let responsesDropped = 0;
   let responsesIgnored = 0;
 
-  const getOrCreatePendingQueue = (messageType: number): PendingRequest[] => {
+  const meter = observability.meter;
+  const tracer = observability.tracer;
+  const hasObservability = meter !== undefined || tracer !== undefined;
+
+  const getOrCreatePendingQueue = (messageType: number): PendingQueue => {
     const existing = pending.get(messageType);
     if (existing) {
       return existing;
     }
 
-    const created: PendingRequest[] = [];
+    const created: PendingQueue = {
+      queue: Array.from({ length: 128 }) as Array<PendingRequest | undefined>,
+      head: 0,
+      tail: 0,
+      size: 0,
+    };
     pending.set(messageType, created);
     return created;
+  };
+
+  const growPendingQueue = (queueEntry: PendingQueue): void => {
+    const newCapacity = Math.max(queueEntry.queue.length * 2, 16);
+    const newQueue = Array.from({ length: newCapacity }) as Array<PendingRequest | undefined>;
+
+    for (let i = 0; i < queueEntry.size; i += 1) {
+      newQueue[i] = queueEntry.queue[(queueEntry.head + i) % queueEntry.queue.length];
+    }
+
+    queueEntry.queue = newQueue;
+    queueEntry.head = 0;
+    queueEntry.tail = queueEntry.size;
+  };
+
+  const enqueuePendingRequest = (queueEntry: PendingQueue, request: PendingRequest): void => {
+    if (queueEntry.size >= queueEntry.queue.length) {
+      growPendingQueue(queueEntry);
+    }
+
+    queueEntry.queue[queueEntry.tail] = request;
+    queueEntry.tail = (queueEntry.tail + 1) % queueEntry.queue.length;
+    queueEntry.size += 1;
+  };
+
+  const dequeuePendingRequest = (queueEntry: PendingQueue): PendingRequest => {
+    const request = queueEntry.queue[queueEntry.head];
+    if (!request) {
+      throw new Error("Pending queue invariant broken");
+    }
+
+    queueEntry.queue[queueEntry.head] = undefined;
+    queueEntry.head = (queueEntry.head + 1) % queueEntry.queue.length;
+    queueEntry.size -= 1;
+    return request;
   };
 
   const setConnected = (): void => {
@@ -103,15 +154,15 @@ export function createMultiplexer(observability: MultiplexerObservability = {}) 
     timeoutMs: number,
     signal?: AbortSignal,
   ): Promise<Uint8Array> => {
-    const attributes = { messageType };
-    const span = observability.tracer?.startSpan("fitz.request", attributes);
+    const attributes = hasObservability ? { messageType } : undefined;
+    const span = tracer?.startSpan("fitz.request", attributes);
     let spanEnded = false;
 
     if (signal?.aborted) {
       const error = abortError();
       span?.recordException(error);
       span?.end();
-      observability.meter?.counter("fitz.request.failed", 1, {
+      meter?.counter("fitz.request.failed", 1, {
         ...attributes,
         error: error.name,
       });
@@ -142,7 +193,7 @@ export function createMultiplexer(observability: MultiplexerObservability = {}) 
       }
 
       unregisterRequest(messageType, deferred);
-      observability.meter?.counter("fitz.request.failed", 1, {
+      meter?.counter("fitz.request.failed", 1, {
         ...attributes,
         error: error.name,
       });
@@ -156,7 +207,7 @@ export function createMultiplexer(observability: MultiplexerObservability = {}) 
     };
 
     timeout = setTimeout(() => {
-      observability.meter?.counter("fitz.request.timeout", 1, attributes);
+      meter?.counter("fitz.request.timeout", 1, attributes);
       failRequest(
         new TimeoutError(`Request timeout for message type ${messageType} after ${timeoutMs}ms`, {
           messageType,
@@ -175,15 +226,16 @@ export function createMultiplexer(observability: MultiplexerObservability = {}) 
     const requestEntry: PendingRequest = {
       deferred,
       timeout,
-      sentAt: new Date(),
+      sentAt: Date.now(),
     };
 
-    getOrCreatePendingQueue(messageType).push(requestEntry);
+    const queue = getOrCreatePendingQueue(messageType);
+    enqueuePendingRequest(queue, requestEntry);
 
     requestsInFlight++;
     requestsTotal++;
-    observability.meter?.counter("fitz.request.started", 1, attributes);
-    observability.meter?.gauge?.("fitz.requests.in_flight", requestsInFlight, attributes);
+    meter?.counter("fitz.request.started", 1, attributes);
+    meter?.gauge?.("fitz.requests.in_flight", requestsInFlight, attributes);
 
     try {
       await send(frameData);
@@ -197,7 +249,7 @@ export function createMultiplexer(observability: MultiplexerObservability = {}) 
       }
 
       unregisterRequest(messageType, deferred);
-      observability.meter?.counter("fitz.request.failed", 1, {
+      meter?.counter("fitz.request.failed", 1, {
         ...attributes,
         error: err instanceof Error ? err.name : "unknown",
       });
@@ -219,13 +271,11 @@ export function createMultiplexer(observability: MultiplexerObservability = {}) 
       throw error;
     }
 
-    const payload = await deferred.promise.catch((error) => {
-      throw error;
-    });
+    const payload = await deferred.promise;
     finalize();
-    const durationMs = Date.now() - requestEntry.sentAt.getTime();
+    const durationMs = Date.now() - requestEntry.sentAt!;
     span?.setAttribute("fitz.request.duration_ms", durationMs);
-    observability.meter?.histogram("fitz.request.duration", durationMs, attributes);
+    meter?.histogram("fitz.request.duration", durationMs, attributes);
     if (!spanEnded) {
       span?.end();
       spanEnded = true;
@@ -234,40 +284,68 @@ export function createMultiplexer(observability: MultiplexerObservability = {}) 
   };
 
   const unregisterRequest = (messageType: number, deferred: Deferred<Uint8Array>): void => {
-    const queue = pending.get(messageType);
-    if (!queue) return;
+    const queueEntry = pending.get(messageType);
+    if (!queueEntry || queueEntry.size === 0) return;
 
-    const index = queue.findIndex((r) => r.deferred === deferred);
-    if (index >= 0) {
-      queue.splice(index, 1);
-      requestsInFlight--;
-      observability.meter?.gauge?.("fitz.requests.in_flight", requestsInFlight, {
-        messageType,
-      });
-      if (queue.length === 0) {
-        pending.delete(messageType);
+    let index = -1;
+    for (let i = 0; i < queueEntry.size; i += 1) {
+      const currentIndex = (queueEntry.head + i) % queueEntry.queue.length;
+      if (queueEntry.queue[currentIndex]?.deferred === deferred) {
+        index = currentIndex;
+        break;
       }
+    }
+
+    if (index === -1) {
+      return;
+    }
+
+    if (index === queueEntry.head) {
+      queueEntry.queue[queueEntry.head] = undefined;
+      queueEntry.head = (queueEntry.head + 1) % queueEntry.queue.length;
+      queueEntry.size -= 1;
+    } else {
+      let currentIndex = index;
+      while (true) {
+        const nextIndex = (currentIndex + 1) % queueEntry.queue.length;
+        if (nextIndex === queueEntry.tail) {
+          break;
+        }
+        queueEntry.queue[currentIndex] = queueEntry.queue[nextIndex];
+        currentIndex = nextIndex;
+      }
+
+      const lastIndex = queueEntry.tail === 0 ? queueEntry.queue.length - 1 : queueEntry.tail - 1;
+      queueEntry.queue[lastIndex] = undefined;
+      queueEntry.tail = lastIndex;
+      queueEntry.size -= 1;
+    }
+
+    requestsInFlight--;
+    meter?.gauge?.("fitz.requests.in_flight", requestsInFlight, {
+      messageType,
+    });
+
+    if (queueEntry.size === 0) {
+      pending.delete(messageType);
     }
   };
 
   const dispatch = (messageType: number, payload: Uint8Array): void => {
-    const queue = pending.get(messageType);
-    if (queue && queue.length > 0) {
-      const request = queue.shift();
-      if (!request) {
-        return;
-      }
-      if (queue.length === 0) {
+    const queueEntry = pending.get(messageType);
+    if (queueEntry && queueEntry.size > 0) {
+      const request = dequeuePendingRequest(queueEntry);
+      if (queueEntry.size === 0) {
         pending.delete(messageType);
       }
 
       clearTimeout(request.timeout);
       requestsInFlight--;
       responsesTotal++;
-      observability.meter?.counter("fitz.response.received", 1, {
+      meter?.counter("fitz.response.received", 1, {
         messageType,
       });
-      observability.meter?.gauge?.("fitz.requests.in_flight", requestsInFlight, {
+      meter?.gauge?.("fitz.requests.in_flight", requestsInFlight, {
         messageType,
       });
 
@@ -293,7 +371,7 @@ export function createMultiplexer(observability: MultiplexerObservability = {}) 
         optionalResponses.set(messageType, optionalCount - 1);
       }
       responsesIgnored++;
-      observability.meter?.counter("fitz.response.ignored", 1, {
+      meter?.counter("fitz.response.ignored", 1, {
         messageType,
       });
       return;
@@ -301,7 +379,7 @@ export function createMultiplexer(observability: MultiplexerObservability = {}) 
 
     if (state !== ConnectionState.Authenticated) {
       responsesIgnored++;
-      observability.meter?.counter("fitz.response.ignored", 1, {
+      meter?.counter("fitz.response.ignored", 1, {
         messageType,
         state,
       });
@@ -309,14 +387,19 @@ export function createMultiplexer(observability: MultiplexerObservability = {}) 
     }
 
     responsesDropped++;
-    observability.meter?.counter("fitz.response.dropped", 1, {
+    meter?.counter("fitz.response.dropped", 1, {
       messageType,
     });
   };
 
   const cancelAll = (): void => {
-    for (const [, queue] of pending) {
-      for (const request of queue) {
+    for (const [, queueEntry] of pending) {
+      for (let i = 0; i < queueEntry.size; i += 1) {
+        const index = (queueEntry.head + i) % queueEntry.queue.length;
+        const request = queueEntry.queue[index];
+        if (!request) {
+          continue;
+        }
         clearTimeout(request.timeout);
         void request.deferred.promise.catch(() => undefined);
         void Promise.resolve().then(() =>
@@ -330,7 +413,7 @@ export function createMultiplexer(observability: MultiplexerObservability = {}) 
     }
     pending.clear();
     requestsInFlight = 0;
-    observability.meter?.gauge?.("fitz.requests.in_flight", 0);
+    meter?.gauge?.("fitz.requests.in_flight", 0);
   };
 
   const getMetrics = () => ({

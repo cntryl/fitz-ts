@@ -18,12 +18,19 @@ import { createScope, Scope } from "../core/lifecycle";
 import { utf8Encoder } from "../core/buffer";
 import { FrameCodec, FrameParser } from "../frame/codec";
 import { MSG_CONNECT } from "../frame/types";
-import { AuthenticationError, ConnectionError, FitzError, TransportError } from "../core/errors";
+import {
+  AuthenticationError,
+  ConnectionError,
+  FitzError,
+  RequestQueueFullError,
+  TransportError,
+} from "../core/errors";
 import { Multiplexer } from "./multiplexer";
 
 export interface ConnectionOptions {
   timeout?: number;
   maxInFlightRequests?: number;
+  maxRequestQueueSize?: number;
   reconnect?: {
     enabled?: boolean;
     maxAttempts?: number;
@@ -97,7 +104,7 @@ function createAsyncHandlerDispatcher(
   };
 }
 
-function createRequestGate(maxConcurrency: number) {
+function createRequestGate(maxConcurrency: number, maxQueueSize: number) {
   let activeCount = 0;
   let closed = false;
   const queue: Array<{
@@ -153,6 +160,12 @@ function createRequestGate(maxConcurrency: number) {
       if (activeCount < maxConcurrency) {
         cleanup();
         grant();
+        return;
+      }
+
+      if (queue.length >= maxQueueSize) {
+        cleanup();
+        reject(new RequestQueueFullError());
         return;
       }
 
@@ -255,11 +268,12 @@ export function createConnection(
   const reconnectBackoffMs = options.reconnect?.backoffMs ?? 250;
   const reconnectMaxBackoffMs = options.reconnect?.maxBackoffMs ?? 5000;
   const maxInFlightRequests = options.maxInFlightRequests ?? 256;
+  const maxRequestQueueSize = options.maxRequestQueueSize ?? 1024;
   const observability = options.observability;
 
   let transport: Transport | null = null;
   let state: ConnectionState = ConnectionState.Disconnected;
-  let requestGate = createRequestGate(maxInFlightRequests);
+  let requestGate = createRequestGate(maxInFlightRequests, maxRequestQueueSize);
   const frameParser = new FrameParser();
   const reconnectListeners = new Set<ReconnectListener>();
   const disconnectListeners = new Set<DisconnectListener>();
@@ -497,7 +511,7 @@ export function createConnection(
     throwIfAborted(signal);
     receiveLoopAbort = false;
     frameParser.parseFrames(new Uint8Array(0));
-    requestGate = createRequestGate(maxInFlightRequests);
+    requestGate = createRequestGate(maxInFlightRequests, maxRequestQueueSize);
     const activeTransport = transportFactory();
     transport = activeTransport;
     setState(isReconnect ? ConnectionState.Reconnecting : ConnectionState.Connecting);
@@ -638,6 +652,11 @@ export function createConnection(
     await reconnectPromise;
   };
 
+  const getReconnectDelayMs = (baseDelayMs: number): number => {
+    const jitter = Math.floor(Math.random() * baseDelayMs * 0.5);
+    return Math.min(Math.max(baseDelayMs + jitter, 1), reconnectMaxBackoffMs);
+  };
+
   const reconnectLoop = async (): Promise<void> => {
     let attempts = 0;
     let delayMs = reconnectBackoffMs;
@@ -647,8 +666,9 @@ export function createConnection(
       setState(ConnectionState.Reconnecting);
       emitLifecycleEvent("reconnect_scheduled", undefined, attempts);
 
+      const actualDelayMs = getReconnectDelayMs(delayMs);
       try {
-        await sleep(delayMs);
+        await sleep(actualDelayMs);
         if (closeRequested) {
           return;
         }
@@ -660,7 +680,8 @@ export function createConnection(
         }
         log("warn", "fitz.connection.reconnect_retry", {
           attempts,
-          delayMs,
+          delayMs: actualDelayMs,
+          baseDelayMs: delayMs,
           error: describeError(error),
         });
         delayMs = Math.min(delayMs * 2, reconnectMaxBackoffMs);
@@ -678,7 +699,14 @@ export function createConnection(
 
   const restoreReconnectState = async (): Promise<void> => {
     for (const listener of reconnectListeners) {
-      await listener();
+      try {
+        await listener();
+      } catch (error) {
+        log("warn", "fitz.connection.reconnect_restore_failed", {
+          error: describeError(error),
+        });
+        emitLifecycleEvent("reconnect_restore_failed", error);
+      }
     }
   };
 

@@ -95,6 +95,7 @@ describe("public surface", () => {
       "FitzError",
       "TransportError",
       "ConnectionError",
+      "RequestQueueFullError",
       "AuthenticationError",
       "TimeoutError",
       "ProtocolError",

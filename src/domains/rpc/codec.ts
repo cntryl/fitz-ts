@@ -45,7 +45,7 @@ export const RpcCodec = {
     writer.writeRoute(replyRoute);
     writer.writeU32BE(body.length);
     writer.writeBytes(body);
-    return writer.getBuffer();
+    return writer.getBufferView();
   },
 
   /**
@@ -80,7 +80,7 @@ export const RpcCodec = {
     writer.writeU32BE(body.length);
     writer.writeBytes(body);
     writer.writeU8(streamEnd ? 1 : 0);
-    return writer.getBuffer();
+    return writer.getBufferView();
   },
 
   /**
@@ -125,7 +125,7 @@ export const RpcCodec = {
   encodeSubscribeWorker(route: string): Uint8Array {
     const writer = new BufferWriter(128);
     writer.writeRoute(route);
-    return writer.getBuffer();
+    return writer.getBufferView();
   },
 
   /**
@@ -149,7 +149,7 @@ export const RpcCodec = {
   encodeUnsubscribeWorker(route: string): Uint8Array {
     const writer = new BufferWriter(128);
     writer.writeRoute(route);
-    return writer.getBuffer();
+    return writer.getBufferView();
   },
 
   /**

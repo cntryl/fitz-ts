@@ -20,7 +20,7 @@ export const KvCodec = {
     writer.writeRoute(route);
     writer.writeU8(mode === "ReadWrite" ? 1 : 0);
     writer.writeU8(this.encodeDurability(durability));
-    return writer.getBuffer();
+    return writer.getBufferView();
   },
 
   decodeBeginResponse(payload: Uint8Array): KvBeginResponse {
@@ -38,7 +38,7 @@ export const KvCodec = {
     writer.writeBytes(key);
     writer.writeU32BE(value.length);
     writer.writeBytes(value);
-    return writer.getBuffer();
+    return writer.getBufferView();
   },
 
   encodeInsert(txId: bigint, route: string, key: Uint8Array, value: Uint8Array): Uint8Array {
@@ -60,7 +60,7 @@ export const KvCodec = {
     writer.writeRoute(route);
     writer.writeU32BE(key.length);
     writer.writeBytes(key);
-    return writer.getBuffer();
+    return writer.getBufferView();
   },
 
   decodeGetResponse(payload: Uint8Array): KvGetResponse {
@@ -87,7 +87,7 @@ export const KvCodec = {
     writer.writeRoute(route);
     writer.writeU32BE(key.length);
     writer.writeBytes(key);
-    return writer.getBuffer();
+    return writer.getBufferView();
   },
 
   encodeDeleteRange(
@@ -103,14 +103,14 @@ export const KvCodec = {
     writer.writeBytes(startKey);
     writer.writeU32BE(endKey.length);
     writer.writeBytes(endKey);
-    return writer.getBuffer();
+    return writer.getBufferView();
   },
 
   encodeCommit(txId: bigint, route: string): Uint8Array {
     const writer = new BufferWriter(128);
     writer.writeU64BE(txId);
     writer.writeRoute(route);
-    return writer.getBuffer();
+    return writer.getBufferView();
   },
 
   encodeRollback(txId: bigint, route: string): Uint8Array {
@@ -146,7 +146,7 @@ export const KvCodec = {
     }
 
     writer.writeU8(options.reverse ? 1 : 0);
-    return writer.getBuffer();
+    return writer.getBufferView();
   },
 
   decodeScanResponse(payload: Uint8Array): KvScanResponse {

@@ -25,7 +25,7 @@ export const ScheduleCodec = {
     writer.writeString(cronExpr);
     writer.writeU32BE(payload.length);
     writer.writeBytes(payload);
-    return writer.getBuffer();
+    return writer.getBufferView();
   },
 
   /**
@@ -49,7 +49,7 @@ export const ScheduleCodec = {
   encodeCancel(route: string): Uint8Array {
     const writer = new BufferWriter(256);
     writer.writeRoute(route);
-    return writer.getBuffer();
+    return writer.getBufferView();
   },
 
   /**
@@ -68,7 +68,7 @@ export const ScheduleCodec = {
     const writer = new BufferWriter(32);
     writer.writeOptionalU64(offset);
     writer.writeOptionalU64(limit);
-    return writer.getBuffer();
+    return writer.getBufferView();
   },
 
   /**
@@ -111,7 +111,7 @@ export const ScheduleCodec = {
   encodeSubscribe(pattern: string): Uint8Array {
     const writer = new BufferWriter(256);
     writer.writeString(pattern);
-    return writer.getBuffer();
+    return writer.getBufferView();
   },
 
   /**
@@ -142,7 +142,7 @@ export const ScheduleCodec = {
   encodeUnsubscribe(pattern: string): Uint8Array {
     const writer = new BufferWriter(256);
     writer.writeString(pattern);
-    return writer.getBuffer();
+    return writer.getBufferView();
   },
 
   /**

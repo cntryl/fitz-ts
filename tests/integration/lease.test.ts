@@ -123,22 +123,27 @@ describe("Lease integration", () => {
       await f.connectOrFail();
 
       const route = f.uniqueRoute("lease");
+      let resolveNotification!: (value: string) => void;
+      let timer: ReturnType<typeof setTimeout>;
       const notification = new Promise<string>((resolve, reject) => {
-        const timer = setTimeout(() => {
+        resolveNotification = resolve;
+        timer = setTimeout(() => {
           reject(new Error("timed out waiting for lease notification"));
         }, 5000);
-
-        void f
-          .client()
-          .lease()
-          .subscribe(route, async (notif) => {
-            clearTimeout(timer);
-            resolve(notif.route);
-          });
       });
+
+      const subscription = await f
+        .client()
+        .lease()
+        .subscribe(route, async (notif) => {
+          clearTimeout(timer);
+          resolveNotification(notif.route);
+        });
 
       const lease = await f.client().lease().acquire(route, 30);
       await lease.release();
+      await expect(notification).resolves.toBe(route);
+      await subscription.unsubscribe();
 
       await expect(notification).resolves.toBe(route);
     });

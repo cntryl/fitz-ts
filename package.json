@@ -48,10 +48,10 @@
     "verify:fast": "npm run fmt:check && npm run lint && npm run build && npm run test:unit",
     "verify": "npm run verify:fast && npm run test:integration && npm run test:conformance",
     "bench": "npm run bench:tier1 && npm run bench:tier2 && npm run bench:tier3 && npm run bench:tier4",
-    "bench:tier1": "NODE_ENV=production vp exec vitest bench --run --reporter=default benches/tier1/*.bench.ts",
-    "bench:tier2": "NODE_ENV=production vp exec vitest bench --run --reporter=default benches/tier2/*.bench.ts",
-    "bench:tier3": "NODE_ENV=production vp exec vitest bench --run --reporter=default benches/tier3/*.bench.ts",
-    "bench:tier4": "NODE_ENV=production vp exec vitest bench --run --reporter=default benches/tier4/*.bench.ts",
+    "bench:tier1": "cross-env NODE_ENV=production vp exec vitest bench --run --reporter=default benches/tier1/*.bench.ts",
+    "bench:tier2": "cross-env NODE_ENV=production vp exec vitest bench --run --reporter=default benches/tier2/*.bench.ts",
+    "bench:tier3": "cross-env NODE_ENV=production vp exec vitest bench --run --reporter=default benches/tier3/*.bench.ts",
+    "bench:tier4": "cross-env NODE_ENV=production vp exec vitest bench --run --reporter=default benches/tier4/*.bench.ts",
     "lint": "vp lint . --deny-warnings",
     "fmt": "vp fmt .",
     "fmt:check": "vp fmt --check",
@@ -59,9 +59,10 @@
   },
   "devDependencies": {
     "@types/node": "^25.9.1",
+    "cross-env": "^10.1.0",
     "typescript": "^6.0.3",
     "vite-plus": "latest",
-    "vitest": "npm:@voidzero-dev/vite-plus-test@latest",
+    "vitest": "^4.1.8",
     "ws": "^8.21.0"
   },
   "engines": {

@@ -17,7 +17,7 @@ export const LeaseCodec = {
     writer.writeRoute(route);
     writer.writeRoute(""); // client_id (empty = server assigns)
     writer.writeU64BE(BigInt(ttlSecs));
-    return writer.getBuffer();
+    return writer.getBufferView();
   },
 
   /**
@@ -60,7 +60,7 @@ export const LeaseCodec = {
     writer.writeRoute(""); // client_id (empty = use existing)
     writer.writeU64BE(token);
     writer.writeU64BE(BigInt(ttlSecs));
-    return writer.getBuffer();
+    return writer.getBufferView();
   },
 
   encodeRenew(route: string, token: bigint, ttlSecs: number): Uint8Array {
@@ -76,7 +76,7 @@ export const LeaseCodec = {
     writer.writeRoute(route);
     writer.writeRoute(""); // client_id (empty = use existing)
     writer.writeU64BE(token);
-    return writer.getBuffer();
+    return writer.getBufferView();
   },
 
   /**
@@ -86,7 +86,7 @@ export const LeaseCodec = {
   encodeQuery(route: string): Uint8Array {
     const writer = new BufferWriter(64);
     writer.writeRoute(route);
-    return writer.getBuffer();
+    return writer.getBufferView();
   },
 
   /**
@@ -130,7 +130,7 @@ export const LeaseCodec = {
   encodeSubscribe(pattern: string): Uint8Array {
     const writer = new BufferWriter(64);
     writer.writeRoute(pattern);
-    return writer.getBuffer();
+    return writer.getBufferView();
   },
 
   /**
@@ -163,7 +163,7 @@ export const LeaseCodec = {
   encodeUnsubscribe(pattern: string): Uint8Array {
     const writer = new BufferWriter(64);
     writer.writeRoute(pattern);
-    return writer.getBuffer();
+    return writer.getBufferView();
   },
 
   /**

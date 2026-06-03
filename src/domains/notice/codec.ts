@@ -16,7 +16,7 @@ export const NoticeCodec = {
     writer.writeRoute(route);
     writer.writeU32BE(body.length);
     writer.writeBytes(body);
-    return writer.getBuffer();
+    return writer.getBufferView();
   },
 
   /**
@@ -26,7 +26,7 @@ export const NoticeCodec = {
   encodeSubscribe(pattern: string): Uint8Array {
     const writer = new BufferWriter(64);
     writer.writeRoute(pattern);
-    return writer.getBuffer();
+    return writer.getBufferView();
   },
 
   /**
@@ -61,7 +61,7 @@ export const NoticeCodec = {
   encodeUnsubscribe(subId: bigint): Uint8Array {
     const writer = new BufferWriter(64);
     writer.writeU64BE(subId);
-    return writer.getBuffer();
+    return writer.getBufferView();
   },
 
   /**

@@ -65,6 +65,7 @@ export {
   FitzError,
   TransportError,
   ConnectionError,
+  RequestQueueFullError,
   AuthenticationError,
   TimeoutError,
   ProtocolError,

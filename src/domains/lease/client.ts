@@ -34,7 +34,6 @@ export type LeaseClient = ReturnType<typeof createLeaseClient>;
 export function createLeaseClient(connection: Connection) {
   const { requestFrame } = createDomainClient(connection);
   const subscriptionsByPattern = new Map<string, LeaseSubscriptionState>();
-  const patternsBySubId = new Map<bigint, string>();
   let initialized = false;
   let nextHandlerId = 1;
 
@@ -48,7 +47,6 @@ export function createLeaseClient(connection: Connection) {
       handlers: Array.from(state.handlers.entries()),
     }));
     subscriptionsByPattern.clear();
-    patternsBySubId.clear();
 
     for (const subscription of subscriptions) {
       const subId = await subscribeWire(subscription.pattern);
@@ -56,7 +54,6 @@ export function createLeaseClient(connection: Connection) {
         subId,
         handlers: new Map(subscription.handlers),
       });
-      patternsBySubId.set(subId, subscription.pattern);
     }
   });
 
@@ -125,7 +122,6 @@ export function createLeaseClient(connection: Connection) {
     if (!subscription) {
       subscription = { subId, handlers: new Map() };
       subscriptionsByPattern.set(pattern, subscription);
-      patternsBySubId.set(subId, pattern);
     }
 
     subscription.handlers.set(handlerId, handler);
@@ -146,7 +142,6 @@ export function createLeaseClient(connection: Connection) {
     }
 
     subscriptionsByPattern.delete(pattern);
-    patternsBySubId.delete(subscription.subId);
     const payload = LeaseCodec.encodeUnsubscribe(pattern);
     await requestFrame(MSG_LEASE_UNSUBSCRIBE, payload);
   };
@@ -159,13 +154,8 @@ export function createLeaseClient(connection: Connection) {
     initialized = true;
     connection.registerNotificationHandler(MSG_LEASE_NOTIFY, (payload) => {
       try {
-        const { subId, route } = LeaseCodec.decodeNotification(payload);
-        const pattern = patternsBySubId.get(subId);
-        if (!pattern) {
-          return;
-        }
-
-        const subscription = subscriptionsByPattern.get(pattern);
+        const { route } = LeaseCodec.decodeNotification(payload);
+        const subscription = subscriptionsByPattern.get(route);
         if (!subscription) {
           return;
         }

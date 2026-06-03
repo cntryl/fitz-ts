@@ -5,14 +5,32 @@
 export const utf8Encoder = new TextEncoder();
 export const utf8Decoder = new TextDecoder();
 
-let utf8Scratch = new Uint8Array(256);
+const routeEncodingCache = new Map<string, Uint8Array>();
+const routeEncodingCacheMaxEntries = 256;
 
-function ensureUtf8ScratchCapacity(minCapacity: number): Uint8Array {
-  if (utf8Scratch.length < minCapacity) {
-    utf8Scratch = new Uint8Array(Math.max(utf8Scratch.length * 2, minCapacity));
+function getRouteEncoding(route: string): Uint8Array {
+  const cached = routeEncodingCache.get(route);
+  if (cached) {
+    return cached;
   }
 
-  return utf8Scratch;
+  const encoded = utf8Encoder.encode(route);
+  const routePayload = new Uint8Array(4 + encoded.length);
+  const len = encoded.length;
+  routePayload[0] = (len >> 24) & 0xff;
+  routePayload[1] = (len >> 16) & 0xff;
+  routePayload[2] = (len >> 8) & 0xff;
+  routePayload[3] = len & 0xff;
+  routePayload.set(encoded, 4);
+
+  if (routeEncodingCache.size >= routeEncodingCacheMaxEntries) {
+    const firstKey = routeEncodingCache.keys().next().value;
+    if (firstKey !== undefined) {
+      routeEncodingCache.delete(firstKey);
+    }
+  }
+  routeEncodingCache.set(route, routePayload);
+  return routePayload;
 }
 
 export type BufferWriter = ReturnType<typeof createBufferWriter>;
@@ -49,6 +67,14 @@ export function createBufferWriter(capacity: number = 4096) {
     buffer[offset++] = value & 0xff;
   };
 
+  const writeU32LE = (value: number): void => {
+    ensureCapacity(4);
+    buffer[offset++] = value & 0xff;
+    buffer[offset++] = (value >> 8) & 0xff;
+    buffer[offset++] = (value >> 16) & 0xff;
+    buffer[offset++] = (value >> 24) & 0xff;
+  };
+
   const writeU64BE = (value: bigint): void => {
     ensureCapacity(8);
     buffer[offset++] = Number((value >> 56n) & 0xffn);
@@ -61,10 +87,32 @@ export function createBufferWriter(capacity: number = 4096) {
     buffer[offset++] = Number(value & 0xffn);
   };
 
+  const writeU64LE = (value: bigint): void => {
+    ensureCapacity(8);
+    buffer[offset++] = Number(value & 0xffn);
+    buffer[offset++] = Number((value >> 8n) & 0xffn);
+    buffer[offset++] = Number((value >> 16n) & 0xffn);
+    buffer[offset++] = Number((value >> 24n) & 0xffn);
+    buffer[offset++] = Number((value >> 32n) & 0xffn);
+    buffer[offset++] = Number((value >> 40n) & 0xffn);
+    buffer[offset++] = Number((value >> 48n) & 0xffn);
+    buffer[offset++] = Number((value >> 56n) & 0xffn);
+  };
+
   const writeBytes = (data: Uint8Array): void => {
     ensureCapacity(data.length);
     buffer.set(data, offset);
     offset += data.length;
+  };
+
+  const overwriteU32BE = (position: number, value: number): void => {
+    if (position + 4 > buffer.length) {
+      throw new Error("Buffer overwrite out of bounds");
+    }
+    buffer[position] = (value >> 24) & 0xff;
+    buffer[position + 1] = (value >> 16) & 0xff;
+    buffer[position + 2] = (value >> 8) & 0xff;
+    buffer[position + 3] = value & 0xff;
   };
 
   const writeString = (str: string): void => {
@@ -73,17 +121,85 @@ export function createBufferWriter(capacity: number = 4096) {
       return;
     }
 
-    const scratch = ensureUtf8ScratchCapacity(str.length * 4);
-    const { written } = utf8Encoder.encodeInto(str, scratch);
-    writeU32BE(written);
-    writeBytes(scratch.subarray(0, written));
+    const maxBytes = str.length * 4;
+    ensureCapacity(4 + maxBytes);
+    const lengthOffset = offset;
+    offset += 4;
+
+    const slice = buffer.subarray(offset, offset + maxBytes);
+    const { written } = utf8Encoder.encodeInto(str, slice);
+    offset += written;
+
+    buffer[lengthOffset] = (written >> 24) & 0xff;
+    buffer[lengthOffset + 1] = (written >> 16) & 0xff;
+    buffer[lengthOffset + 2] = (written >> 8) & 0xff;
+    buffer[lengthOffset + 3] = written & 0xff;
+  };
+
+  const writeStringU64 = (str: string): void => {
+    if (str.length === 0) {
+      writeU64BE(0n);
+      return;
+    }
+
+    const maxBytes = str.length * 4;
+    ensureCapacity(8 + maxBytes);
+    const lengthOffset = offset;
+    offset += 8;
+
+    const slice = buffer.subarray(offset, offset + maxBytes);
+    const { written } = utf8Encoder.encodeInto(str, slice);
+    offset += written;
+
+    const length = BigInt(written);
+    buffer[lengthOffset] = Number((length >> 56n) & 0xffn);
+    buffer[lengthOffset + 1] = Number((length >> 48n) & 0xffn);
+    buffer[lengthOffset + 2] = Number((length >> 40n) & 0xffn);
+    buffer[lengthOffset + 3] = Number((length >> 32n) & 0xffn);
+    buffer[lengthOffset + 4] = Number((length >> 24n) & 0xffn);
+    buffer[lengthOffset + 5] = Number((length >> 16n) & 0xffn);
+    buffer[lengthOffset + 6] = Number((length >> 8n) & 0xffn);
+    buffer[lengthOffset + 7] = Number(length & 0xffn);
+  };
+
+  const writeStringU64LE = (str: string): void => {
+    if (str.length === 0) {
+      writeU64LE(0n);
+      return;
+    }
+
+    const maxBytes = str.length * 4;
+    ensureCapacity(8 + maxBytes);
+    const lengthOffset = offset;
+    offset += 8;
+
+    const slice = buffer.subarray(offset, offset + maxBytes);
+    const { written } = utf8Encoder.encodeInto(str, slice);
+    offset += written;
+
+    const length = BigInt(written);
+    buffer[lengthOffset] = Number(length & 0xffn);
+    buffer[lengthOffset + 1] = Number((length >> 8n) & 0xffn);
+    buffer[lengthOffset + 2] = Number((length >> 16n) & 0xffn);
+    buffer[lengthOffset + 3] = Number((length >> 24n) & 0xffn);
+    buffer[lengthOffset + 4] = Number((length >> 32n) & 0xffn);
+    buffer[lengthOffset + 5] = Number((length >> 40n) & 0xffn);
+    buffer[lengthOffset + 6] = Number((length >> 48n) & 0xffn);
+    buffer[lengthOffset + 7] = Number((length >> 56n) & 0xffn);
   };
 
   const writeRoute = (route: string): void => {
-    writeString(route);
+    const encoded = getRouteEncoding(route);
+    writeBytes(encoded);
   };
 
-  const getBuffer = (): Uint8Array => buffer.slice(0, offset);
+  const getBuffer = (): Uint8Array => {
+    return offset === buffer.length ? buffer : buffer.slice(0, offset);
+  };
+
+  const getBufferView = (): Uint8Array => {
+    return buffer.subarray(0, offset);
+  };
 
   const getLength = (): number => offset;
 
@@ -123,16 +239,22 @@ export function createBufferWriter(capacity: number = 4096) {
     writeU8,
     writeU16BE,
     writeU32BE,
+    writeU32LE,
     writeU64BE,
+    writeU64LE,
     writeBytes,
     writeString,
+    writeStringU64,
+    writeStringU64LE,
     writeRoute,
     getBuffer,
+    getBufferView,
     getLength,
     reset,
     writeOptionalU64,
     writeOptionalString,
     writeOptionalBytes,
+    overwriteU32BE,
   };
 }
 
@@ -206,7 +328,7 @@ export function createBufferReader(buffer: Uint8Array) {
     if (offset + count > internalBuffer.length) {
       throw new Error("Buffer overflow: cannot read bytes");
     }
-    const data = internalBuffer.slice(offset, offset + count);
+    const data = internalBuffer.subarray(offset, offset + count);
     offset += count;
     return data;
   };
@@ -217,7 +339,8 @@ export function createBufferReader(buffer: Uint8Array) {
       return "";
     }
 
-    const bytes = readBytes(length);
+    const bytes = internalBuffer.subarray(offset, offset + length);
+    offset += length;
     return utf8Decoder.decode(bytes);
   };
 

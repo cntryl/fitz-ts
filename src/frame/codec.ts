@@ -5,67 +5,67 @@
  */
 
 import { CodecError } from "../core/errors";
-import { BufferWriter, BufferReader } from "../core/buffer";
 
 export interface Frame {
   messageType: number;
   payload: Uint8Array;
 }
 
-const encodeMessageType = (messageType: number, writer: BufferWriter): void => {
+const encodeFrame = (messageType: number, payload: Uint8Array): Uint8Array => {
   if (messageType < 0) {
     throw new CodecError(`Invalid message type: ${messageType}`);
   }
+
+  const payloadLength = payload.length;
+  const typeSize = messageType <= 254 ? 1 : 3;
+  const buffer = new Uint8Array(typeSize + 2 + payloadLength);
+  let offset = 0;
+
   if (messageType <= 254) {
-    writer.writeU8(messageType);
+    buffer[offset++] = messageType;
   } else {
-    writer.writeU8(0xff);
-    writer.writeU16BE(messageType);
+    buffer[offset++] = 0xff;
+    buffer[offset++] = (messageType >> 8) & 0xff;
+    buffer[offset++] = messageType & 0xff;
   }
-};
 
-const decodeMessageType = (reader: BufferReader): number => {
-  const firstByte = reader.readU8();
-  if (firstByte === 0xff) {
-    return reader.readU16BE();
-  }
-  return firstByte;
-};
+  buffer[offset++] = (payloadLength >> 8) & 0xff;
+  buffer[offset++] = payloadLength & 0xff;
+  buffer.set(payload, offset);
 
-const encodeFrame = (messageType: number, payload: Uint8Array): Uint8Array => {
-  const writer = BufferWriter(payload.length + 10);
-
-  encodeMessageType(messageType, writer);
-  writer.writeU16BE(payload.length);
-  writer.writeBytes(payload);
-
-  return writer.getBuffer();
+  return buffer;
 };
 
 const decodeFrame = (buffer: Uint8Array): Frame => {
-  const reader = BufferReader(buffer);
+  let offset = 0;
 
-  try {
-    const messageType = decodeMessageType(reader);
-    const length = reader.readU16BE();
+  const firstByte = buffer[offset++];
+  let messageType: number;
 
-    if (reader.remainingBytes() < length) {
-      throw new CodecError(
-        `Frame incomplete: expected ${length} bytes, got ${reader.remainingBytes()}`,
-      );
+  if (firstByte === 0xff) {
+    if (offset + 2 > buffer.length) {
+      throw new CodecError("Frame incomplete: invalid message type header");
     }
-
-    const payload = reader.readBytes(length);
-
-    return { messageType, payload };
-  } catch (err) {
-    if (err instanceof CodecError) {
-      throw err;
-    }
-    throw new CodecError(
-      `Failed to decode frame: ${err instanceof Error ? err.message : String(err)}`,
-    );
+    messageType = (buffer[offset] << 8) | buffer[offset + 1];
+    offset += 2;
+  } else {
+    messageType = firstByte;
   }
+
+  if (offset + 2 > buffer.length) {
+    throw new CodecError("Frame incomplete: missing length header");
+  }
+
+  const length = (buffer[offset] << 8) | buffer[offset + 1];
+  offset += 2;
+
+  const remaining = buffer.length - offset;
+  if (remaining < length) {
+    throw new CodecError(`Frame incomplete: expected ${length} bytes, got ${remaining}`);
+  }
+
+  const payload = buffer.subarray(offset, offset + length);
+  return { messageType, payload };
 };
 
 const getMessageTypeSize = (messageType: number): number => {
@@ -92,85 +92,51 @@ export const FrameCodec = {
 export type FrameParser = ReturnType<typeof createFrameParser>;
 
 export function createFrameParser() {
-  let buffer: Uint8Array = new Uint8Array(0);
+  let buffer: Uint8Array = new Uint8Array(1024);
   let offset = 0;
-  let messageType: number | null = null;
-  let payloadLength: number | null = null;
-  let state: "reading_type" | "reading_length" | "reading_payload" = "reading_type";
+  let end = 0;
+  let messageType = -1;
+  let payloadLength = -1;
+  let state = 0; // 0=reading_type, 1=reading_length, 2=reading_payload
+
+  const ensureCapacity = (needed: number): void => {
+    if (buffer.length >= needed) {
+      return;
+    }
+
+    const newCapacity = Math.max(buffer.length * 2, needed, 1024);
+    const newBuffer = new Uint8Array(newCapacity);
+    if (end > offset) {
+      newBuffer.set(buffer.subarray(offset, end));
+      end -= offset;
+      offset = 0;
+    } else {
+      end = 0;
+      offset = 0;
+    }
+    buffer = newBuffer;
+  };
 
   const appendData = (data: Uint8Array): void => {
     if (data.length === 0) {
       return;
     }
 
-    if (buffer.length === 0) {
-      buffer = data;
+    const remaining = end - offset;
+    if (remaining === 0) {
       offset = 0;
-      return;
+      end = 0;
+    } else if (buffer.length - end < data.length) {
+      if (offset > 0) {
+        buffer.copyWithin(0, offset, end);
+        end = remaining;
+        offset = 0;
+      }
     }
 
-    const newBuffer = new Uint8Array(buffer.length + data.length);
-    newBuffer.set(buffer);
-    newBuffer.set(data, buffer.length);
-    buffer = newBuffer;
-    offset = 0;
-  };
-
-  const tryReadMessageType = (): boolean => {
-    if (offset >= buffer.length) return false;
-
-    const firstByte = buffer[offset];
-
-    if (firstByte === 0xff) {
-      if (offset + 3 > buffer.length) return false;
-
-      const high = buffer[offset + 1];
-      const low = buffer[offset + 2];
-      messageType = (high << 8) | low;
-      offset += 3;
-    } else {
-      messageType = firstByte;
-      offset += 1;
-    }
-
-    return true;
-  };
-
-  const tryReadLength = (): boolean => {
-    if (offset + 2 > buffer.length) return false;
-
-    const high = buffer[offset];
-    const low = buffer[offset + 1];
-    payloadLength = (high << 8) | low;
-    offset += 2;
-
-    return true;
-  };
-
-  const tryReadPayload = (frames: Frame[]): boolean => {
-    if (messageType === null || payloadLength === null) return false;
-
-    if (offset + payloadLength > buffer.length) return false;
-
-    const payload = buffer.slice(offset, offset + payloadLength);
-    offset += payloadLength;
-
-    frames.push({
-      messageType,
-      payload,
-    });
-
-    messageType = null;
-    payloadLength = null;
-
-    return true;
-  };
-
-  const compactBuffer = (): void => {
-    if (offset > 0) {
-      buffer = buffer.slice(offset);
-      offset = 0;
-    }
+    ensureCapacity(end + data.length);
+    buffer.set(data, end);
+    end += data.length;
   };
 
   const parseFrames = (data: Uint8Array): Frame[] => {
@@ -179,38 +145,52 @@ export function createFrameParser() {
     const frames: Frame[] = [];
 
     while (true) {
-      if (state === "reading_type") {
-        if (!tryReadMessageType()) break;
-        state = "reading_length";
+      if (state === 0) {
+        if (offset >= end) break;
+
+        const firstByte = buffer[offset];
+        if (firstByte === 0xff) {
+          if (offset + 3 > end) break;
+          messageType = (buffer[offset + 1] << 8) | buffer[offset + 2];
+          offset += 3;
+        } else {
+          messageType = firstByte;
+          offset += 1;
+        }
+
+        state = 1;
       }
 
-      if (state === "reading_length") {
-        if (!tryReadLength()) break;
-        state = "reading_payload";
+      if (state === 1) {
+        if (offset + 2 > end) break;
+        payloadLength = (buffer[offset] << 8) | buffer[offset + 1];
+        offset += 2;
+        state = 2;
       }
 
-      if (state === "reading_payload") {
-        if (!tryReadPayload(frames)) break;
-        state = "reading_type";
+      if (state === 2) {
+        if (offset + payloadLength > end) break;
+        frames.push({
+          messageType,
+          payload: buffer.slice(offset, offset + payloadLength),
+        });
+        offset += payloadLength;
+        messageType = -1;
+        payloadLength = -1;
+        state = 0;
       }
     }
 
-    compactBuffer();
+    if (offset === end) {
+      offset = 0;
+      end = 0;
+    }
 
     return frames;
   };
 
   const hasCompleteFrame = (): boolean => {
-    if (state === "reading_type") {
-      return false;
-    }
-    if (state === "reading_length") {
-      return false;
-    }
-    if (state === "reading_payload" && payloadLength !== null) {
-      return offset + payloadLength <= buffer.length;
-    }
-    return false;
+    return state === 2 && payloadLength >= 0 && offset + payloadLength <= end;
   };
 
   return {

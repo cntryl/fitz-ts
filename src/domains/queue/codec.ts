@@ -31,7 +31,7 @@ export const QueueCodec = {
       writer.writeU64BE(BigInt(delaySeconds));
     }
 
-    return writer.getBuffer();
+    return writer.getBufferView();
   },
 
   /**
@@ -69,7 +69,7 @@ export const QueueCodec = {
       writer.writeU32BE(batchSize);
     }
 
-    return writer.getBuffer();
+    return writer.getBufferView();
   },
 
   /**
@@ -112,7 +112,7 @@ export const QueueCodec = {
     writer.writeRoute(route);
     writer.writeU64BE(messageId);
     writer.writeU64BE(leaseToken);
-    return writer.getBuffer();
+    return writer.getBufferView();
   },
 
   /**
@@ -144,7 +144,7 @@ export const QueueCodec = {
     writer.writeU64BE(messageId);
     writer.writeU64BE(leaseToken);
     writer.writeU64BE(BigInt(leaseSeconds));
-    return writer.getBuffer();
+    return writer.getBufferView();
   },
 
   /**
@@ -168,7 +168,7 @@ export const QueueCodec = {
   encodeSubscribe(pattern: string): Uint8Array {
     const writer = new BufferWriter(128);
     writer.writeRoute(pattern);
-    return writer.getBuffer();
+    return writer.getBufferView();
   },
 
   /**
@@ -207,7 +207,7 @@ export const QueueCodec = {
   encodeUnsubscribe(pattern: string): Uint8Array {
     const writer = new BufferWriter(128);
     writer.writeRoute(pattern);
-    return writer.getBuffer();
+    return writer.getBufferView();
   },
 
   /**

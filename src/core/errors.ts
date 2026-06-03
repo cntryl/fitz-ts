@@ -130,6 +130,14 @@ export class ConnectionError extends FitzError {
   }
 }
 
+export class RequestQueueFullError extends FitzError {
+  constructor(message = "Request queue is full", context?: Record<string, unknown>) {
+    super(message, "REQUEST_QUEUE_FULL", undefined, context);
+    this.name = "RequestQueueFullError";
+    Object.setPrototypeOf(this, RequestQueueFullError.prototype);
+  }
+}
+
 export class AuthenticationError extends FitzError {
   constructor(message: string, context?: Record<string, unknown>) {
     super(message, "AUTH_ERROR", undefined, context);
