@@ -193,9 +193,12 @@ export const RpcCodec = {
    * Decode incoming RPC_REQUEST (302) for worker mode
    * Payload: [u32 corrLen=16][16 bytes correlation_id][string route][string reply_route][bytes body]
    */
-  decodeInboundRequest(
-    payload: Uint8Array,
-  ): { correlationId: Uint8Array; route: string; replyRoute: string; body: Uint8Array } {
+  decodeInboundRequest(payload: Uint8Array): {
+    correlationId: Uint8Array;
+    route: string;
+    replyRoute: string;
+    body: Uint8Array;
+  } {
     const reader = new BufferReader(payload);
 
     const corrLen = reader.readU32BE();
@@ -214,5 +217,5 @@ export const RpcCodec = {
     const body = reader.readBytes(bodyLen);
 
     return { correlationId, route, replyRoute, body };
-  }
+  },
 };

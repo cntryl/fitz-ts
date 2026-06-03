@@ -88,5 +88,5 @@ export const NoticeCodec = {
     const body = reader.readBytes(bodyLen);
 
     return { subId, route, body };
-  }
+  },
 };

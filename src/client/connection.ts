@@ -14,6 +14,7 @@ import {
   FitzObservability,
   TokenProvider,
 } from "../core/types";
+import { createScope, Scope } from "../core/lifecycle";
 import { utf8Encoder } from "../core/buffer";
 import { FrameCodec, FrameParser } from "../frame/codec";
 import { MSG_CONNECT } from "../frame/types";
@@ -270,6 +271,7 @@ export function createConnection(
   let reconnectPromise: Promise<void> | null = null;
   let authOutcome: Deferred<void> | null = null;
   let authRejected = false;
+  const connectionScope = createScope("connection");
 
   const log = (
     level: "debug" | "info" | "warn" | "error",
@@ -354,6 +356,7 @@ export function createConnection(
 
   const close = async (): Promise<void> => {
     if (state === ConnectionState.Closed && !transport) {
+      await connectionScope.dispose();
       return;
     }
 
@@ -379,6 +382,7 @@ export function createConnection(
     }
 
     transport = null;
+    await connectionScope.dispose();
   };
 
   const request = async (
@@ -476,6 +480,8 @@ export function createConnection(
   };
 
   const getMultiplexer = (): Multiplexer => multiplexer;
+
+  const getScope = (): Scope => connectionScope;
 
   const dispatchAsyncHandler = (task: () => void | Promise<void>): void => {
     asyncHandlerDispatcher.dispatch(task);
@@ -750,6 +756,7 @@ export function createConnection(
     onDisconnect,
     getMultiplexer,
     dispatchAsyncHandler,
+    getScope,
     getState,
     isConnected,
     getUrl,

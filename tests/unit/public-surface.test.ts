@@ -107,6 +107,12 @@ describe("public surface", () => {
       "StreamError",
       "ScheduleError",
       "isRetryable",
+      "createTaskGroup",
+      "TaskGroup",
+      "TaskGroupStatus",
+      "TaskGroupErrorPolicy",
+      "TaskContext",
+      "TaskGroupOptions",
       "KvClient",
       "KvTransaction",
       "TxMode",
@@ -175,7 +181,9 @@ describe("public surface", () => {
     expect(source).not.toContain("private token: bigint;");
     expect(source).toContain("export type QueueItem = ReturnType<typeof createQueueItem>");
     expect(source).toContain("export function createQueueItem(");
-    expect(source).toContain("export type QueueSubscription = ReturnType<typeof createQueueSubscription>");
+    expect(source).toContain(
+      "export type QueueSubscription = ReturnType<typeof createQueueSubscription>",
+    );
     expect(source).toContain("export function createQueueSubscription(");
   });
 
@@ -184,7 +192,9 @@ describe("public surface", () => {
     expect(source).not.toContain("private token: bigint;");
     expect(source).toContain("export type Lease = ReturnType<typeof createLease>");
     expect(source).toContain("export function createLease(");
-    expect(source).toContain("export type LeaseSubscription = ReturnType<typeof createLeaseSubscription>");
+    expect(source).toContain(
+      "export type LeaseSubscription = ReturnType<typeof createLeaseSubscription>",
+    );
     expect(source).toContain("export function createLeaseSubscription(");
   });
 

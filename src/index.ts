@@ -78,6 +78,14 @@ export {
   ScheduleError,
   isRetryable,
 } from "./core/errors";
+export { createTaskGroup } from "./core/task-group";
+export type {
+  TaskGroup,
+  TaskGroupStatus,
+  TaskGroupErrorPolicy,
+  TaskContext,
+  TaskGroupOptions,
+} from "./core/task-group";
 
 // Domain clients
 export { KvClient } from "./domains/kv/client";

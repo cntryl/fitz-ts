@@ -192,5 +192,5 @@ export const LeaseCodec = {
     const route = reader.readRoute();
 
     return { subId, route };
-  }
+  },
 };

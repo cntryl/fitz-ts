@@ -182,5 +182,5 @@ export const KvCodec = {
       default:
         throw new CodecError("Unknown durability mode");
     }
-  }
+  },
 };

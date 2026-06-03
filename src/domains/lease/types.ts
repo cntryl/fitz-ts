@@ -95,7 +95,10 @@ export function createLease(
     return currentExpiry;
   };
 
-  const testOnlyReleaseWithToken = async (tokenToUse: bigint, signal?: AbortSignal): Promise<void> => {
+  const testOnlyReleaseWithToken = async (
+    tokenToUse: bigint,
+    signal?: AbortSignal,
+  ): Promise<void> => {
     const payload = LeaseCodec.encodeRelease(route, tokenToUse);
     const response = await connection.request(MSG_LEASE_RELEASE, payload, signal);
     assertSuccess(response, "RELEASE");

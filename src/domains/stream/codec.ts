@@ -445,9 +445,7 @@ export const StreamCodec = {
     }
   },
 
-  decodeStreamFilteredReason(
-    reader: BufferReader,
-  ): StreamFilteredReason | undefined {
+  decodeStreamFilteredReason(reader: BufferReader): StreamFilteredReason | undefined {
     const tag = reader.readU8();
     switch (tag) {
       case 0:
@@ -499,7 +497,7 @@ export const StreamCodec = {
     const dataLength = reader.readU32BE();
     const data = reader.readBytes(dataLength);
     return { status, sessionId, data };
-  }
+  },
 };
 
 function encodeStreamFilterSet(filter: StreamFilterSet): Uint8Array {

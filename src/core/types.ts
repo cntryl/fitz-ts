@@ -85,9 +85,12 @@ export function createDeferred<T = unknown>(): Deferred<T> {
   let resolve!: (value: T | PromiseLike<T>) => void;
   let reject!: (reason?: unknown) => void;
 
-  const promise = new Promise<T>((res, rej) => {
+  const inner = new Promise<T>((res, rej) => {
     resolve = res;
     reject = rej;
+  });
+  const promise = inner.catch((error) => {
+    throw error;
   });
 
   return { promise, resolve, reject };

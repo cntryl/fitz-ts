@@ -257,5 +257,5 @@ export const QueueCodec = {
     }
 
     return {};
-  }
+  },
 };

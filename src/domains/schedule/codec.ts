@@ -170,5 +170,5 @@ export const ScheduleCodec = {
     }
 
     return { subId, payload: reader.readBytes(payloadLength) };
-  }
+  },
 };

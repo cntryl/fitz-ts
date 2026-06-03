@@ -9,9 +9,11 @@ describe("Multiplexer shutdown errors", () => {
     multiplexer.setConnected();
 
     const pending = multiplexer.request(77, new Uint8Array([1]), async () => undefined, 1000);
+    void pending.catch(() => undefined);
+    const pendingExpectation = expect(pending).rejects.toBeInstanceOf(ConnectionError);
 
     multiplexer.setDisconnected();
 
-    await expect(pending).rejects.toBeInstanceOf(ConnectionError);
+    await pendingExpectation;
   });
 });

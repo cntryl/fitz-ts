@@ -20,11 +20,7 @@ import { createSliceIterator, createAsyncIterableIterator } from "../../core/ite
 
 export type KvTransaction = ReturnType<typeof createKvTransaction>;
 
-export function createKvTransaction(
-  connection: Connection,
-  route: string,
-  txId: bigint,
-) {
+export function createKvTransaction(connection: Connection, route: string, txId: bigint) {
   let closed = false;
   const unsubscribeDisconnect = connection.onDisconnect(() => {
     closed = true;
@@ -63,7 +59,11 @@ export function createKvTransaction(
     checkStatus(KvCodec.decodeStatusResponse(response).status, "PUT");
   };
 
-  const insert = async (key: Uint8Array, value: Uint8Array, signal?: AbortSignal): Promise<void> => {
+  const insert = async (
+    key: Uint8Array,
+    value: Uint8Array,
+    signal?: AbortSignal,
+  ): Promise<void> => {
     ensureOpen();
     const payload = KvCodec.encodeInsert(txId, route, key, value);
     const response = await connection.request(MSG_KV_INSERT, payload, signal);

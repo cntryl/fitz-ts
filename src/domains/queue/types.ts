@@ -49,7 +49,10 @@ export function createQueueItem(
 
   const testOnlyInvalidToken = (): bigint => id + 1n;
 
-  const testOnlyCompleteWithToken = async (tokenToUse: bigint, signal?: AbortSignal): Promise<void> => {
+  const testOnlyCompleteWithToken = async (
+    tokenToUse: bigint,
+    signal?: AbortSignal,
+  ): Promise<void> => {
     const requestPayload = QueueCodec.encodeComplete(route, id, tokenToUse);
     const response = await connection.request(MSG_QUEUE_COMPLETE, requestPayload, signal);
     const decoded = QueueCodec.decodeCompleteResponse(response);

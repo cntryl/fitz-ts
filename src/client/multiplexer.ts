@@ -151,6 +151,7 @@ export function createMultiplexer(observability: MultiplexerObservability = {}) 
         span?.end();
         spanEnded = true;
       }
+      void deferred.promise.catch(() => undefined);
       deferred.reject(error);
     };
 
@@ -211,7 +212,16 @@ export function createMultiplexer(observability: MultiplexerObservability = {}) 
       throw err;
     }
 
-    const payload = await deferred.promise;
+    if (state !== ConnectionState.Authenticated) {
+      const error = new ConnectionError("Connection closed or reset", { state });
+      unregisterRequest(messageType, deferred);
+      finalize();
+      throw error;
+    }
+
+    const payload = await deferred.promise.catch((error) => {
+      throw error;
+    });
     finalize();
     const durationMs = Date.now() - requestEntry.sentAt.getTime();
     span?.setAttribute("fitz.request.duration_ms", durationMs);
@@ -308,10 +318,13 @@ export function createMultiplexer(observability: MultiplexerObservability = {}) 
     for (const [, queue] of pending) {
       for (const request of queue) {
         clearTimeout(request.timeout);
-        request.deferred.reject(
-          new ConnectionError("Connection closed or reset", {
-            state,
-          }),
+        void request.deferred.promise.catch(() => undefined);
+        void Promise.resolve().then(() =>
+          request.deferred.reject(
+            new ConnectionError("Connection closed or reset", {
+              state,
+            }),
+          ),
         );
       }
     }

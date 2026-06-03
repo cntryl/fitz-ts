@@ -35,6 +35,7 @@ function generateTestJwt(secret: string, audience: string, expiresAtSeconds: num
       exp: expiresAtSeconds,
       iat: now,
       fitz: {
+        route_family: 1,
         permissions: DEFAULT_PERMISSIONS,
       },
     }),
