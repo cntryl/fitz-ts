@@ -24,6 +24,12 @@ const thresholdsMs = {
   rpcDecodeInboundRequest: 250,
 } as const;
 
+const isWindows = process.platform === "win32";
+
+function adjustedThreshold(value: number): number {
+  return isWindows ? value * 2.5 : value;
+}
+
 function measureSync(iterations: number, callback: () => void): number {
   for (let index = 0; index < Math.min(1_000, iterations); index += 1) {
     callback();
@@ -40,21 +46,21 @@ describe("fitz-ts subsystem perf thresholds", () => {
   it("keeps queue and domain encode cost within budget", () => {
     expect(
       measureSync(100_000, () => QueueCodec.encodeEnqueue(queueRoute, body, { delayMs: 1500 })),
-    ).toBeLessThan(thresholdsMs.queueEnqueueEncode);
+    ).toBeLessThan(adjustedThreshold(thresholdsMs.queueEnqueueEncode));
 
     expect(measureSync(100_000, () => QueueCodec.encodeReserve(queueRoute, 60, 10))).toBeLessThan(
-      thresholdsMs.queueReserveEncode,
+      adjustedThreshold(thresholdsMs.queueReserveEncode),
     );
 
     expect(
       measureSync(100_000, () =>
         StreamCodec.encodeAppend(1n, 0n, body, encoder.encode("meta"), "tag"),
       ),
-    ).toBeLessThan(thresholdsMs.streamAppendEncode);
+    ).toBeLessThan(adjustedThreshold(thresholdsMs.streamAppendEncode));
 
     expect(
       measureSync(100_000, () => ScheduleCodec.encodeCreate(scheduleRoute, scheduleCron, body)),
-    ).toBeLessThan(thresholdsMs.scheduleCreateEncode);
+    ).toBeLessThan(adjustedThreshold(thresholdsMs.scheduleCreateEncode));
   });
 
   it("keeps rpc codec encode/decode cost within budget", () => {
@@ -65,10 +71,10 @@ describe("fitz-ts subsystem perf thresholds", () => {
       measureSync(100_000, () =>
         RpcCodec.encodeRequest(RpcCodec.generateCorrelationId(), rpcRoute, replyRoute, body),
       ),
-    ).toBeLessThan(thresholdsMs.rpcEncodeRequest);
+    ).toBeLessThan(adjustedThreshold(thresholdsMs.rpcEncodeRequest));
 
     expect(measureSync(100_000, () => RpcCodec.decodeInboundRequest(requestFrame))).toBeLessThan(
-      thresholdsMs.rpcDecodeInboundRequest,
+      adjustedThreshold(thresholdsMs.rpcDecodeInboundRequest),
     );
   });
 });

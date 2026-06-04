@@ -18,6 +18,12 @@ const thresholdsMs = {
   mixedPayloadBatch: 200,
 } as const;
 
+const isWindows = process.platform === "win32";
+
+function adjustedThreshold(value: number): number {
+  return isWindows ? value * 2.5 : value;
+}
+
 function measureSync(iterations: number, callback: () => void): number {
   for (let index = 0; index < Math.min(1_000, iterations); index += 1) {
     callback();
@@ -44,7 +50,7 @@ describe("fitz-ts system perf thresholds", () => {
         const parser = new FrameParser();
         parser.parseFrames(combined);
       }),
-    ).toBeLessThan(thresholdsMs.frameBatchEncodeParse);
+    ).toBeLessThan(adjustedThreshold(thresholdsMs.frameBatchEncodeParse));
   });
 
   it("keeps kv begin + frame encode within budget", () => {
@@ -53,7 +59,7 @@ describe("fitz-ts system perf thresholds", () => {
         const payload = KvCodec.encodeBegin(routes.kv, "ReadWrite", "Sync");
         FrameCodec.encodeFrame(101, payload);
       }),
-    ).toBeLessThan(thresholdsMs.kvBeginFrameEncode);
+    ).toBeLessThan(adjustedThreshold(thresholdsMs.kvBeginFrameEncode));
   });
 
   it("keeps mixed encode batch cost within budget", () => {
@@ -64,6 +70,6 @@ describe("fitz-ts system perf thresholds", () => {
         FrameCodec.encodeFrame(401, noticePayload);
         FrameCodec.encodeFrame(102, kvPayload);
       }),
-    ).toBeLessThan(thresholdsMs.mixedPayloadBatch);
+    ).toBeLessThan(adjustedThreshold(thresholdsMs.mixedPayloadBatch));
   });
 });

@@ -897,19 +897,30 @@ describe(`Fitz conformance â€” fitz-ts [transport=${TRANSPORT}, auth=${AUTH
 
           try {
             await workerClient.connect();
-            const sub = await workerClient.rpc().registerWorker(route, async (_req, writer) => {
+            const sub = await workerClient.rpc().registerWorker(route, async (req, writer) => {
               await pause(500);
-              await writer.send(b("ok"), true);
+              await writer.send(req.body, true);
             });
 
-            const firstCall = client.rpc().call(route, b("first"), { timeoutMs: 750 });
+            const responseTimeoutMs = 1500;
+            const firstCall = client.rpc().call(route, b("first"), {
+              timeoutMs: responseTimeoutMs,
+            });
             firstCall.catch(() => undefined);
 
-            const secondCall = client.rpc().call(route, b("second"), { timeoutMs: 750 });
+            const secondCall = client.rpc().call(route, b("second"), {
+              timeoutMs: responseTimeoutMs,
+            });
             secondCall.catch(() => undefined);
 
+            const [firstIterator, secondIterator] = await Promise.all([firstCall, secondCall]);
+            const firstNext = firstIterator.next();
+            firstNext.catch(() => undefined);
+            const secondNext = secondIterator.next();
+            secondNext.catch(() => undefined);
+
             const secondState = await Promise.race([
-              secondCall.then(
+              secondNext.then(
                 () => "settled",
                 () => "settled",
               ),
@@ -919,6 +930,20 @@ describe(`Fitz conformance â€” fitz-ts [transport=${TRANSPORT}, auth=${AUTH
             expect(secondState).toBe("pending");
             evidence.push("second RPC call remained pending while first was in flight");
             evidence.push("configured maxInFlightRequests=16 and burst size=2");
+
+            const [firstFrame, secondFrame] = await Promise.all([firstNext, secondNext]);
+            expect(firstFrame.done).toBe(false);
+            expect(secondFrame.done).toBe(false);
+            expect(Buffer.from(firstFrame.value?.body ?? new Uint8Array()).toString()).toBe(
+              "first",
+            );
+            expect(Buffer.from(secondFrame.value?.body ?? new Uint8Array()).toString()).toBe(
+              "second",
+            );
+
+            await expect(firstIterator.next()).resolves.toMatchObject({ done: true });
+            await expect(secondIterator.next()).resolves.toMatchObject({ done: true });
+            evidence.push("both burst RPC calls completed with correlated responses");
 
             await sub.unsubscribe();
           } finally {
