@@ -27,7 +27,7 @@ jobs:
         run: npm ci
 
       - name: Start Docker Compose
-        run: docker compose -f compose.yml up -d
+        run: docker compose up -d
 
       - name: Run cargo build
         run: npm run build
@@ -37,4 +37,4 @@ jobs:
 
       - name: Tear down Docker Compose
         if: always()
-        run: docker compose -f compose.yml down --volumes
+        run: docker compose down --volumes
