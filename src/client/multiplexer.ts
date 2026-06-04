@@ -20,8 +20,10 @@ export interface MultiplexerObservability {
 export interface PendingRequest {
   deferred: Deferred<Uint8Array>;
   deadline: number;
+  timeoutIndex: number;
   sentAt: number | undefined;
   rejectRequest: (error: Error) => void;
+  onComplete?: () => void;
 }
 
 /**
@@ -59,6 +61,34 @@ export function createMultiplexer(observability: MultiplexerObservability = {}) 
   let timeoutEntries: PendingRequest[] = [];
   let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
   let nextTimeoutDeadline = Infinity;
+
+  const getNextTimeoutDeadline = (): number => {
+    let deadline = Infinity;
+    for (const request of timeoutEntries) {
+      deadline = Math.min(deadline, request.deadline);
+    }
+    return deadline;
+  };
+
+  const removeTimeoutEntry = (request: PendingRequest): void => {
+    const index = request.timeoutIndex;
+    if (index < 0 || index >= timeoutEntries.length) {
+      return;
+    }
+
+    const last = timeoutEntries.pop();
+    if (!last) {
+      request.timeoutIndex = -1;
+      return;
+    }
+
+    if (index < timeoutEntries.length) {
+      timeoutEntries[index] = last;
+      last.timeoutIndex = index;
+    }
+
+    request.timeoutIndex = -1;
+  };
 
   let requestsInFlight = 0;
   let requestsTotal = 0;
@@ -151,31 +181,24 @@ export function createMultiplexer(observability: MultiplexerObservability = {}) 
     nextTimeoutDeadline = Infinity;
 
     const nowMs = Date.now();
-    const nextEntries: PendingRequest[] = [];
+    const timedOut: PendingRequest[] = [];
 
     for (const request of timeoutEntries) {
-      if (request.deadline < 0) {
-        continue;
-      }
-
       if (request.deadline <= nowMs) {
-        request.deadline = -1;
-        meter?.counter("fitz.request.timeout", 1);
-        request.rejectRequest(
-          new TimeoutError(
-            `Request timeout after ${nowMs - (request.sentAt ?? nowMs)}ms`,
-            undefined,
-          ),
-        );
-        continue;
+        timedOut.push(request);
       }
-
-      nextEntries.push(request);
-      nextTimeoutDeadline = Math.min(nextTimeoutDeadline, request.deadline);
     }
 
-    timeoutEntries = nextEntries;
+    for (const request of timedOut) {
+      removeTimeoutEntry(request);
+      request.deadline = -1;
+      meter?.counter("fitz.request.timeout", 1);
+      request.rejectRequest(
+        new TimeoutError(`Request timeout after ${nowMs - (request.sentAt ?? nowMs)}ms`, undefined),
+      );
+    }
 
+    nextTimeoutDeadline = getNextTimeoutDeadline();
     if (nextTimeoutDeadline !== Infinity) {
       const delay = Math.max(0, nextTimeoutDeadline - Date.now());
       timeoutHandle = setTimeout(handleTimeouts, delay);
@@ -204,7 +227,7 @@ export function createMultiplexer(observability: MultiplexerObservability = {}) 
     };
   };
 
-  const request = async (
+  const request = (
     messageType: number,
     frameData: Uint8Array,
     send: (data: Uint8Array) => Promise<void>,
@@ -223,12 +246,15 @@ export function createMultiplexer(observability: MultiplexerObservability = {}) 
         ...attributes,
         error: error.name,
       });
-      throw error;
+      return Promise.reject(error);
     }
 
     const deferred = Deferred<Uint8Array>();
     let settled = false;
     let onAbort: (() => void) | undefined;
+
+    const nowMs = Date.now();
+    let requestEntry: PendingRequest;
 
     const finalize = (): boolean => {
       if (settled) {
@@ -236,6 +262,7 @@ export function createMultiplexer(observability: MultiplexerObservability = {}) 
       }
 
       settled = true;
+      removeTimeoutEntry(requestEntry);
       requestEntry.deadline = -1;
       if (signal && onAbort) {
         signal.removeEventListener("abort", onAbort);
@@ -262,15 +289,17 @@ export function createMultiplexer(observability: MultiplexerObservability = {}) 
       deferred.reject(error);
     };
 
-    const requestEntry: PendingRequest = {
+    requestEntry = {
       deferred,
-      deadline: Date.now() + timeoutMs,
-      sentAt: Date.now(),
+      deadline: nowMs + timeoutMs,
+      timeoutIndex: timeoutEntries.length,
+      sentAt: nowMs,
       rejectRequest: (error: Error) => {
         if (!finalize()) {
           return;
         }
 
+        removeTimeoutEntry(requestEntry);
         unregisterRequest(messageType, deferred);
         meter?.counter("fitz.request.failed", 1, {
           ...attributes,
@@ -283,6 +312,19 @@ export function createMultiplexer(observability: MultiplexerObservability = {}) 
         }
         void deferred.promise.catch(() => undefined);
         deferred.reject(error);
+      },
+      onComplete: () => {
+        if (!finalize()) {
+          return;
+        }
+
+        const durationMs = Date.now() - requestEntry.sentAt!;
+        span?.setAttribute("fitz.request.duration_ms", durationMs);
+        meter?.histogram("fitz.request.duration", durationMs, attributes);
+        if (!spanEnded) {
+          span?.end();
+          spanEnded = true;
+        }
       },
     };
 
@@ -305,50 +347,42 @@ export function createMultiplexer(observability: MultiplexerObservability = {}) 
     meter?.counter("fitz.request.started", 1, attributes);
     meter?.gauge?.("fitz.requests.in_flight", requestsInFlight, attributes);
 
-    try {
-      await send(frameData);
-    } catch (err) {
-      const alreadySettled = !finalize();
-      if (alreadySettled) {
+    const sendResult = send(frameData);
+    return sendResult.then(
+      () => {
+        if (state !== ConnectionState.Authenticated) {
+          const error = new ConnectionError("Connection closed or reset", { state });
+          unregisterRequest(messageType, deferred);
+          finalize();
+          throw error;
+        }
+        return deferred.promise;
+      },
+      (err) => {
+        const alreadySettled = !finalize();
+        if (alreadySettled) {
+          if (signal?.aborted) {
+            throw abortError();
+          }
+          throw err;
+        }
+
+        unregisterRequest(messageType, deferred);
+        meter?.counter("fitz.request.failed", 1, {
+          ...attributes,
+          error: err instanceof Error ? err.name : "unknown",
+        });
+        if (!spanEnded) {
+          span?.recordException(err);
+          span?.end();
+          spanEnded = true;
+        }
         if (signal?.aborted) {
           throw abortError();
         }
         throw err;
-      }
-
-      unregisterRequest(messageType, deferred);
-      meter?.counter("fitz.request.failed", 1, {
-        ...attributes,
-        error: err instanceof Error ? err.name : "unknown",
-      });
-      if (!spanEnded) {
-        span?.recordException(err);
-        span?.end();
-        spanEnded = true;
-      }
-      if (signal?.aborted) {
-        throw abortError();
-      }
-      throw err;
-    }
-
-    if (state !== ConnectionState.Authenticated) {
-      const error = new ConnectionError("Connection closed or reset", { state });
-      unregisterRequest(messageType, deferred);
-      finalize();
-      throw error;
-    }
-
-    const payload = await deferred.promise;
-    finalize();
-    const durationMs = Date.now() - requestEntry.sentAt!;
-    span?.setAttribute("fitz.request.duration_ms", durationMs);
-    meter?.histogram("fitz.request.duration", durationMs, attributes);
-    if (!spanEnded) {
-      span?.end();
-      spanEnded = true;
-    }
-    return payload;
+      },
+    );
   };
 
   const unregisterRequest = (messageType: number, deferred: Deferred<Uint8Array>): void => {
@@ -428,6 +462,7 @@ export function createMultiplexer(observability: MultiplexerObservability = {}) 
       });
 
       request.deferred.resolve(payload);
+      request.onComplete?.();
       return;
     }
 

@@ -3,7 +3,7 @@
  */
 
 import { createDomainClient } from "../base";
-import { RpcCodec } from "./codec";
+import { RpcCodec, acquirePooledCorrelationId, releasePooledCorrelationId } from "./codec";
 import {
   RequestOptions,
   ResponseFrame,
@@ -27,7 +27,7 @@ import {
   TransportError,
 } from "../../core/errors";
 import { ConnectionState } from "../../core/types";
-import { utf8Encoder } from "../../core/buffer";
+import { readU128BEAt, utf8Encoder } from "../../core/buffer";
 import { isConcreteRouteShape } from "../_routes";
 import type { Connection } from "../../client/connection";
 
@@ -257,25 +257,29 @@ export const RpcClient: RpcClientConstructor = function (connection: Connection)
 
 export function createRpcClient(connection: Connection) {
   const { requestFrame } = createDomainClient(connection);
-  const pendingRpcs = new Map<string, RpcIterator>();
+  type PendingRpcEntry = { iterator: RpcIterator; correlationId: Uint8Array };
+  const pendingRpcs = new Map<bigint, PendingRpcEntry>();
   const workers = new Map<string, RpcHandler>();
   let initialized = false;
 
-  const cleanupPendingRpc = (correlationId: Uint8Array): void => {
-    const key = correlationIdToKey(correlationId);
-    pendingRpcs.delete(key);
+  const cleanupPendingRpc = (correlationKey: bigint, correlationId: Uint8Array): void => {
+    if (!pendingRpcs.has(correlationKey)) {
+      return;
+    }
+    pendingRpcs.delete(correlationKey);
+    releasePooledCorrelationId(correlationId);
   };
 
   connection.onDisconnect(() => {
     const pending = Array.from(pendingRpcs.values());
-    pendingRpcs.clear();
-    for (const iterator of pending) {
-      if (typeof (iterator as any).fail === "function") {
-        (iterator as any).fail(
+    for (const entry of pending) {
+      if (typeof (entry.iterator as any).fail === "function") {
+        (entry.iterator as any).fail(
           new ConnectionError("Connection closed while RPC response was pending"),
         );
       }
     }
+    pendingRpcs.clear();
   });
 
   connection.onReconnect(async () => {
@@ -299,15 +303,15 @@ export function createRpcClient(connection: Connection) {
     initRpcHandler();
 
     const timeoutMs = options?.timeoutMs ?? 30000;
-    const correlationId = RpcCodec.generateCorrelationId();
+    const correlationId = acquirePooledCorrelationId();
     const correlationKey = correlationIdToKey(correlationId);
 
     const iterator = createRpcIterator(
-      () => cleanupPendingRpc(correlationId),
+      () => cleanupPendingRpc(correlationKey, correlationId),
       timeoutMs,
       options?.signal,
     );
-    pendingRpcs.set(correlationKey, iterator);
+    pendingRpcs.set(correlationKey, { iterator, correlationId });
 
     try {
       const payload = RpcCodec.encodeRequest(correlationId, route, "", body);
@@ -315,7 +319,7 @@ export function createRpcClient(connection: Connection) {
 
       const decoded = RpcCodec.decodeRequestResponse(response);
       if (decoded.status !== RpcStatus.Ok) {
-        pendingRpcs.delete(correlationKey);
+        cleanupPendingRpc(correlationKey, correlationId);
         throw new RpcError(
           `RPC REQUEST failed: status ${decoded.status}`,
           "REQUEST_FAILED",
@@ -325,7 +329,7 @@ export function createRpcClient(connection: Connection) {
 
       return iterator;
     } catch (error) {
-      pendingRpcs.delete(correlationKey);
+      cleanupPendingRpc(correlationKey, correlationId);
       throw error;
     }
   };
@@ -378,8 +382,8 @@ export function createRpcClient(connection: Connection) {
 
     connection.registerNotificationHandler(MSG_RPC_RESPONSE, (payload: Uint8Array) => {
       try {
-        const { correlationId, sequence, body, streamEnd } = RpcCodec.decodeResponse(payload);
-        handleRpcResponse(correlationId, sequence, body, streamEnd);
+        const { correlationKey, sequence, body, streamEnd } = RpcCodec.decodeResponseKey(payload);
+        handleRpcResponse(correlationKey, sequence, body, streamEnd);
       } catch {
         // Best-effort decode for background frames.
       }
@@ -401,17 +405,17 @@ export function createRpcClient(connection: Connection) {
   };
 
   const handleRpcResponse = (
-    correlationId: Uint8Array,
+    correlationKey: bigint,
     sequence: bigint,
     body: Uint8Array,
     streamEnd: boolean,
   ): void => {
-    const key = correlationIdToKey(correlationId);
-    const iterator = pendingRpcs.get(key) as any;
+    const entry = pendingRpcs.get(correlationKey);
 
-    if (!iterator) {
+    if (!entry) {
       return;
     }
+    const iterator = entry.iterator;
 
     const terminalError = RpcCodec.decodeErrorBody(body);
     if (terminalError?.code === ErrCodeRpcWorkerNotFound) {
@@ -429,7 +433,7 @@ export function createRpcClient(connection: Connection) {
       if (body.length > 0) {
         iterator.push({ body, sequence });
       }
-      pendingRpcs.delete(key);
+      cleanupPendingRpc(correlationKey, entry.correlationId);
       iterator.end();
     } else {
       iterator.push({ body, sequence });
@@ -470,10 +474,8 @@ export function createRpcClient(connection: Connection) {
     });
   };
 
-  const correlationIdToKey = (correlationId: Uint8Array): string => {
-    return Array.from(correlationId)
-      .map((b) => b.toString(16).padStart(2, "0"))
-      .join("");
+  const correlationIdToKey = (correlationId: Uint8Array): bigint => {
+    return readU128BEAt(correlationId, 0);
   };
 
   return {

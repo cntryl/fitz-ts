@@ -40,8 +40,12 @@ npm run bench
 ## Status
 
 - Benchmark suite exists and covers the primary hot paths needed for initial evidence.
-- Fresh benchmark run captured on 2026-03-25 with `npm run bench`.
+- Fresh benchmark run captured on 2026-06-04 with `npm run bench:tier1`,
+  `npm run bench:tier2`, and `npm run bench:tier3`.
 - Numeric targets are now formalized and enforced by `tests/unit/perf/hotpath-thresholds.test.ts`, `tests/unit/perf/subsystem-thresholds.test.ts`, and `tests/unit/perf/system-thresholds.test.ts`.
+- The 2026-06-04 optimization pass added shared exact-buffer helpers for direct
+  RPC encode/key paths and replaced worker subscribe/unsubscribe `BufferWriter`
+  allocation with exact route payload copies.
 
 ## Release Thresholds
 
@@ -74,27 +78,38 @@ The following budgets are enforced by `tests/unit/perf/hotpath-thresholds.test.t
 
 Environment:
 
-- Command: `npm run bench`
-- Date: 2026-03-25
+- Command: `npm run bench:tier1`, `npm run bench:tier2`, `npm run bench:tier3`
+- Date: 2026-06-04
 - Runner: Vitest bench
 
 Selected results from the latest run:
 
 | Benchmark                               |            hz |      mean |       p99 |
 | --------------------------------------- | ------------: | --------: | --------: |
-| frame encode (small payload)            |  6,972,384.00 | 0.0001 ms | 0.0004 ms |
-| frame decode (small payload)            | 11,724,843.66 | 0.0001 ms | 0.0001 ms |
-| notice publish encode                   |  1,203,101.04 | 0.0008 ms | 0.0016 ms |
-| kv get encode                           |    952,364.67 | 0.0011 ms | 0.0018 ms |
-| lease acquire encode                    |    777,327.38 | 0.0013 ms | 0.0032 ms |
-| rpc call encode                         |    330,273.01 | 0.0030 ms | 0.0244 ms |
-| rpc correlation id generation           |    695,949.96 | 0.0014 ms | 0.0020 ms |
-| multiplexer request/response round-trip |    919,257.98 | 0.0011 ms | 0.0017 ms |
-| multiplexer 1k in-flight FIFO drain     |        665.12 | 1.5035 ms | 2.6410 ms |
-| notice publish frame encode throughput  |  1,053,938.31 | 0.0009 ms | 0.0018 ms |
+| frame encode (small payload)            | 23,618,309.20 | 0.0000 ms | 0.0001 ms |
+| frame decode (small payload)            | 25,428,289.95 | 0.0000 ms | 0.0000 ms |
+| notice publish encode                   |  4,236,625.20 | 0.0002 ms | 0.0006 ms |
+| kv get encode                           |  2,912,292.62 | 0.0003 ms | 0.0006 ms |
+| lease acquire encode                    |  2,730,458.97 | 0.0004 ms | 0.0008 ms |
+| rpc call encode                         |  1,220,336.59 | 0.0008 ms | 0.0013 ms |
+| rpc correlation id generation           |  1,657,048.68 | 0.0006 ms | 0.0008 ms |
+| multiplexer request/response round-trip |    233,147.04 | 0.0043 ms | 0.0045 ms |
+| multiplexer 1k in-flight FIFO drain     |      1,677.30 | 0.5962 ms | 1.2636 ms |
+| notice publish frame encode throughput  |  3,671,701.37 | 0.0003 ms | 0.0005 ms |
+| rpc subscribe worker encode             | 16,805,740.55 | 0.0001 ms | 0.0001 ms |
+| frame batch encode + parse              |    759,413.45 | 0.0013 ms | 0.0028 ms |
+| mixed payload encode batch              |  1,338,980.15 | 0.0007 ms | 0.0014 ms |
 
 Interpretation:
 
 - Frame encode/decode cost is negligible relative to the other measured client-side paths.
 - The multiplexer can drain a 1,000-request in-flight FIFO workload in low-single-digit milliseconds on this machine.
-- These results are strong enough to demonstrate benchmark coverage and an initial baseline, and the named thresholds above now turn them into an explicit release gate.
+- RPC worker subscribe/unsubscribe encode now returns exact route payload copies
+  instead of allocating a `BufferWriter`; the tier2 unit benchmark measured
+  `rpc subscribe worker encode` at 16.8M hz after the change versus roughly
+  4.1M hz in the pre-optimization baseline.
+- Direct numeric write/read helpers are used only by direct RPC buffer paths;
+  `BufferWriter` kept inline writes after benchmarking showed helper indirection
+  regressed broader composed paths.
+- These results demonstrate current benchmark coverage and keep the named
+  thresholds above as an explicit release gate.

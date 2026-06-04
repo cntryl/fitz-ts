@@ -8,6 +8,44 @@ export const utf8Decoder = new TextDecoder();
 const routeEncodingCache = new Map<string, Uint8Array>();
 const routeEncodingCacheMaxEntries = 256;
 
+export function writeU32BEAt(buffer: Uint8Array, offset: number, value: number): number {
+  buffer[offset++] = (value >> 24) & 0xff;
+  buffer[offset++] = (value >> 16) & 0xff;
+  buffer[offset++] = (value >> 8) & 0xff;
+  buffer[offset++] = value & 0xff;
+  return offset;
+}
+
+export function writeU64BEAt(buffer: Uint8Array, offset: number, value: bigint): number {
+  buffer[offset++] = Number((value >> 56n) & 0xffn);
+  buffer[offset++] = Number((value >> 48n) & 0xffn);
+  buffer[offset++] = Number((value >> 40n) & 0xffn);
+  buffer[offset++] = Number((value >> 32n) & 0xffn);
+  buffer[offset++] = Number((value >> 24n) & 0xffn);
+  buffer[offset++] = Number((value >> 16n) & 0xffn);
+  buffer[offset++] = Number((value >> 8n) & 0xffn);
+  buffer[offset++] = Number(value & 0xffn);
+  return offset;
+}
+
+export function readU32BEAt(buffer: Uint8Array, offset: number): number {
+  return (
+    ((buffer[offset] << 24) |
+      (buffer[offset + 1] << 16) |
+      (buffer[offset + 2] << 8) |
+      buffer[offset + 3]) >>>
+    0
+  );
+}
+
+export function readU128BEAt(buffer: Uint8Array, offset: number): bigint {
+  const part0 = BigInt(readU32BEAt(buffer, offset));
+  const part1 = BigInt(readU32BEAt(buffer, offset + 4));
+  const part2 = BigInt(readU32BEAt(buffer, offset + 8));
+  const part3 = BigInt(readU32BEAt(buffer, offset + 12));
+  return (part0 << 96n) | (part1 << 64n) | (part2 << 32n) | part3;
+}
+
 export function getRouteEncoding(route: string): Uint8Array {
   const cached = routeEncodingCache.get(route);
   if (cached) {

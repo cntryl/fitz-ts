@@ -3,9 +3,50 @@
  * Per fitz-go/internal/domains/rpc/protocol.go
  */
 
-import { BufferWriter, BufferReader, getRouteEncoding } from "../../core/buffer";
+import {
+  BufferReader,
+  getRouteEncoding,
+  readU128BEAt,
+  writeU32BEAt,
+  writeU64BEAt,
+} from "../../core/buffer";
 import { ProtocolError } from "../../core/errors";
 import { SubscribeResponse, UnsubscribeResponse } from "./types";
+
+const CORRELATION_ID_LENGTH = 16;
+const getCryptoProvider = (): Crypto | undefined => globalThis.crypto as Crypto | undefined;
+const correlationIdPool: Uint8Array[] = [];
+const maxCorrelationIdPoolSize = 64;
+
+const secureRandomValues = (buffer: Uint8Array): Uint8Array => {
+  const provider = getCryptoProvider();
+  if (!provider?.getRandomValues) {
+    throw new ProtocolError(
+      "Cryptographic randomness is required for RPC correlation IDs",
+      undefined,
+      { operation: "RPC_GENERATE_CORRELATION_ID" },
+    );
+  }
+
+  provider.getRandomValues(buffer as unknown as ArrayBufferView<ArrayBuffer>);
+  return buffer;
+};
+
+export const acquirePooledCorrelationId = (): Uint8Array => {
+  const correlationId = correlationIdPool.pop() ?? new Uint8Array(CORRELATION_ID_LENGTH);
+  return secureRandomValues(correlationId);
+};
+
+export const releasePooledCorrelationId = (correlationId: Uint8Array): void => {
+  if (correlationId.length !== CORRELATION_ID_LENGTH || correlationIdPool.length >= maxCorrelationIdPoolSize) {
+    return;
+  }
+  correlationIdPool.push(correlationId);
+};
+
+const readCorrelationKey = (payload: Uint8Array, offset: number): bigint => {
+  return readU128BEAt(payload, offset);
+};
 
 export const RpcCodec = {
   /**
@@ -13,17 +54,8 @@ export const RpcCodec = {
    * Per fitz-go rpc.go: crypto/rand.Read(correlationID[:])
    */
   generateCorrelationId(): Uint8Array {
-    const correlationId = new Uint8Array(16);
-    const cryptoProvider = globalThis.crypto;
-    if (!cryptoProvider?.getRandomValues) {
-      throw new ProtocolError(
-        "Cryptographic randomness is required for RPC correlation IDs",
-        undefined,
-        { operation: "RPC_GENERATE_CORRELATION_ID" },
-      );
-    }
-
-    cryptoProvider.getRandomValues(correlationId);
+    const correlationId = new Uint8Array(CORRELATION_ID_LENGTH);
+    secureRandomValues(correlationId);
     return correlationId;
   },
 
@@ -41,26 +73,19 @@ export const RpcCodec = {
     const routeBytes = getRouteEncoding(route);
     const replyRouteBytes = getRouteEncoding(replyRoute);
     const payloadLength =
-      4 + correlationId.length + routeBytes.length + replyRouteBytes.length + 4 + body.length;
+      4 + CORRELATION_ID_LENGTH + routeBytes.length + replyRouteBytes.length + 4 + body.length;
 
     const buffer = new Uint8Array(payloadLength);
     let offset = 0;
 
-    const writeU32BE = (value: number): void => {
-      buffer[offset++] = (value >> 24) & 0xff;
-      buffer[offset++] = (value >> 16) & 0xff;
-      buffer[offset++] = (value >> 8) & 0xff;
-      buffer[offset++] = value & 0xff;
-    };
-
-    writeU32BE(correlationId.length);
+    offset = writeU32BEAt(buffer, offset, CORRELATION_ID_LENGTH);
     buffer.set(correlationId, offset);
-    offset += correlationId.length;
+    offset += CORRELATION_ID_LENGTH;
     buffer.set(routeBytes, offset);
     offset += routeBytes.length;
     buffer.set(replyRouteBytes, offset);
     offset += replyRouteBytes.length;
-    writeU32BE(body.length);
+    offset = writeU32BEAt(buffer, offset, body.length);
     buffer.set(body, offset);
 
     return buffer;
@@ -91,21 +116,22 @@ export const RpcCodec = {
     body: Uint8Array,
     streamEnd: boolean,
   ): Uint8Array {
-    const writer = new BufferWriter(256);
-    writer.writeU32BE(correlationId.length);
-    writer.writeBytes(correlationId);
-    writer.writeU64BE(sequence);
-    writer.writeU32BE(body.length);
-    writer.writeBytes(body);
-    writer.writeU8(streamEnd ? 1 : 0);
-    return writer.getBufferView();
+    const payloadLength = 4 + CORRELATION_ID_LENGTH + 8 + 4 + body.length + 1;
+    const buffer = new Uint8Array(payloadLength);
+    let offset = 0;
+
+    offset = writeU32BEAt(buffer, offset, CORRELATION_ID_LENGTH);
+    buffer.set(correlationId, offset);
+    offset += CORRELATION_ID_LENGTH;
+    offset = writeU64BEAt(buffer, offset, sequence);
+    offset = writeU32BEAt(buffer, offset, body.length);
+    buffer.set(body, offset);
+    offset += body.length;
+    buffer[offset] = streamEnd ? 1 : 0;
+
+    return buffer;
   },
 
-  /**
-   * Decode RPC_RESPONSE (303)
-   * Payload: [bytes correlation_id][u64 sequence][bytes body][u8 stream_end]
-   * Returns: { correlationId, sequence, body, streamEnd }
-   */
   decodeResponse(payload: Uint8Array): {
     correlationId: Uint8Array;
     sequence: bigint;
@@ -136,14 +162,45 @@ export const RpcCodec = {
     return { correlationId, sequence, body, streamEnd };
   },
 
+  decodeResponseKey(payload: Uint8Array): {
+    correlationKey: bigint;
+    sequence: bigint;
+    body: Uint8Array;
+    streamEnd: boolean;
+  } {
+    const reader = new BufferReader(payload);
+
+    const corrLen = reader.readU32BE();
+    if (corrLen !== 16) {
+      throw new ProtocolError(`Invalid correlation ID length: ${corrLen}, expected 16`, undefined, {
+        correlationLength: corrLen,
+        expectedLength: 16,
+      });
+    }
+
+    const correlationIdOffset = reader.getOffset();
+    const correlationKey = readCorrelationKey(payload, correlationIdOffset);
+    reader.setOffset(correlationIdOffset + corrLen);
+
+    const sequence = reader.readU64BE();
+
+    const bodyLen = reader.readU32BE();
+    const body = reader.readBytes(bodyLen);
+
+    let streamEnd = false;
+    if (!reader.isEOF()) {
+      streamEnd = reader.readU8() === 1;
+    }
+
+    return { correlationKey, sequence, body, streamEnd };
+  },
+
   /**
    * Encode RPC_SUBSCRIBE_WORKER (304)
    * Payload: [string worker_route]
    */
   encodeSubscribeWorker(route: string): Uint8Array {
-    const writer = new BufferWriter(128);
-    writer.writeRoute(route);
-    return writer.getBufferView();
+    return getRouteEncoding(route).slice();
   },
 
   /**
@@ -165,9 +222,7 @@ export const RpcCodec = {
    * Payload: [string worker_route]
    */
   encodeUnsubscribeWorker(route: string): Uint8Array {
-    const writer = new BufferWriter(128);
-    writer.writeRoute(route);
-    return writer.getBufferView();
+    return getRouteEncoding(route).slice();
   },
 
   /**
