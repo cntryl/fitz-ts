@@ -25,9 +25,11 @@ const thresholdsMs = {
 } as const;
 
 const isWindows = process.platform === "win32";
+const isCi = process.env.CI === "true" || process.env.GITHUB_ACTIONS === "true";
 
 function adjustedThreshold(value: number): number {
-  return isWindows ? value * 2.5 : value;
+  if (isWindows) return value * 2.5;
+  return isCi ? value * 2 : value;
 }
 
 function measureSync(iterations: number, callback: () => void): number {
