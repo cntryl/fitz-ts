@@ -70,6 +70,10 @@ export interface ClientConfig {
   asyncHandlers?: AsyncHandlerOptions;
 }
 
+export interface ClientConnectOptions {
+  signal?: AbortSignal;
+}
+
 export type TxMode = "ReadOnly" | "ReadWrite";
 export type DurabilityMode = "None" | "Async" | "Sync";
 

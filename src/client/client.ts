@@ -3,7 +3,7 @@
  */
 
 import { ConnectionState } from "../core/types";
-import type { ClientConfig, TokenProvider } from "../core/types";
+import type { ClientConfig, ClientConnectOptions, TokenProvider } from "../core/types";
 import { Connection, createConnection } from "./connection";
 import { createTransport } from "../transport/factory";
 import { ConnectionError } from "../core/errors";
@@ -76,7 +76,7 @@ export function createClient(config: ClientConfig) {
     return connection;
   };
 
-  const connect = async (options: { signal?: AbortSignal } = {}): Promise<void> => {
+  const connect = async (options: ClientConnectOptions = {}): Promise<void> => {
     if (connection?.isConnected()) {
       return;
     }

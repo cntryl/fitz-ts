@@ -9,6 +9,7 @@ export { Client, createClient } from "./client/client";
 export type {
   AsyncHandlerOptions,
   ClientConfig,
+  ClientConnectOptions,
   FitzLifecycleEvent,
   FitzLogger,
   FitzLogLevel,
@@ -106,6 +107,7 @@ export type {
   AvailabilityNotification,
   QueueItem,
   QueueSubscription,
+  QueueStatus,
 } from "./domains/queue/types";
 export { RpcClient } from "./domains/rpc/client";
 export type {
@@ -115,6 +117,7 @@ export type {
   ResponseWriter,
   RpcHandler,
   RpcSubscription,
+  RpcStatus,
 } from "./domains/rpc/types";
 export { LeaseClient } from "./domains/lease/client";
 export type {
@@ -123,9 +126,15 @@ export type {
   ChangeHandler,
   ChangeNotification,
   LeaseSubscription,
+  LeaseStatus,
 } from "./domains/lease/types";
 export { NoticeClient } from "./domains/notice/client";
-export type { NoticeMsg, NoticeHandler, NoticeSubscription } from "./domains/notice/types";
+export type {
+  NoticeMsg,
+  NoticeHandler,
+  NoticeSubscription,
+  NoticeStatus,
+} from "./domains/notice/types";
 export { StreamClient } from "./domains/stream/client";
 export type {
   StreamRecord,
@@ -146,6 +155,8 @@ export type {
   StreamCommitNotification,
   StreamCommitHandler,
   StreamSubscription,
+  StreamCommitMode,
+  StreamStatus,
 } from "./domains/stream/types";
 export { ScheduleClient } from "./domains/schedule/client";
 export type {
@@ -153,4 +164,5 @@ export type {
   ScheduleNotification,
   ScheduleHandler,
   ScheduleSubscription,
+  ScheduleStatus,
 } from "./domains/schedule/types";
