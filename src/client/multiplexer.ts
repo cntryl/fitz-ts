@@ -21,6 +21,7 @@ export interface PendingRequest {
   deferred: Deferred<Uint8Array>;
   deadline: number;
   timeoutIndex: number;
+  queueIndex: number;
   sentAt: number | undefined;
   rejectRequest: (error: Error) => void;
   onComplete?: () => void;
@@ -62,12 +63,55 @@ export function createMultiplexer(observability: MultiplexerObservability = {}) 
   let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
   let nextTimeoutDeadline = Infinity;
 
-  const getNextTimeoutDeadline = (): number => {
-    let deadline = Infinity;
-    for (const request of timeoutEntries) {
-      deadline = Math.min(deadline, request.deadline);
+  const swapTimeoutEntries = (leftIndex: number, rightIndex: number): void => {
+    const left = timeoutEntries[leftIndex];
+    const right = timeoutEntries[rightIndex];
+    timeoutEntries[leftIndex] = right;
+    timeoutEntries[rightIndex] = left;
+    left.timeoutIndex = rightIndex;
+    right.timeoutIndex = leftIndex;
+  };
+
+  const heapifyUp = (index: number): void => {
+    while (index > 0) {
+      const parentIndex = (index - 1) >> 1;
+      if (timeoutEntries[index].deadline >= timeoutEntries[parentIndex].deadline) {
+        return;
+      }
+      swapTimeoutEntries(index, parentIndex);
+      index = parentIndex;
     }
-    return deadline;
+  };
+
+  const heapifyDown = (index: number): void => {
+    const length = timeoutEntries.length;
+    while (true) {
+      const leftIndex = index * 2 + 1;
+      const rightIndex = index * 2 + 2;
+      let smallest = index;
+
+      if (
+        leftIndex < length &&
+        timeoutEntries[leftIndex].deadline < timeoutEntries[smallest].deadline
+      ) {
+        smallest = leftIndex;
+      }
+      if (
+        rightIndex < length &&
+        timeoutEntries[rightIndex].deadline < timeoutEntries[smallest].deadline
+      ) {
+        smallest = rightIndex;
+      }
+      if (smallest === index) {
+        return;
+      }
+      swapTimeoutEntries(index, smallest);
+      index = smallest;
+    }
+  };
+
+  const getNextTimeoutDeadline = (): number => {
+    return timeoutEntries.length === 0 ? Infinity : timeoutEntries[0].deadline;
   };
 
   const removeTimeoutEntry = (request: PendingRequest): void => {
@@ -77,17 +121,16 @@ export function createMultiplexer(observability: MultiplexerObservability = {}) 
     }
 
     const last = timeoutEntries.pop();
-    if (!last) {
+    if (!last || index === timeoutEntries.length) {
       request.timeoutIndex = -1;
       return;
     }
 
-    if (index < timeoutEntries.length) {
-      timeoutEntries[index] = last;
-      last.timeoutIndex = index;
-    }
-
+    timeoutEntries[index] = last;
+    last.timeoutIndex = index;
     request.timeoutIndex = -1;
+    heapifyDown(index);
+    heapifyUp(index);
   };
 
   let requestsInFlight = 0;
@@ -121,7 +164,11 @@ export function createMultiplexer(observability: MultiplexerObservability = {}) 
     const newQueue = Array.from({ length: newCapacity }) as Array<PendingRequest | undefined>;
 
     for (let i = 0; i < queueEntry.size; i += 1) {
-      newQueue[i] = queueEntry.queue[(queueEntry.head + i) % queueEntry.queue.length];
+      const entry = queueEntry.queue[(queueEntry.head + i) % queueEntry.queue.length];
+      newQueue[i] = entry;
+      if (entry) {
+        entry.queueIndex = i;
+      }
     }
 
     queueEntry.queue = newQueue;
@@ -134,21 +181,24 @@ export function createMultiplexer(observability: MultiplexerObservability = {}) 
       growPendingQueue(queueEntry);
     }
 
+    request.queueIndex = queueEntry.tail;
     queueEntry.queue[queueEntry.tail] = request;
     queueEntry.tail = (queueEntry.tail + 1) % queueEntry.queue.length;
     queueEntry.size += 1;
   };
 
   const dequeuePendingRequest = (queueEntry: PendingQueue): PendingRequest => {
-    const request = queueEntry.queue[queueEntry.head];
-    if (!request) {
-      throw new Error("Pending queue invariant broken");
+    while (queueEntry.size > 0) {
+      const request = queueEntry.queue[queueEntry.head];
+      queueEntry.queue[queueEntry.head] = undefined;
+      queueEntry.head = (queueEntry.head + 1) % queueEntry.queue.length;
+      if (request) {
+        queueEntry.size -= 1;
+        return request;
+      }
     }
 
-    queueEntry.queue[queueEntry.head] = undefined;
-    queueEntry.head = (queueEntry.head + 1) % queueEntry.queue.length;
-    queueEntry.size -= 1;
-    return request;
+    throw new Error("Pending queue invariant broken");
   };
 
   const setConnected = (): void => {
@@ -181,15 +231,9 @@ export function createMultiplexer(observability: MultiplexerObservability = {}) 
     nextTimeoutDeadline = Infinity;
 
     const nowMs = Date.now();
-    const timedOut: PendingRequest[] = [];
 
-    for (const request of timeoutEntries) {
-      if (request.deadline <= nowMs) {
-        timedOut.push(request);
-      }
-    }
-
-    for (const request of timedOut) {
+    while (timeoutEntries.length > 0 && timeoutEntries[0].deadline <= nowMs) {
+      const request = timeoutEntries[0];
       removeTimeoutEntry(request);
       request.deadline = -1;
       meter?.counter("fitz.request.timeout", 1);
@@ -275,7 +319,7 @@ export function createMultiplexer(observability: MultiplexerObservability = {}) 
         return;
       }
 
-      unregisterRequest(messageType, deferred);
+      unregisterRequest(messageType, requestEntry);
       meter?.counter("fitz.request.failed", 1, {
         ...attributes,
         error: error.name,
@@ -294,13 +338,14 @@ export function createMultiplexer(observability: MultiplexerObservability = {}) 
       deadline: nowMs + timeoutMs,
       timeoutIndex: timeoutEntries.length,
       sentAt: nowMs,
+      queueIndex: -1,
       rejectRequest: (error: Error) => {
         if (!finalize()) {
           return;
         }
 
         removeTimeoutEntry(requestEntry);
-        unregisterRequest(messageType, deferred);
+        unregisterRequest(messageType, requestEntry);
         meter?.counter("fitz.request.failed", 1, {
           ...attributes,
           error: error.name,
@@ -329,6 +374,7 @@ export function createMultiplexer(observability: MultiplexerObservability = {}) 
     };
 
     timeoutEntries.push(requestEntry);
+    heapifyUp(requestEntry.timeoutIndex);
 
     if (signal) {
       onAbort = () => {
@@ -352,7 +398,7 @@ export function createMultiplexer(observability: MultiplexerObservability = {}) 
       () => {
         if (state !== ConnectionState.Authenticated) {
           const error = new ConnectionError("Connection closed or reset", { state });
-          unregisterRequest(messageType, deferred);
+          unregisterRequest(messageType, requestEntry);
           finalize();
           throw error;
         }
@@ -367,7 +413,7 @@ export function createMultiplexer(observability: MultiplexerObservability = {}) 
           throw err;
         }
 
-        unregisterRequest(messageType, deferred);
+        unregisterRequest(messageType, requestEntry);
         meter?.counter("fitz.request.failed", 1, {
           ...attributes,
           error: err instanceof Error ? err.name : "unknown",
@@ -385,52 +431,42 @@ export function createMultiplexer(observability: MultiplexerObservability = {}) 
     );
   };
 
-  const unregisterRequest = (messageType: number, deferred: Deferred<Uint8Array>): void => {
+  const unregisterRequest = (messageType: number, requestEntry: PendingRequest): void => {
     const queueEntry = pending[messageType];
     if (!queueEntry || queueEntry.size === 0) return;
 
-    let index = -1;
-    for (let i = 0; i < queueEntry.size; i += 1) {
-      const currentIndex = (queueEntry.head + i) % queueEntry.queue.length;
-      if (queueEntry.queue[currentIndex]?.deferred === deferred) {
-        index = currentIndex;
-        break;
-      }
-    }
-
-    if (index === -1) {
+    const index = requestEntry.queueIndex;
+    if (index < 0 || index >= queueEntry.queue.length) {
       return;
     }
 
-    if (index === queueEntry.head) {
-      queueEntry.queue[queueEntry.head] = undefined;
-      queueEntry.head = (queueEntry.head + 1) % queueEntry.queue.length;
-      queueEntry.size -= 1;
-    } else {
-      let currentIndex = index;
-      while (true) {
-        const nextIndex = (currentIndex + 1) % queueEntry.queue.length;
-        if (nextIndex === queueEntry.tail) {
-          break;
-        }
-        queueEntry.queue[currentIndex] = queueEntry.queue[nextIndex];
-        currentIndex = nextIndex;
-      }
+    if (queueEntry.queue[index] !== requestEntry) {
+      return;
+    }
 
-      const lastIndex = queueEntry.tail === 0 ? queueEntry.queue.length - 1 : queueEntry.tail - 1;
-      queueEntry.queue[lastIndex] = undefined;
-      queueEntry.tail = lastIndex;
-      queueEntry.size -= 1;
+    queueEntry.queue[index] = undefined;
+    queueEntry.size -= 1;
+
+    if (index === queueEntry.head) {
+      while (queueEntry.size > 0 && queueEntry.queue[queueEntry.head] === undefined) {
+        queueEntry.head = (queueEntry.head + 1) % queueEntry.queue.length;
+      }
+    } else {
+      const expectedTailIndex =
+        queueEntry.tail === 0 ? queueEntry.queue.length - 1 : queueEntry.tail - 1;
+      if (index === expectedTailIndex) {
+        queueEntry.tail = index;
+      }
+    }
+
+    if (queueEntry.size === 0) {
+      delete pending[messageType];
     }
 
     requestsInFlight--;
     meter?.gauge?.("fitz.requests.in_flight", requestsInFlight, {
       messageType,
     });
-
-    if (queueEntry.size === 0) {
-      delete pending[messageType];
-    }
   };
 
   const dispatch = (messageType: number, payload: Uint8Array): void => {

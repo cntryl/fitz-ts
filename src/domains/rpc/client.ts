@@ -314,7 +314,7 @@ export function createRpcClient(connection: Connection) {
     pendingRpcs.set(correlationKey, { iterator, correlationId });
 
     try {
-      const payload = RpcCodec.encodeRequest(correlationId, route, "", body);
+      const payload = RpcCodec.encodeCallRequest(correlationId, route, body);
       const response = await requestFrame(MSG_RPC_REQUEST, payload, options?.signal);
 
       const decoded = RpcCodec.decodeRequestResponse(response);
