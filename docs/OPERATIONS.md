@@ -84,7 +84,7 @@ const meter: FitzMeter = {
   },
 };
 
-const client = new Client({
+const client = Client({
   url: "ws://localhost:4090/ws",
   reconnect: { enabled: true },
   observability: {

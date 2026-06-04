@@ -15,7 +15,7 @@ npm install @cntryl/fitz
 ```typescript
 import { Client } from "@cntryl/fitz";
 
-const client = new Client({
+const client = Client({
   url: "ws://localhost:4090/ws",
   tokenProvider: async () => "your-jwt-token",
   reconnect: { enabled: true },
@@ -41,7 +41,7 @@ await client.close();
 ```typescript
 import { Client } from "@cntryl/fitz";
 
-const client = new Client({
+const client = Client({
   url: "ws://localhost:4090/ws",
   reconnect: { enabled: true },
   observability: {
