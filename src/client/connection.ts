@@ -58,15 +58,28 @@ function createAsyncHandlerDispatcher(
   onError: (error: unknown) => void,
 ) {
   let activeCount = 0;
+  let closed = false;
   const queue: Array<() => void> = [];
+  const activeTasks = new Set<Promise<void>>();
 
   const dispatch = (task: () => void | Promise<void>): void => {
+    if (closed) {
+      return;
+    }
+
     const run = () => {
+      if (closed) {
+        return;
+      }
+
       activeCount += 1;
-      void runTask(task).finally(() => {
+      const activeTask = runTask(task).finally(() => {
+        activeTasks.delete(activeTask);
         activeCount -= 1;
         flush();
       });
+      activeTasks.add(activeTask);
+      void activeTask;
     };
 
     if (activeCount < maxConcurrency) {
@@ -78,6 +91,11 @@ function createAsyncHandlerDispatcher(
   };
 
   const flush = (): void => {
+    if (closed) {
+      queue.length = 0;
+      return;
+    }
+
     if (activeCount >= maxConcurrency) {
       return;
     }
@@ -87,20 +105,41 @@ function createAsyncHandlerDispatcher(
   };
 
   const runTask = async (task: () => void | Promise<void>): Promise<void> => {
-    try {
-      await Promise.race([
-        Promise.resolve().then(task),
-        sleep(timeoutMs).then(() => {
-          throw new Error(`Async handler timeout after ${timeoutMs}ms`);
-        }),
-      ]);
-    } catch (error) {
+    let reported = false;
+    const reportOnce = (error: unknown): void => {
+      if (reported) {
+        return;
+      }
+      reported = true;
       onError(error);
+    };
+
+    const timeoutId = setTimeout(() => {
+      reportOnce(new Error(`Async handler timeout after ${timeoutMs}ms`));
+    }, timeoutMs);
+
+    try {
+      await Promise.resolve().then(task);
+    } catch (error) {
+      reportOnce(error);
+    } finally {
+      clearTimeout(timeoutId);
     }
+  };
+
+  const close = (): void => {
+    closed = true;
+    queue.length = 0;
+  };
+
+  const drain = async (): Promise<void> => {
+    await Promise.allSettled(Array.from(activeTasks));
   };
 
   return {
     dispatch,
+    close,
+    drain,
   };
 }
 
@@ -376,6 +415,8 @@ export function createConnection(
 
     closeRequested = true;
     receiveLoopAbort = true;
+    asyncHandlerDispatcher.close();
+    const scopeDisposePromise = connectionScope.dispose();
     setState(ConnectionState.Closed);
     requestGate.close();
     authOutcome?.reject(new ConnectionError("Connection closed", { state }));
@@ -396,7 +437,8 @@ export function createConnection(
     }
 
     transport = null;
-    await connectionScope.dispose();
+    await asyncHandlerDispatcher.drain();
+    await scopeDisposePromise;
   };
 
   const request = async (

@@ -715,6 +715,62 @@ describe("Connection", () => {
     vi.useRealTimers();
   });
 
+  it("keeps timed-out async handlers in the concurrency slot until they finish", async () => {
+    vi.useFakeTimers();
+    try {
+      const transport = new FakeTransport();
+      const log = vi.fn();
+      const logger: FitzLogger = { log };
+      const connection = new Connection(
+        () => transport,
+        () => "",
+        {
+          asyncHandlers: {
+            maxConcurrency: 1,
+            timeoutMs: 1000,
+          },
+          observability: {
+            logger,
+          },
+        },
+      );
+
+      let releaseFirst: () => void = () => undefined;
+      let secondStarted = false;
+      const firstGate = new Promise<void>((resolve) => {
+        releaseFirst = resolve;
+      });
+
+      connection.dispatchAsyncHandler(async () => {
+        await firstGate;
+      });
+      connection.dispatchAsyncHandler(() => {
+        secondStarted = true;
+      });
+
+      await Promise.resolve();
+      expect(secondStarted).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(1000);
+      await Promise.resolve();
+      expect(secondStarted).toBe(false);
+      expect(log).toHaveBeenCalledWith(
+        "warn",
+        "fitz.connection.handler_failed",
+        expect.objectContaining({
+          error: "Async handler timeout after 1000ms",
+        }),
+      );
+
+      releaseFirst();
+      await vi.runAllTimersAsync();
+      await Promise.resolve();
+      expect(secondStarted).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("fires disconnect listeners when close is called", async () => {
     const transport = new FakeTransport();
     const connection = new Connection(

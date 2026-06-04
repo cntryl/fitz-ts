@@ -110,6 +110,68 @@ describe("Connection lifecycle", () => {
     expect(closeResolved).toBe(true);
   });
 
+  it("should abort scope, wait for active handlers, and drop queued handlers on close", async () => {
+    const transport = new FakeTransport();
+    const connection = new Connection(
+      () => transport,
+      () => "",
+      {
+        authSettleDelayMs: 0,
+        asyncHandlers: {
+          maxConcurrency: 1,
+          timeoutMs: 10000,
+        },
+      },
+    );
+
+    await connection.connect();
+    vi.useFakeTimers();
+    try {
+      const scope = connection.getScope?.();
+
+      let releaseTask: () => void = () => undefined;
+      const firstStarted = vi.fn();
+      const queuedStarted = vi.fn();
+      const taskBlocked = new Promise<void>((resolve) => {
+        releaseTask = resolve;
+      });
+
+      connection.dispatchAsyncHandler(async () => {
+        firstStarted();
+        await taskBlocked;
+      });
+      connection.dispatchAsyncHandler(() => {
+        queuedStarted();
+      });
+
+      await Promise.resolve();
+      expect(firstStarted).toHaveBeenCalled();
+
+      let closeResolved = false;
+      const closePromise = connection.close().then(() => {
+        closeResolved = true;
+      });
+
+      await Promise.resolve();
+      expect(scope?.signal.aborted).toBe(true);
+      expect(closeResolved).toBe(false);
+      expect(queuedStarted).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(1000);
+      await Promise.resolve();
+      expect(closeResolved).toBe(false);
+      expect(queuedStarted).not.toHaveBeenCalled();
+
+      releaseTask();
+      await vi.runAllTimersAsync();
+      await closePromise;
+      expect(closeResolved).toBe(true);
+      expect(queuedStarted).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("should reject in-flight requests when connection is closed", async () => {
     const transport = new FakeTransport();
     const connection = new Connection(

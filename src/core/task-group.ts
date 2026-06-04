@@ -170,10 +170,15 @@ export function createTaskGroup(options: TaskGroupOptions) {
       throw new Error("TaskGroup has failed and cannot be restarted");
     }
 
+    const previousStatus = state.status;
     state.controller = new AbortController();
+    if (previousStatus === "stopped") {
+      state.completion = createDeferred<void>();
+    } else {
+      ensureCompletion();
+    }
     state.error = null;
     state.status = "running";
-    ensureCompletion();
 
     for (let index = 0; index < concurrency; index += 1) {
       track(runWorker(index));

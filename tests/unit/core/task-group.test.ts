@@ -134,4 +134,45 @@ describe("core TaskGroup", () => {
     expect(attempts).toBe(2);
     expect(startedCount).toBe(2);
   });
+
+  it("should create a fresh completion promise for each clean restart", async () => {
+    const releases: Array<() => void> = [];
+    let runs = 0;
+
+    const group = createTaskGroup({
+      name: "fresh-completion-group",
+      concurrency: 1,
+      run: async () => {
+        runs += 1;
+        await new Promise<void>((resolve) => {
+          releases.push(resolve);
+        });
+      },
+    });
+
+    await group.start();
+    await Promise.resolve();
+    releases.shift()?.();
+    await group.stop();
+    await group.join();
+
+    await group.start();
+    await Promise.resolve();
+    expect(runs).toBe(2);
+
+    let stopResolved = false;
+    const stopPromise = group.stop().then(() => {
+      stopResolved = true;
+    });
+
+    await Promise.resolve();
+    expect(stopResolved).toBe(false);
+
+    releases.shift()?.();
+    await stopPromise;
+    await group.join();
+
+    expect(stopResolved).toBe(true);
+    expect(group.status).toBe("stopped");
+  });
 });

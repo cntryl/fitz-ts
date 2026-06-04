@@ -10,6 +10,7 @@
 
 import { Deferred, ConnectionState, FitzMeter, FitzTracer } from "../core/types";
 import { ConnectionError, TimeoutError } from "../core/errors";
+import { MSG_RPC_REQUEST, MSG_RPC_RESPONSE } from "../frame/types";
 
 export interface MultiplexerObservability {
   meter?: FitzMeter;
@@ -332,6 +333,16 @@ export function createMultiplexer(observability: MultiplexerObservability = {}) 
   };
 
   const dispatch = (messageType: number, payload: Uint8Array): void => {
+    const handler = notificationHandlers.get(messageType);
+    if (handler && isRpcPushFrame(messageType, payload)) {
+      try {
+        handler(payload);
+      } catch {
+        // Best-effort notification dispatch.
+      }
+      return;
+    }
+
     const queueEntry = pending.get(messageType);
     if (queueEntry && queueEntry.size > 0) {
       const request = dequeuePendingRequest(queueEntry);
@@ -353,7 +364,6 @@ export function createMultiplexer(observability: MultiplexerObservability = {}) 
       return;
     }
 
-    const handler = notificationHandlers.get(messageType);
     if (handler) {
       try {
         handler(payload);
@@ -460,4 +470,82 @@ function abortError(): Error {
   const error = new Error("The operation was aborted");
   error.name = "AbortError";
   return error;
+}
+
+function isRpcPushFrame(messageType: number, payload: Uint8Array): boolean {
+  if (messageType === MSG_RPC_REQUEST) {
+    return looksLikeRpcInboundRequest(payload);
+  }
+
+  if (messageType === MSG_RPC_RESPONSE) {
+    return looksLikeRpcStreamResponse(payload);
+  }
+
+  return false;
+}
+
+function looksLikeRpcInboundRequest(payload: Uint8Array): boolean {
+  let offset = 0;
+  const correlationLength = readU32BE(payload, offset);
+  if (correlationLength !== 16) {
+    return false;
+  }
+  offset += 4 + correlationLength;
+
+  const routeLength = readU32BE(payload, offset);
+  if (routeLength === undefined) {
+    return false;
+  }
+  offset += 4 + routeLength;
+
+  const replyRouteLength = readU32BE(payload, offset);
+  if (replyRouteLength === undefined) {
+    return false;
+  }
+  offset += 4 + replyRouteLength;
+
+  const bodyLength = readU32BE(payload, offset);
+  if (bodyLength === undefined) {
+    return false;
+  }
+  offset += 4 + bodyLength;
+
+  return offset === payload.length;
+}
+
+function looksLikeRpcStreamResponse(payload: Uint8Array): boolean {
+  let offset = 0;
+  const correlationLength = readU32BE(payload, offset);
+  if (correlationLength !== 16) {
+    return false;
+  }
+  offset += 4 + correlationLength + 8;
+
+  const bodyLength = readU32BE(payload, offset);
+  if (bodyLength === undefined) {
+    return false;
+  }
+  offset += 4 + bodyLength;
+
+  if (offset >= payload.length) {
+    return false;
+  }
+
+  const streamEnd = payload[offset];
+  offset += 1;
+  return offset === payload.length && (streamEnd === 0 || streamEnd === 1);
+}
+
+function readU32BE(payload: Uint8Array, offset: number): number | undefined {
+  if (offset + 4 > payload.length) {
+    return undefined;
+  }
+
+  return (
+    ((payload[offset] << 24) |
+      (payload[offset + 1] << 16) |
+      (payload[offset + 2] << 8) |
+      payload[offset + 3]) >>>
+    0
+  );
 }

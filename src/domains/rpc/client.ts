@@ -91,14 +91,29 @@ function createRpcIterator(
 ): RpcIterator {
   const buffer: ResponseFrame[] = [];
   let done = false;
+  let failureReason: unknown;
   let resolveNext: ((frame: ResponseFrame | null) => void) | null = null;
   let rejectNext: ((reason?: unknown) => void) | null = null;
   let abortListener: (() => void) | null = null;
+  let clearPendingNext: (() => void) | null = null;
+
+  const clearPendingWait = (): void => {
+    clearPendingNext?.();
+    clearPendingNext = null;
+    detachAbortListener();
+    resolveNext = null;
+    rejectNext = null;
+  };
 
   const push = (frame: ResponseFrame): void => {
+    if (done) {
+      return;
+    }
+
     if (resolveNext) {
       const resolve = resolveNext;
       resolveNext = null;
+      rejectNext = null;
       resolve(frame);
     } else {
       buffer.push(frame);
@@ -107,29 +122,43 @@ function createRpcIterator(
 
   const end = (): void => {
     done = true;
-    detachAbortListener();
     if (resolveNext) {
       const resolve = resolveNext;
-      resolveNext = null;
-      rejectNext = null;
+      clearPendingWait();
       resolve(null);
     }
   };
 
   const fail = (reason: unknown): void => {
     done = true;
-    detachAbortListener();
+    failureReason = reason;
+    cleanupPendingRpc();
     if (rejectNext) {
       const reject = rejectNext;
-      resolveNext = null;
-      rejectNext = null;
-      reject(reason);
+      clearPendingWait();
+      const rejectWithCurrentSignalState = () => {
+        reject(signal?.aborted ? abortError() : reason);
+      };
+      if (signal) {
+        setTimeout(rejectWithCurrentSignalState, 0);
+      } else {
+        void Promise.resolve().then(rejectWithCurrentSignalState);
+      }
       return;
     }
-    cleanupPendingRpc();
   };
 
   const next = async (): Promise<IteratorResult<ResponseFrame>> => {
+    if (signal?.aborted) {
+      done = true;
+      cleanupPendingRpc();
+      throw abortError();
+    }
+
+    if (failureReason !== undefined) {
+      throw failureReason;
+    }
+
     if (buffer.length > 0) {
       const value = buffer.shift();
       if (!value) {
@@ -142,26 +171,19 @@ function createRpcIterator(
       return { value: undefined, done: true };
     }
 
-    if (signal?.aborted) {
-      done = true;
-      cleanupPendingRpc();
-      throw abortError();
-    }
-
     const frame = await new Promise<ResponseFrame | null>((resolve, reject) => {
       const timer = setTimeout(() => {
-        resolveNext = null;
-        rejectNext = null;
+        clearPendingWait();
         done = true;
-        detachAbortListener();
         cleanupPendingRpc();
         reject(new RpcError("RPC call timeout", "TIMEOUT", RpcStatus.Timeout));
       }, timeoutMs);
+      clearPendingNext = () => {
+        clearTimeout(timer);
+      };
 
       const onAbort = () => {
-        clearTimeout(timer);
-        resolveNext = null;
-        rejectNext = null;
+        clearPendingWait();
         done = true;
         cleanupPendingRpc();
         reject(abortError());
@@ -175,8 +197,7 @@ function createRpcIterator(
       }
 
       resolveNext = (f) => {
-        clearTimeout(timer);
-        detachAbortListener();
+        clearPendingWait();
         resolve(f);
       };
       rejectNext = reject;
@@ -186,12 +207,16 @@ function createRpcIterator(
       return { value: undefined, done: true };
     }
 
+    if (failureReason !== undefined) {
+      throw failureReason;
+    }
+
     return { value: frame, done: false };
   };
 
   const returnMethod = async (): Promise<IteratorResult<ResponseFrame>> => {
     done = true;
-    detachAbortListener();
+    clearPendingWait();
     cleanupPendingRpc();
     return { value: undefined, done: true };
   };
@@ -390,7 +415,13 @@ export function createRpcClient(connection: Connection) {
 
     const terminalError = RpcCodec.decodeErrorBody(body);
     if (terminalError?.code === ErrCodeRpcWorkerNotFound) {
-      pendingRpcs.delete(key);
+      iterator.fail(
+        new RpcError(
+          terminalError.message || "RPC worker not found",
+          "WORKER_NOT_FOUND",
+          terminalError.code,
+        ),
+      );
       return;
     }
 

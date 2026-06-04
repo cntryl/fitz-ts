@@ -1,7 +1,8 @@
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
 
 import { ConnectionState } from "../../../src/core/types";
-import { ConnectionError } from "../../../src/core/errors";
+import { ConnectionError, ErrCodeRpcWorkerNotFound, RpcError } from "../../../src/core/errors";
+import { BufferWriter } from "../../../src/core/buffer";
 import { MSG_RPC_REQUEST, MSG_RPC_RESPONSE } from "../../../src/frame/types";
 import { RpcClient } from "../../../src/domains/rpc/client";
 import { RpcCodec } from "../../../src/domains/rpc/codec";
@@ -164,4 +165,109 @@ describe("RpcClient", () => {
       name: "ConnectionError",
     });
   });
+
+  it("fails immediately when an RPC stream reports worker not found", async () => {
+    const connection = new FakeRpcConnection();
+    const client = new RpcClient(connection as unknown as Connection);
+
+    const iterator = await client.call("rpc://realm/area/method", new Uint8Array([1]));
+
+    const request = connection.lastRequest;
+    if (!request) {
+      throw new Error("Expected RPC request payload to be recorded");
+    }
+
+    const decoded = RpcCodec.decodeInboundRequest(request.payload);
+    const responseHandler = connection.notificationHandlers.get(MSG_RPC_RESPONSE);
+    expect(responseHandler).toBeTypeOf("function");
+
+    if (!responseHandler) {
+      throw new Error("Expected RPC response handler to be registered");
+    }
+
+    responseHandler(
+      RpcCodec.encodeResponse(decoded.correlationId, 0n, encodeWorkerNotFoundBody(), true),
+    );
+
+    await expect(iterator.next()).rejects.toBeInstanceOf(RpcError);
+    await expect(iterator.next()).rejects.toMatchObject({
+      code: "RPC_WORKER_NOT_FOUND",
+      domainCode: ErrCodeRpcWorkerNotFound,
+    });
+  });
+
+  it("clears the pending next timeout when a stream reports worker not found", async () => {
+    vi.useFakeTimers();
+    try {
+      const connection = new FakeRpcConnection();
+      const client = new RpcClient(connection as unknown as Connection);
+
+      const iterator = await client.call("rpc://realm/area/method", new Uint8Array([1]), {
+        timeoutMs: 10000,
+      });
+      const nextPromise = iterator.next();
+
+      expect(vi.getTimerCount()).toBe(1);
+
+      const request = connection.lastRequest;
+      if (!request) {
+        throw new Error("Expected RPC request payload to be recorded");
+      }
+
+      const decoded = RpcCodec.decodeInboundRequest(request.payload);
+      const responseHandler = connection.notificationHandlers.get(MSG_RPC_RESPONSE);
+      expect(responseHandler).toBeTypeOf("function");
+
+      if (!responseHandler) {
+        throw new Error("Expected RPC response handler to be registered");
+      }
+
+      responseHandler(
+        RpcCodec.encodeResponse(decoded.correlationId, 0n, encodeWorkerNotFoundBody(), true),
+      );
+
+      expect(vi.getTimerCount()).toBe(0);
+      await expect(nextPromise).rejects.toBeInstanceOf(RpcError);
+
+      await vi.advanceTimersByTimeAsync(10000);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("clears the pending next timeout when the connection disconnects", async () => {
+    vi.useFakeTimers();
+    try {
+      const connection = new FakeRpcConnection();
+      const client = new RpcClient(connection as unknown as Connection);
+
+      const iterator = await client.call("rpc://realm/area/method", new Uint8Array([1]), {
+        timeoutMs: 10000,
+      });
+      const nextPromise = iterator.next();
+
+      expect(vi.getTimerCount()).toBe(1);
+
+      connection.emitDisconnect();
+
+      expect(vi.getTimerCount()).toBe(0);
+      await expect(nextPromise).rejects.toMatchObject({
+        name: "ConnectionError",
+      });
+
+      await vi.advanceTimersByTimeAsync(10000);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
+
+function encodeWorkerNotFoundBody(): Uint8Array {
+  const writer = new BufferWriter();
+  writer.writeU8(1);
+  writer.writeU32BE(ErrCodeRpcWorkerNotFound);
+  writer.writeString("worker missing");
+  return writer.getBuffer();
+}
