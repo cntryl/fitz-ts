@@ -8,7 +8,7 @@ export const utf8Decoder = new TextDecoder();
 const routeEncodingCache = new Map<string, Uint8Array>();
 const routeEncodingCacheMaxEntries = 256;
 
-function getRouteEncoding(route: string): Uint8Array {
+export function getRouteEncoding(route: string): Uint8Array {
   const cached = routeEncodingCache.get(route);
   if (cached) {
     return cached;

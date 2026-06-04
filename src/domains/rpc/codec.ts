@@ -3,7 +3,7 @@
  * Per fitz-go/internal/domains/rpc/protocol.go
  */
 
-import { BufferWriter, BufferReader } from "../../core/buffer";
+import { BufferWriter, BufferReader, getRouteEncoding } from "../../core/buffer";
 import { ProtocolError } from "../../core/errors";
 import { SubscribeResponse, UnsubscribeResponse } from "./types";
 
@@ -38,14 +38,32 @@ export const RpcCodec = {
     replyRoute: string,
     body: Uint8Array,
   ): Uint8Array {
-    const writer = new BufferWriter(256);
-    writer.writeU32BE(correlationId.length);
-    writer.writeBytes(correlationId);
-    writer.writeRoute(route);
-    writer.writeRoute(replyRoute);
-    writer.writeU32BE(body.length);
-    writer.writeBytes(body);
-    return writer.getBufferView();
+    const routeBytes = getRouteEncoding(route);
+    const replyRouteBytes = getRouteEncoding(replyRoute);
+    const payloadLength =
+      4 + correlationId.length + routeBytes.length + replyRouteBytes.length + 4 + body.length;
+
+    const buffer = new Uint8Array(payloadLength);
+    let offset = 0;
+
+    const writeU32BE = (value: number): void => {
+      buffer[offset++] = (value >> 24) & 0xff;
+      buffer[offset++] = (value >> 16) & 0xff;
+      buffer[offset++] = (value >> 8) & 0xff;
+      buffer[offset++] = value & 0xff;
+    };
+
+    writeU32BE(correlationId.length);
+    buffer.set(correlationId, offset);
+    offset += correlationId.length;
+    buffer.set(routeBytes, offset);
+    offset += routeBytes.length;
+    buffer.set(replyRouteBytes, offset);
+    offset += replyRouteBytes.length;
+    writeU32BE(body.length);
+    buffer.set(body, offset);
+
+    return buffer;
   },
 
   /**

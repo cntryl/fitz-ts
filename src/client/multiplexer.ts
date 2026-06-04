@@ -19,8 +19,9 @@ export interface MultiplexerObservability {
 
 export interface PendingRequest {
   deferred: Deferred<Uint8Array>;
-  timeout: ReturnType<typeof setTimeout>;
+  deadline: number;
   sentAt: number | undefined;
+  rejectRequest: (error: Error) => void;
 }
 
 /**
@@ -50,10 +51,14 @@ export function createMultiplexer(observability: MultiplexerObservability = {}) 
     size: number;
   };
 
-  const pending: Map<number, PendingQueue> = new Map();
+  const pending: Record<number, PendingQueue | undefined> = {};
   const notificationHandlers: Map<number, NotificationHandler> = new Map();
   const optionalResponses: Map<number, number> = new Map();
   let state: ConnectionState = ConnectionState.Disconnected;
+
+  let timeoutEntries: PendingRequest[] = [];
+  let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+  let nextTimeoutDeadline = Infinity;
 
   let requestsInFlight = 0;
   let requestsTotal = 0;
@@ -66,7 +71,7 @@ export function createMultiplexer(observability: MultiplexerObservability = {}) 
   const hasObservability = meter !== undefined || tracer !== undefined;
 
   const getOrCreatePendingQueue = (messageType: number): PendingQueue => {
-    const existing = pending.get(messageType);
+    const existing = pending[messageType];
     if (existing) {
       return existing;
     }
@@ -77,7 +82,7 @@ export function createMultiplexer(observability: MultiplexerObservability = {}) 
       tail: 0,
       size: 0,
     };
-    pending.set(messageType, created);
+    pending[messageType] = created;
     return created;
   };
 
@@ -126,6 +131,57 @@ export function createMultiplexer(observability: MultiplexerObservability = {}) 
     cancelAll();
   };
 
+  const scheduleTimeout = (deadline: number): void => {
+    if (timeoutHandle !== undefined && deadline >= nextTimeoutDeadline) {
+      return;
+    }
+
+    if (timeoutHandle !== undefined) {
+      clearTimeout(timeoutHandle);
+      timeoutHandle = undefined;
+    }
+
+    nextTimeoutDeadline = deadline;
+    const delay = Math.max(0, deadline - Date.now());
+    timeoutHandle = setTimeout(handleTimeouts, delay);
+  };
+
+  const handleTimeouts = (): void => {
+    timeoutHandle = undefined;
+    nextTimeoutDeadline = Infinity;
+
+    const nowMs = Date.now();
+    const nextEntries: PendingRequest[] = [];
+
+    for (const request of timeoutEntries) {
+      if (request.deadline < 0) {
+        continue;
+      }
+
+      if (request.deadline <= nowMs) {
+        request.deadline = -1;
+        meter?.counter("fitz.request.timeout", 1);
+        request.rejectRequest(
+          new TimeoutError(
+            `Request timeout after ${nowMs - (request.sentAt ?? nowMs)}ms`,
+            undefined,
+          ),
+        );
+        continue;
+      }
+
+      nextEntries.push(request);
+      nextTimeoutDeadline = Math.min(nextTimeoutDeadline, request.deadline);
+    }
+
+    timeoutEntries = nextEntries;
+
+    if (nextTimeoutDeadline !== Infinity) {
+      const delay = Math.max(0, nextTimeoutDeadline - Date.now());
+      timeoutHandle = setTimeout(handleTimeouts, delay);
+    }
+  };
+
   const registerNotificationHandler = (messageType: number, handler: NotificationHandler): void => {
     notificationHandlers.set(messageType, handler);
   };
@@ -172,7 +228,6 @@ export function createMultiplexer(observability: MultiplexerObservability = {}) 
 
     const deferred = Deferred<Uint8Array>();
     let settled = false;
-    let timeout: ReturnType<typeof setTimeout>;
     let onAbort: (() => void) | undefined;
 
     const finalize = (): boolean => {
@@ -181,7 +236,7 @@ export function createMultiplexer(observability: MultiplexerObservability = {}) 
       }
 
       settled = true;
-      clearTimeout(timeout);
+      requestEntry.deadline = -1;
       if (signal && onAbort) {
         signal.removeEventListener("abort", onAbort);
       }
@@ -207,15 +262,31 @@ export function createMultiplexer(observability: MultiplexerObservability = {}) 
       deferred.reject(error);
     };
 
-    timeout = setTimeout(() => {
-      meter?.counter("fitz.request.timeout", 1, attributes);
-      failRequest(
-        new TimeoutError(`Request timeout for message type ${messageType} after ${timeoutMs}ms`, {
-          messageType,
-          timeoutMs,
-        }),
-      );
-    }, timeoutMs);
+    const requestEntry: PendingRequest = {
+      deferred,
+      deadline: Date.now() + timeoutMs,
+      sentAt: Date.now(),
+      rejectRequest: (error: Error) => {
+        if (!finalize()) {
+          return;
+        }
+
+        unregisterRequest(messageType, deferred);
+        meter?.counter("fitz.request.failed", 1, {
+          ...attributes,
+          error: error.name,
+        });
+        span?.recordException(error);
+        if (!spanEnded) {
+          span?.end();
+          spanEnded = true;
+        }
+        void deferred.promise.catch(() => undefined);
+        deferred.reject(error);
+      },
+    };
+
+    timeoutEntries.push(requestEntry);
 
     if (signal) {
       onAbort = () => {
@@ -224,11 +295,7 @@ export function createMultiplexer(observability: MultiplexerObservability = {}) 
       signal.addEventListener("abort", onAbort, { once: true });
     }
 
-    const requestEntry: PendingRequest = {
-      deferred,
-      timeout,
-      sentAt: Date.now(),
-    };
+    scheduleTimeout(requestEntry.deadline);
 
     const queue = getOrCreatePendingQueue(messageType);
     enqueuePendingRequest(queue, requestEntry);
@@ -285,7 +352,7 @@ export function createMultiplexer(observability: MultiplexerObservability = {}) 
   };
 
   const unregisterRequest = (messageType: number, deferred: Deferred<Uint8Array>): void => {
-    const queueEntry = pending.get(messageType);
+    const queueEntry = pending[messageType];
     if (!queueEntry || queueEntry.size === 0) return;
 
     let index = -1;
@@ -328,7 +395,7 @@ export function createMultiplexer(observability: MultiplexerObservability = {}) 
     });
 
     if (queueEntry.size === 0) {
-      pending.delete(messageType);
+      delete pending[messageType];
     }
   };
 
@@ -343,14 +410,14 @@ export function createMultiplexer(observability: MultiplexerObservability = {}) 
       return;
     }
 
-    const queueEntry = pending.get(messageType);
+    const queueEntry = pending[messageType];
     if (queueEntry && queueEntry.size > 0) {
       const request = dequeuePendingRequest(queueEntry);
       if (queueEntry.size === 0) {
-        pending.delete(messageType);
+        delete pending[messageType];
       }
 
-      clearTimeout(request.timeout);
+      request.deadline = -1;
       requestsInFlight--;
       responsesTotal++;
       meter?.counter("fitz.response.received", 1, {
@@ -403,14 +470,22 @@ export function createMultiplexer(observability: MultiplexerObservability = {}) 
   };
 
   const cancelAll = (): void => {
-    for (const [, queueEntry] of pending) {
+    if (timeoutHandle !== undefined) {
+      clearTimeout(timeoutHandle);
+      timeoutHandle = undefined;
+    }
+    timeoutEntries = [];
+
+    for (const queueEntry of Object.values(pending)) {
+      if (!queueEntry) {
+        continue;
+      }
       for (let i = 0; i < queueEntry.size; i += 1) {
         const index = (queueEntry.head + i) % queueEntry.queue.length;
         const request = queueEntry.queue[index];
         if (!request) {
           continue;
         }
-        clearTimeout(request.timeout);
         void request.deferred.promise.catch(() => undefined);
         void Promise.resolve().then(() =>
           request.deferred.reject(
@@ -421,7 +496,11 @@ export function createMultiplexer(observability: MultiplexerObservability = {}) 
         );
       }
     }
-    pending.clear();
+
+    for (const key in pending) {
+      delete pending[key];
+    }
+
     requestsInFlight = 0;
     meter?.gauge?.("fitz.requests.in_flight", 0);
   };
