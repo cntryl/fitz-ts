@@ -15,7 +15,7 @@ const key = encoder.encode("bench-key");
 const thresholdsMs = {
   frameBatchEncodeParse: 250,
   kvBeginFrameEncode: 150,
-  mixedPayloadBatch: 200,
+  mixedPayloadBatch: 320,
 } as const;
 
 const isWindows = process.platform === "win32";

@@ -152,35 +152,30 @@ function encodeMetadataResponse(metadata: {
   return writer.getBuffer();
 }
 
-function readBincodeU32LE(bytes: Uint8Array, offset: number): [number, number] {
+function readFilterU8(bytes: Uint8Array, offset: number): [number, number] {
+  if (offset + 1 > bytes.length) {
+    throw new Error("buffer underflow");
+  }
+
+  return [bytes[offset], offset + 1];
+}
+
+function readFilterU32BE(bytes: Uint8Array, offset: number): [number, number] {
   if (offset + 4 > bytes.length) {
     throw new Error("buffer underflow");
   }
 
   const value =
-    bytes[offset] |
-    (bytes[offset + 1] << 8) |
-    (bytes[offset + 2] << 16) |
-    (bytes[offset + 3] << 24);
+    (bytes[offset] << 24) |
+    (bytes[offset + 1] << 16) |
+    (bytes[offset + 2] << 8) |
+    bytes[offset + 3];
   return [value >>> 0, offset + 4];
 }
 
-function readBincodeU64LE(bytes: Uint8Array, offset: number): [bigint, number] {
-  if (offset + 8 > bytes.length) {
-    throw new Error("buffer underflow");
-  }
-
-  let value = 0n;
-  for (let index = 0; index < 8; index += 1) {
-    value |= BigInt(bytes[offset + index]) << BigInt(index * 8);
-  }
-
-  return [value, offset + 8];
-}
-
-function readBincodeString(bytes: Uint8Array, offset: number): [string, number] {
-  const [length, afterLength] = readBincodeU64LE(bytes, offset);
-  const end = afterLength + Number(length);
+function readFilterString(bytes: Uint8Array, offset: number): [string, number] {
+  const [length, afterLength] = readFilterU32BE(bytes, offset);
+  const end = afterLength + length;
   if (end > bytes.length) {
     throw new Error("buffer underflow");
   }
@@ -189,39 +184,45 @@ function readBincodeString(bytes: Uint8Array, offset: number): [string, number] 
 }
 
 function decodeStreamFilterSet(bytes: Uint8Array): StreamFilterSet {
-  const [count, start] = readBincodeU64LE(bytes, 0);
+  const [version0, afterVersion0] = readFilterU8(bytes, 0);
+  const [version1, afterVersion1] = readFilterU8(bytes, afterVersion0);
+  if (version0 !== 0 || version1 !== 0xf1) {
+    throw new Error("unsupported filter version");
+  }
+
+  const [count, start] = readFilterU32BE(bytes, afterVersion1);
   let offset = start;
   const clauses: StreamFilterClause[] = [];
 
-  for (let index = 0n; index < count; index += 1n) {
-    const [variant, afterVariant] = readBincodeU32LE(bytes, offset);
+  for (let index = 0; index < count; index += 1) {
+    const [variant, afterVariant] = readFilterU8(bytes, offset);
     offset = afterVariant;
 
     switch (variant) {
       case 0: {
-        const [value, afterValue] = readBincodeString(bytes, offset);
+        const [value, afterValue] = readFilterString(bytes, offset);
         offset = afterValue;
         clauses.push({ kind: "Equals", value });
         break;
       }
       case 1: {
-        const [value, afterValue] = readBincodeString(bytes, offset);
+        const [value, afterValue] = readFilterString(bytes, offset);
         offset = afterValue;
         clauses.push({ kind: "NotEquals", value });
         break;
       }
       case 2: {
-        const [value, afterValue] = readBincodeString(bytes, offset);
+        const [value, afterValue] = readFilterString(bytes, offset);
         offset = afterValue;
         clauses.push({ kind: "StartsWith", value });
         break;
       }
       case 3: {
-        const [valueCount, afterCount] = readBincodeU64LE(bytes, offset);
+        const [valueCount, afterCount] = readFilterU32BE(bytes, offset);
         offset = afterCount;
         const values: string[] = [];
-        for (let valueIndex = 0n; valueIndex < valueCount; valueIndex += 1n) {
-          const [value, afterValue] = readBincodeString(bytes, offset);
+        for (let valueIndex = 0; valueIndex < valueCount; valueIndex += 1) {
+          const [value, afterValue] = readFilterString(bytes, offset);
           offset = afterValue;
           values.push(value);
         }

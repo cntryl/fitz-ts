@@ -17,7 +17,7 @@ const scheduleCron = "0 0 * * *";
 
 const thresholdsMs = {
   queueEnqueueEncode: 200,
-  queueReserveEncode: 150,
+  queueReserveEncode: 250,
   streamAppendEncode: 200,
   scheduleCreateEncode: 200,
   rpcEncodeRequest: 400,

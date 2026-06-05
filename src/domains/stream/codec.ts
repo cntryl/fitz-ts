@@ -142,7 +142,7 @@ export const StreamCodec = {
 
   /**
    * Encode READ request
-   * Payload: [route: string][start_offset: u64][limit: u64][has_max_bytes: u8][max_bytes?: u64][has_filter: u8][filter_length?: u32][filter?: bincode]
+   * Payload: [route: string][start_offset: u64][limit: u64][has_max_bytes: u8][max_bytes?: u64][has_filter: u8][filter_length?: u32_be][filter?: custom]
    */
   encodeRead(
     route: string,
@@ -164,11 +164,11 @@ export const StreamCodec = {
     const filter = options?.filter;
     if (filter && filter.clauses.length > 0) {
       writer.writeU8(1);
-      const filterLengthOffset = writer.getLength();
-      writer.writeU32BE(0);
-      const filterStart = writer.getLength();
-      encodeStreamFilterSet(filter, writer);
-      writer.overwriteU32BE(filterLengthOffset, writer.getLength() - filterStart);
+      const filterWriter = new BufferWriter(64);
+      encodeStreamFilterSet(filter, filterWriter);
+      const filterBytes = filterWriter.getBufferView();
+      writer.writeU32BE(filterBytes.length);
+      writer.writeBytes(filterBytes);
     } else {
       writer.writeU8(0);
     }
@@ -454,7 +454,9 @@ export const StreamCodec = {
 };
 
 function encodeStreamFilterSet(filter: StreamFilterSet, writer: BufferWriter): void {
-  writer.writeU64LE(BigInt(filter.clauses.length));
+  writer.writeU8(0);
+  writer.writeU8(0xf1);
+  writer.writeU32BE(filter.clauses.length);
 
   for (const clause of filter.clauses) {
     encodeStreamFilterClause(writer, clause);
@@ -464,22 +466,22 @@ function encodeStreamFilterSet(filter: StreamFilterSet, writer: BufferWriter): v
 function encodeStreamFilterClause(writer: BufferWriter, clause: StreamFilterClause): void {
   switch (clause.kind) {
     case "Equals":
-      writer.writeU32LE(0);
-      writer.writeStringU64LE(clause.value);
+      writer.writeU8(0);
+      writer.writeString(clause.value);
       return;
     case "NotEquals":
-      writer.writeU32LE(1);
-      writer.writeStringU64LE(clause.value);
+      writer.writeU8(1);
+      writer.writeString(clause.value);
       return;
     case "StartsWith":
-      writer.writeU32LE(2);
-      writer.writeStringU64LE(clause.value);
+      writer.writeU8(2);
+      writer.writeString(clause.value);
       return;
     case "AnyOf":
-      writer.writeU32LE(3);
-      writer.writeU64LE(BigInt(clause.values.length));
+      writer.writeU8(3);
+      writer.writeU32BE(clause.values.length);
       for (const value of clause.values) {
-        writer.writeStringU64LE(value);
+        writer.writeString(value);
       }
       return;
   }

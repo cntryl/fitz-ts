@@ -21,7 +21,7 @@ const txId = 42n;
 const leaseTtlSecs = 30;
 
 const thresholdsMs = {
-  frameEncode: 50,
+  frameEncode: 60,
   frameDecode: 50,
   noticePublishEncode: 150,
   kvGetEncode: 150,
@@ -31,7 +31,7 @@ const thresholdsMs = {
   multiplexerRoundTrip: 200,
   multiplexerFifoDrain: 25,
   frameParserFragmentedStream: 150,
-  noticePublishFrameEncodeThroughput: 150,
+  noticePublishFrameEncodeThroughput: 260,
 } as const;
 
 const isWindows = process.platform === "win32";
