@@ -12,6 +12,7 @@ import {
   ConnectionState,
   Deferred,
   FitzObservability,
+  RetryOptions,
   TokenProvider,
 } from "../core/types";
 import { createScope, Scope } from "../core/lifecycle";
@@ -26,6 +27,13 @@ import {
   TransportError,
 } from "../core/errors";
 import { Multiplexer } from "./multiplexer";
+import {
+  attachResilienceMeta,
+  classifyFailureKind,
+  getResilienceMeta,
+  RetryOperation,
+  shouldRetryOperation,
+} from "./resilience";
 
 export interface ConnectionOptions {
   timeout?: number;
@@ -37,6 +45,7 @@ export interface ConnectionOptions {
     backoffMs?: number;
     maxBackoffMs?: number;
   };
+  retry?: RetryOptions;
   authSettleDelayMs?: number;
   observability?: FitzObservability;
   asyncHandlers?: AsyncHandlerOptions;
@@ -51,6 +60,35 @@ type ReconnectListener = () => void | Promise<void>;
 type DisconnectListener = () => void;
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+const sleepWithAbort = async (ms: number, signal?: AbortSignal): Promise<void> => {
+  if (signal?.aborted) {
+    throw abortError();
+  }
+
+  if (ms <= 0) {
+    return;
+  }
+
+  await new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      cleanup();
+      resolve();
+    }, ms);
+
+    const onAbort = () => {
+      cleanup();
+      reject(abortError());
+    };
+
+    const cleanup = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+    };
+
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+};
 
 function createAsyncHandlerDispatcher(
   maxConcurrency: number,
@@ -306,6 +344,10 @@ export function createConnection(
   const reconnectMaxAttempts = options.reconnect?.maxAttempts ?? Infinity;
   const reconnectBackoffMs = options.reconnect?.backoffMs ?? 250;
   const reconnectMaxBackoffMs = options.reconnect?.maxBackoffMs ?? 5000;
+  const retryEnabled = options.retry?.enabled ?? true;
+  const retryMaxAttempts = options.retry?.maxAttempts ?? 3;
+  const retryBackoffMs = options.retry?.backoffMs ?? 100;
+  const retryMaxBackoffMs = options.retry?.maxBackoffMs ?? 1000;
   const maxInFlightRequests = options.maxInFlightRequests ?? 256;
   const maxRequestQueueSize = options.maxRequestQueueSize ?? 1024;
   const observability = options.observability;
@@ -324,7 +366,12 @@ export function createConnection(
   let reconnectPromise: Promise<void> | null = null;
   let authOutcome: Deferred<void> | null = null;
   let authRejected = false;
+  let hasEstablishedSession = false;
+  let reconnectExhausted = false;
+  let readyWaiterCount = 0;
+  const closeAbortController = new AbortController();
   const connectionScope = createScope("connection");
+  const readyListeners = new Set<() => void>();
 
   const log = (
     level: "debug" | "info" | "warn" | "error",
@@ -377,6 +424,15 @@ export function createConnection(
       return;
     }
 
+    if (state !== ConnectionState.Authenticated) {
+      return;
+    }
+
+    const resilienceMeta = getResilienceMeta(error);
+    if (resilienceMeta?.boundary === "pre-send") {
+      return;
+    }
+
     if (
       error instanceof TransportError ||
       error instanceof ConnectionError ||
@@ -404,6 +460,7 @@ export function createConnection(
   const connect = async (options: ConnectOptions = {}): Promise<void> => {
     closeRequested = false;
     authRejected = false;
+    reconnectExhausted = false;
     await openAndAuthenticate(false, options.signal);
   };
 
@@ -415,6 +472,7 @@ export function createConnection(
 
     closeRequested = true;
     receiveLoopAbort = true;
+    closeAbortController.abort();
     asyncHandlerDispatcher.close();
     const scopeDisposePromise = connectionScope.dispose();
     setState(ConnectionState.Closed);
@@ -446,6 +504,13 @@ export function createConnection(
     requestPayload: Uint8Array,
     signal?: AbortSignal,
   ): Promise<Uint8Array> => {
+    let sendStarted = false;
+    const releaseReadyWaitSlot = acquireReadyWaitSlot();
+    try {
+      await waitForReady(signal, timeout);
+    } finally {
+      releaseReadyWaitSlot?.();
+    }
     ensureAuthenticated();
     const releaseRequestSlot = await requestGate.acquire(signal);
     const startedAt = Date.now();
@@ -457,11 +522,19 @@ export function createConnection(
       return await multiplexer.request(
         messageType,
         frame,
-        (data) => sendSerialized(activeTransport, data),
+        (data) => {
+          sendStarted = true;
+          return sendSerialized(activeTransport, data);
+        },
         timeout,
         signal,
       );
     } catch (error) {
+      attachResilienceMeta(error, {
+        boundary: sendStarted ? "post-send" : "pre-send",
+        failureKind: classifyFailureKind(error),
+        explicitNegative: false,
+      });
       log("error", "fitz.connection.request_failed", {
         operation: "request",
         state,
@@ -477,17 +550,34 @@ export function createConnection(
     }
   };
 
-  const send = async (messageType: number, requestPayload: Uint8Array): Promise<void> => {
+  const send = async (
+    messageType: number,
+    requestPayload: Uint8Array,
+    signal?: AbortSignal,
+  ): Promise<void> => {
+    let sendStarted = false;
+    const releaseReadyWaitSlot = acquireReadyWaitSlot();
+    try {
+      await waitForReady(signal, timeout);
+    } finally {
+      releaseReadyWaitSlot?.();
+    }
     ensureAuthenticated();
-    const releaseRequestSlot = await requestGate.acquire();
+    const releaseRequestSlot = await requestGate.acquire(signal);
     const startedAt = Date.now();
 
     try {
       const activeTransport = ensureTransport();
       const frame = FrameCodec.encodeFrame(messageType, requestPayload);
 
+      sendStarted = true;
       await sendSerialized(activeTransport, frame);
     } catch (error) {
+      attachResilienceMeta(error, {
+        boundary: sendStarted ? "post-send" : "pre-send",
+        failureKind: classifyFailureKind(error),
+        explicitNegative: false,
+      });
       log("error", "fitz.connection.send_failed", {
         operation: "send",
         state,
@@ -506,8 +596,9 @@ export function createConnection(
   const sendFireAndForget = async (
     messageType: number,
     requestPayload: Uint8Array,
+    signal?: AbortSignal,
   ): Promise<void> => {
-    await send(messageType, requestPayload);
+    await send(messageType, requestPayload, signal);
   };
 
   const registerNotificationHandler = (
@@ -548,6 +639,226 @@ export function createConnection(
   const isConnected = (): boolean => state === ConnectionState.Authenticated;
 
   const getUrl = (): string => ensureTransport().getUrl();
+
+  const canWaitForReconnect = (): boolean => {
+    return reconnectEnabled && hasEstablishedSession && !reconnectExhausted && !authRejected;
+  };
+
+  const readyFailure = (): Error | null => {
+    if (state === ConnectionState.Authenticated) {
+      return null;
+    }
+
+    if (closeRequested || state === ConnectionState.Closed) {
+      return connectionClosedError();
+    }
+
+    if (authRejected) {
+      return new AuthenticationError("Authentication rejected", { state });
+    }
+
+    if (
+      state === ConnectionState.Connecting ||
+      state === ConnectionState.Connected ||
+      state === ConnectionState.Authenticating ||
+      state === ConnectionState.Reconnecting
+    ) {
+      return null;
+    }
+
+    if (state === ConnectionState.Disconnected && canWaitForReconnect()) {
+      return null;
+    }
+
+    return new ConnectionError(`Cannot use connection while state is ${state}`, { state });
+  };
+
+  const notifyReadyListeners = (): void => {
+    for (const listener of readyListeners) {
+      listener();
+    }
+  };
+
+  const acquireReadyWaitSlot = (): (() => void) | null => {
+    const failure = readyFailure();
+    if (state === ConnectionState.Authenticated || failure) {
+      return null;
+    }
+
+    if (readyWaiterCount >= maxRequestQueueSize) {
+      throw new RequestQueueFullError();
+    }
+
+    readyWaiterCount += 1;
+    let released = false;
+
+    return () => {
+      if (released) {
+        return;
+      }
+
+      released = true;
+      readyWaiterCount = Math.max(readyWaiterCount - 1, 0);
+    };
+  };
+
+  const waitForReady = async (
+    signal?: AbortSignal,
+    waitTimeoutMs: number = timeout,
+  ): Promise<void> => {
+    throwIfAborted(signal);
+    const immediateFailure = readyFailure();
+    if (!immediateFailure) {
+      if (state === ConnectionState.Authenticated) {
+        return;
+      }
+    } else {
+      throw immediateFailure;
+    }
+
+    await new Promise<void>((resolve, reject) => {
+      let settled = false;
+      let timeoutId: ReturnType<typeof setTimeout> | null = null;
+
+      const cleanup = () => {
+        readyListeners.delete(onStateChange);
+        if (timeoutId) {
+          clearTimeout(timeoutId);
+        }
+        signal?.removeEventListener("abort", onAbort);
+      };
+
+      const settle = (cb: () => void) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        cleanup();
+        cb();
+      };
+
+      const onAbort = () => {
+        settle(() => reject(abortError()));
+      };
+
+      const onStateChange = () => {
+        const failure = readyFailure();
+        if (state === ConnectionState.Authenticated) {
+          settle(resolve);
+          return;
+        }
+
+        if (failure) {
+          settle(() => reject(failure));
+        }
+      };
+
+      readyListeners.add(onStateChange);
+      signal?.addEventListener("abort", onAbort, { once: true });
+      timeoutId = setTimeout(() => {
+        settle(() =>
+          reject(
+            new ConnectionError("Timed out waiting for connection to become ready", {
+              state,
+            }),
+          ),
+        );
+      }, waitTimeoutMs);
+
+      onStateChange();
+    });
+  };
+
+  const getRetryDelayMs = (baseDelayMs: number): number => {
+    const jitter = Math.floor(Math.random() * baseDelayMs * 0.5);
+    return Math.min(Math.max(baseDelayMs + jitter, 1), retryMaxBackoffMs);
+  };
+
+  const recordRetry = (
+    operation: RetryOperation,
+    attempt: number,
+    delayMs: number,
+    error: unknown,
+  ): void => {
+    const meta = getResilienceMeta(error);
+    const fields = {
+      domain: operation.domain,
+      operation: operation.operation,
+      attempt,
+      delayMs,
+      boundary: meta?.boundary ?? "unknown",
+      error: describeError(error),
+      ...describeErrorFields(error),
+    };
+
+    log("warn", "fitz.request.retry", fields);
+    observability?.meter?.counter("fitz.request.retry", 1, {
+      domain: operation.domain,
+      operation: operation.operation,
+      boundary: meta?.boundary ?? "unknown",
+    });
+  };
+
+  const recordRetryExhausted = (
+    operation: RetryOperation,
+    attempt: number,
+    error: unknown,
+  ): void => {
+    const meta = getResilienceMeta(error);
+    const fields = {
+      domain: operation.domain,
+      operation: operation.operation,
+      attempt,
+      boundary: meta?.boundary ?? "unknown",
+      error: describeError(error),
+      ...describeErrorFields(error),
+    };
+
+    log("warn", "fitz.request.retry_exhausted", fields);
+    observability?.meter?.counter("fitz.request.retry_exhausted", 1, {
+      domain: operation.domain,
+      operation: operation.operation,
+      boundary: meta?.boundary ?? "unknown",
+    });
+  };
+
+  const executeWithRetry = async <T>(
+    operation: RetryOperation,
+    task: () => Promise<T>,
+  ): Promise<T> => {
+    if (!retryEnabled || operation.retryClass === "wait_only") {
+      return task();
+    }
+
+    let attempt = 0;
+    let delayMs = retryBackoffMs;
+
+    while (true) {
+      attempt += 1;
+      try {
+        return await task();
+      } catch (error) {
+        if (isAbortError(error)) {
+          throw error;
+        }
+
+        const retryable = shouldRetryOperation(operation.retryClass, error);
+        if (!retryable) {
+          throw error;
+        }
+
+        if (attempt >= retryMaxAttempts) {
+          recordRetryExhausted(operation, attempt, error);
+          throw error;
+        }
+
+        const actualDelayMs = getRetryDelayMs(delayMs);
+        recordRetry(operation, attempt, actualDelayMs, error);
+        await sleepWithAbort(actualDelayMs, operation.signal);
+        delayMs = Math.min(delayMs * 2, retryMaxBackoffMs);
+      }
+    }
+  };
 
   const openAndAuthenticate = async (isReconnect: boolean, signal?: AbortSignal): Promise<void> => {
     throwIfAborted(signal);
@@ -594,6 +905,8 @@ export function createConnection(
           throw connectionClosedError();
         }
       }
+      hasEstablishedSession = true;
+      reconnectExhausted = false;
       setState(ConnectionState.Authenticated);
       multiplexer.setConnected();
       emitLifecycleEvent(isReconnect ? "reconnect_succeeded" : "connect_succeeded");
@@ -678,6 +991,7 @@ export function createConnection(
       return;
     }
 
+    reconnectExhausted = false;
     setState(ConnectionState.Disconnected);
     emitLifecycleEvent("connection_lost", error);
 
@@ -710,7 +1024,7 @@ export function createConnection(
 
       const actualDelayMs = getReconnectDelayMs(delayMs);
       try {
-        await sleep(actualDelayMs);
+        await sleepWithAbort(actualDelayMs, closeAbortController.signal);
         if (closeRequested) {
           return;
         }
@@ -718,6 +1032,9 @@ export function createConnection(
         return;
       } catch (error) {
         if (closeRequested) {
+          return;
+        }
+        if (isAbortError(error)) {
           return;
         }
         log("warn", "fitz.connection.reconnect_retry", {
@@ -735,6 +1052,7 @@ export function createConnection(
       return;
     }
 
+    reconnectExhausted = true;
     setState(ConnectionState.Disconnected);
     emitLifecycleEvent("reconnect_exhausted", undefined, attempts);
   };
@@ -769,6 +1087,7 @@ export function createConnection(
 
   const setState = (newState: ConnectionState): void => {
     state = newState;
+    notifyReadyListeners();
   };
 
   const sendSerialized = async (transport: Transport, data: Uint8Array): Promise<void> => {
@@ -826,6 +1145,7 @@ export function createConnection(
     onDisconnect,
     getMultiplexer,
     dispatchAsyncHandler,
+    executeWithRetry,
     getScope,
     getState,
     isConnected,

@@ -20,6 +20,7 @@ export type {
   TransportType,
   TokenProvider,
   ReconnectOptions,
+  RetryOptions,
 } from "./core/types";
 export { ConnectionState } from "./core/types";
 export {

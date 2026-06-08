@@ -3,6 +3,11 @@
  */
 
 import { Connection } from "../client/connection";
+import type { RetryOperation } from "../client/resilience";
+
+type ResilientConnection = Connection & {
+  executeWithRetry?: <T>(operation: RetryOperation, task: () => Promise<T>) => Promise<T>;
+};
 
 export function createDomainClient(connection: Connection) {
   const requestFrame = async (
@@ -14,9 +19,19 @@ export function createDomainClient(connection: Connection) {
   const sendFrame = async (messageType: number, payload: Uint8Array): Promise<void> =>
     connection.send(messageType, payload);
 
+  const runWithRetry = async <T>(operation: RetryOperation, task: () => Promise<T>): Promise<T> => {
+    const resilientConnection = connection as ResilientConnection;
+    if (typeof resilientConnection.executeWithRetry === "function") {
+      return resilientConnection.executeWithRetry(operation, task);
+    }
+
+    return task();
+  };
+
   return {
     connection,
     requestFrame,
     sendFrame,
+    runWithRetry,
   };
 }

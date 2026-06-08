@@ -21,7 +21,21 @@ export function createQueueItem(
   route: string,
   connection: Connection,
 ) {
+  let closed = false;
+  let unsubscribeDisconnect: () => void = () => undefined;
+  unsubscribeDisconnect = connection.onDisconnect(() => {
+    closed = true;
+    unsubscribeDisconnect();
+  });
+
+  const ensureOpen = (): void => {
+    if (closed) {
+      throw new QueueError("Queue item is no longer valid after disconnect", "ITEM_CLOSED");
+    }
+  };
+
   const extend = async (leaseSecs: number, signal?: AbortSignal): Promise<void> => {
+    ensureOpen();
     const payload = QueueCodec.encodeExtend(route, id, token, leaseSecs);
     const response = await connection.request(MSG_QUEUE_EXTEND, payload, signal);
     const decoded = QueueCodec.decodeExtendResponse(response);
@@ -35,6 +49,7 @@ export function createQueueItem(
   };
 
   const complete = async (signal?: AbortSignal): Promise<void> => {
+    ensureOpen();
     const requestPayload = QueueCodec.encodeComplete(route, id, token);
     const response = await connection.request(MSG_QUEUE_COMPLETE, requestPayload, signal);
     const decoded = QueueCodec.decodeCompleteResponse(response);
@@ -45,6 +60,9 @@ export function createQueueItem(
       const reason = decoded.errorMessage ?? statusName;
       throw new QueueError(`COMPLETE failed: ${reason}`, statusName, errorCode);
     }
+
+    closed = true;
+    unsubscribeDisconnect();
   };
 
   const testOnlyInvalidToken = (): bigint => id + 1n;
@@ -53,6 +71,7 @@ export function createQueueItem(
     tokenToUse: bigint,
     signal?: AbortSignal,
   ): Promise<void> => {
+    ensureOpen();
     const requestPayload = QueueCodec.encodeComplete(route, id, tokenToUse);
     const response = await connection.request(MSG_QUEUE_COMPLETE, requestPayload, signal);
     const decoded = QueueCodec.decodeCompleteResponse(response);
@@ -63,6 +82,9 @@ export function createQueueItem(
       const reason = decoded.errorMessage ?? statusName;
       throw new QueueError(`COMPLETE failed: ${reason}`, statusName, errorCode);
     }
+
+    closed = true;
+    unsubscribeDisconnect();
   };
 
   return {

@@ -3,6 +3,7 @@
  */
 
 import { Connection } from "../../client/connection";
+import type { RetryOperation } from "../../client/resilience";
 import { KvCodec } from "./codec";
 import { KvGetResult, KvScanOptions, KvStatus } from "./types";
 import {
@@ -22,8 +23,13 @@ export type KvTransaction = ReturnType<typeof createKvTransaction>;
 
 export function createKvTransaction(connection: Connection, route: string, txId: bigint) {
   let closed = false;
-  const unsubscribeDisconnect = connection.onDisconnect(() => {
+  const resilientConnection = connection as Connection & {
+    executeWithRetry?: <T>(operation: RetryOperation, task: () => Promise<T>) => Promise<T>;
+  };
+  let unsubscribeDisconnect: () => void = () => undefined;
+  unsubscribeDisconnect = connection.onDisconnect(() => {
     closed = true;
+    unsubscribeDisconnect();
   });
 
   const ensureOpen = (): void => {
@@ -52,6 +58,14 @@ export function createKvTransaction(connection: Connection, route: string, txId:
     );
   };
 
+  const runWithRetry = async <T>(operation: RetryOperation, task: () => Promise<T>): Promise<T> => {
+    if (typeof resilientConnection.executeWithRetry === "function") {
+      return resilientConnection.executeWithRetry(operation, task);
+    }
+
+    return task();
+  };
+
   const put = async (key: Uint8Array, value: Uint8Array, signal?: AbortSignal): Promise<void> => {
     ensureOpen();
     const payload = KvCodec.encodePut(txId, route, key, value);
@@ -72,14 +86,24 @@ export function createKvTransaction(connection: Connection, route: string, txId:
 
   const get = async (key: Uint8Array, signal?: AbortSignal): Promise<KvGetResult> => {
     ensureOpen();
-    const payload = KvCodec.encodeGet(txId, route, key);
-    const response = await connection.request(MSG_KV_GET, payload, signal);
-    const decoded = KvCodec.decodeGetResponse(response);
-    checkStatus(decoded.status, "GET");
-    if (!decoded.found || !decoded.value) {
-      return { type: "not-found" };
-    }
-    return { type: "found", value: decoded.value };
+    return runWithRetry(
+      {
+        domain: "kv",
+        operation: "get",
+        retryClass: "replayable_read",
+        signal,
+      },
+      async () => {
+        const payload = KvCodec.encodeGet(txId, route, key);
+        const response = await connection.request(MSG_KV_GET, payload, signal);
+        const decoded = KvCodec.decodeGetResponse(response);
+        checkStatus(decoded.status, "GET");
+        if (!decoded.found || !decoded.value) {
+          return { type: "not-found" };
+        }
+        return { type: "found", value: decoded.value };
+      },
+    );
   };
 
   const deleteItem = async (key: Uint8Array, signal?: AbortSignal): Promise<void> => {
@@ -105,11 +129,21 @@ export function createKvTransaction(connection: Connection, route: string, txId:
     signal?: AbortSignal,
   ): Promise<AsyncIterable<Uint8Array>> => {
     ensureOpen();
-    const payload = KvCodec.encodeScan(txId, route, options);
-    const response = await connection.request(MSG_KV_SCAN, payload, signal);
-    const decoded = KvCodec.decodeScanResponse(response);
-    checkStatus(decoded.status, "SCAN");
-    return createAsyncIterableIterator(createSliceIterator(decoded.keys));
+    return runWithRetry(
+      {
+        domain: "kv",
+        operation: "scan",
+        retryClass: "replayable_read",
+        signal,
+      },
+      async () => {
+        const payload = KvCodec.encodeScan(txId, route, options);
+        const response = await connection.request(MSG_KV_SCAN, payload, signal);
+        const decoded = KvCodec.decodeScanResponse(response);
+        checkStatus(decoded.status, "SCAN");
+        return createAsyncIterableIterator(createSliceIterator(decoded.keys));
+      },
+    );
   };
 
   const commit = async (signal?: AbortSignal): Promise<void> => {

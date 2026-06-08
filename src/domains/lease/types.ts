@@ -4,6 +4,7 @@
  */
 
 import type { Connection } from "../../client/connection";
+import { LeaseError } from "../../core/errors";
 
 /**
  * Change notification when a lease is released or expires
@@ -52,8 +53,21 @@ export function createLease(
 ) {
   let currentToken = token;
   let currentExpiry = expiresAt;
+  let closed = false;
+  let unsubscribeDisconnect: () => void = () => undefined;
+  unsubscribeDisconnect = connection.onDisconnect(() => {
+    closed = true;
+    unsubscribeDisconnect();
+  });
+
+  const ensureOpen = (): void => {
+    if (closed) {
+      throw new LeaseError("Lease handle is no longer valid after disconnect", "CLOSED");
+    }
+  };
 
   const extend = async (ttlSecs: number, signal?: AbortSignal): Promise<bigint> => {
+    ensureOpen();
     const requestPayload = LeaseCodec.encodeExtend(route, currentToken, ttlSecs);
     const response = await connection.request(MSG_LEASE_RENEW, requestPayload, signal);
     const data = assertSuccess(response, "EXTEND");
@@ -68,9 +82,12 @@ export function createLease(
   };
 
   const release = async (signal?: AbortSignal): Promise<void> => {
+    ensureOpen();
     const payload = LeaseCodec.encodeRelease(route, currentToken);
     const response = await connection.request(MSG_LEASE_RELEASE, payload, signal);
     assertSuccess(response, "RELEASE");
+    closed = true;
+    unsubscribeDisconnect();
   };
 
   const getExpiry = (): bigint => currentExpiry;
@@ -82,6 +99,7 @@ export function createLease(
     ttlSecs: number,
     signal?: AbortSignal,
   ): Promise<bigint> => {
+    ensureOpen();
     const requestPayload = LeaseCodec.encodeExtend(route, tokenToUse, ttlSecs);
     const response = await connection.request(MSG_LEASE_RENEW, requestPayload, signal);
     const data = assertSuccess(response, "EXTEND");
@@ -99,9 +117,12 @@ export function createLease(
     tokenToUse: bigint,
     signal?: AbortSignal,
   ): Promise<void> => {
+    ensureOpen();
     const payload = LeaseCodec.encodeRelease(route, tokenToUse);
     const response = await connection.request(MSG_LEASE_RELEASE, payload, signal);
     assertSuccess(response, "RELEASE");
+    closed = true;
+    unsubscribeDisconnect();
   };
 
   return {

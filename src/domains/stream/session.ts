@@ -15,8 +15,10 @@ export function createStreamSession(
   sessionId: bigint,
 ): StreamSession {
   let closed = false;
-  const unsubscribeDisconnect = connection.onDisconnect(() => {
+  let unsubscribeDisconnect: () => void = () => undefined;
+  unsubscribeDisconnect = connection.onDisconnect(() => {
     closed = true;
+    unsubscribeDisconnect();
   });
 
   const ensureOpen = (): void => {

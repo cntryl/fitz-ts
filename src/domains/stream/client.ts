@@ -44,7 +44,7 @@ type StreamSubscriptionState = {
 export type StreamClient = ReturnType<typeof createStreamClient>;
 
 export function createStreamClient(connection: Connection) {
-  const { requestFrame } = createDomainClient(connection);
+  const { requestFrame, runWithRetry } = createDomainClient(connection);
   const subscriptionsByPattern = new Map<string, StreamSubscriptionState>();
   const patternsBySubId = new Map<bigint, string>();
   let initialized = false;
@@ -94,21 +94,31 @@ export function createStreamClient(connection: Connection) {
     options?: StreamReadOptions,
   ): Promise<StreamReadPage> => {
     assertStreamPattern(route);
-    const payload = StreamCodec.encodeRead(route, startOffset, limit, options);
-    const response = await requestFrame(MSG_STREAM_READ, payload, options?.signal);
-    const decoded = StreamCodec.decodeReadResponse(response);
-
-    checkStatus(decoded.status, "READ");
-
-    return {
-      items: decoded.items,
-      cursor: decoded.cursor ?? {
-        lastResourceOffset: startOffset,
-        lastAreaOffset: undefined,
-        lastRealmOffset: undefined,
-        hasMore: false,
+    return runWithRetry(
+      {
+        domain: "stream",
+        operation: "read",
+        retryClass: "replayable_read",
+        signal: options?.signal,
       },
-    };
+      async () => {
+        const payload = StreamCodec.encodeRead(route, startOffset, limit, options);
+        const response = await requestFrame(MSG_STREAM_READ, payload, options?.signal);
+        const decoded = StreamCodec.decodeReadResponse(response);
+
+        checkStatus(decoded.status, "READ");
+
+        return {
+          items: decoded.items,
+          cursor: decoded.cursor ?? {
+            lastResourceOffset: startOffset,
+            lastAreaOffset: undefined,
+            lastRealmOffset: undefined,
+            hasMore: false,
+          },
+        };
+      },
+    );
   };
 
   const read = async (
@@ -133,29 +143,47 @@ export function createStreamClient(connection: Connection) {
 
   const peek = async (route: string): Promise<StreamRecord | null> => {
     assertStreamRoute(route);
-    const payload = StreamCodec.encodeLast(route);
-    const response = await requestFrame(MSG_STREAM_LAST, payload);
-    const decoded = StreamCodec.decodeLastResponse(response);
+    return runWithRetry(
+      {
+        domain: "stream",
+        operation: "last",
+        retryClass: "replayable_read",
+      },
+      async () => {
+        const payload = StreamCodec.encodeLast(route);
+        const response = await requestFrame(MSG_STREAM_LAST, payload);
+        const decoded = StreamCodec.decodeLastResponse(response);
 
-    checkStatus(decoded.status, "LAST");
+        checkStatus(decoded.status, "LAST");
 
-    return decoded.record ?? null;
+        return decoded.record ?? null;
+      },
+    );
   };
 
   const metadata = async (route: string): Promise<StreamMetadata> => {
     assertStreamRoute(route);
-    const payload = StreamCodec.encodeMetadata(route);
-    const response = await requestFrame(MSG_STREAM_GET_METADATA, payload);
-    const decoded = StreamCodec.decodeMetadataResponse(response);
+    return runWithRetry(
+      {
+        domain: "stream",
+        operation: "metadata",
+        retryClass: "replayable_read",
+      },
+      async () => {
+        const payload = StreamCodec.encodeMetadata(route);
+        const response = await requestFrame(MSG_STREAM_GET_METADATA, payload);
+        const decoded = StreamCodec.decodeMetadataResponse(response);
 
-    checkStatus(decoded.status, "GET_METADATA");
+        checkStatus(decoded.status, "GET_METADATA");
 
-    return (
-      decoded.metadata ?? {
-        firstOffset: 0n,
-        lastOffset: 0n,
-        recordCount: 0n,
-      }
+        return (
+          decoded.metadata ?? {
+            firstOffset: 0n,
+            lastOffset: 0n,
+            recordCount: 0n,
+          }
+        );
+      },
     );
   };
 

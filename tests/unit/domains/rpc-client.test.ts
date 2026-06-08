@@ -108,6 +108,40 @@ describe("RpcClient", () => {
     expect(connection.sendCalls[0].messageType).toBe(303);
   });
 
+  it("does not send a stale worker response after disconnect and reconnect", async () => {
+    const connection = new FakeRpcConnection();
+    const client = new RpcClient(connection as unknown as Connection);
+    const route = "rpc://realm/area/method";
+    let releaseHandler: () => void = () => undefined;
+    const handlerGate = new Promise<void>((resolve) => {
+      releaseHandler = resolve;
+    });
+
+    await client.registerWorker(route, async (_req, writer) => {
+      await handlerGate;
+      await writer.send(new Uint8Array([1]), true);
+    });
+
+    const handler = connection.notificationHandlers.get(MSG_RPC_REQUEST);
+    expect(handler).toBeTypeOf("function");
+
+    if (!handler) {
+      throw new Error("Expected RPC request handler to be registered");
+    }
+
+    handler(RpcCodec.encodeRequest(new Uint8Array(16), route, "", new Uint8Array([9])));
+
+    await Promise.resolve();
+    connection.emitDisconnect();
+    connection.setState(ConnectionState.Authenticated);
+    releaseHandler();
+
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(connection.sendCalls).toHaveLength(0);
+  });
+
   it("forwards request cancellation to the connection layer", async () => {
     const controller = new AbortController();
     controller.abort();

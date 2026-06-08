@@ -73,6 +73,24 @@ function retryableKey(error: FitzError): string | null {
   return `${prefix}_${error.domainCode}`;
 }
 
+function isTransientQueueCommitFailure(error: FitzError): boolean {
+  if (!error.code.startsWith("QUEUE_")) {
+    return false;
+  }
+
+  const message = error.message.toLowerCase();
+  if (!message.includes("failed to commit transaction:")) {
+    return false;
+  }
+
+  return (
+    message.includes("writestall(") ||
+    message.includes("memory budget exceeded") ||
+    message.includes("lease heartbeat reports unhealthy") ||
+    message.includes("refusing writes")
+  );
+}
+
 export function isRetryable(error: unknown): boolean {
   if (!(error instanceof FitzError)) {
     return false;
@@ -83,7 +101,11 @@ export function isRetryable(error: unknown): boolean {
   }
 
   const key = retryableKey(error);
-  return key !== null && retryableErrorCodes.has(key);
+  if (key !== null && retryableErrorCodes.has(key)) {
+    return true;
+  }
+
+  return isTransientQueueCommitFailure(error);
 }
 
 /**

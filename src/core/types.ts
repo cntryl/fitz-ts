@@ -56,12 +56,20 @@ export interface ReconnectOptions {
   maxBackoffMs?: number;
 }
 
+export interface RetryOptions {
+  enabled?: boolean;
+  maxAttempts?: number;
+  backoffMs?: number;
+  maxBackoffMs?: number;
+}
+
 export interface ClientConfig {
   url: string;
   tokenProvider?: TokenProvider;
   timeout?: number;
   transport?: TransportType;
   reconnect?: ReconnectOptions;
+  retry?: RetryOptions;
   maxFrameSize?: number;
   authSettleDelayMs?: number;
   maxInFlightRequests?: number;

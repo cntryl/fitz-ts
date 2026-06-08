@@ -18,7 +18,6 @@ import { Client } from "@cntryl/fitz";
 const client = Client({
   url: "ws://localhost:4090/ws",
   tokenProvider: async () => "your-jwt-token",
-  reconnect: { enabled: true },
   asyncHandlers: {
     maxConcurrency: 32,
     timeoutMs: 5000,
@@ -43,7 +42,6 @@ import { Client } from "@cntryl/fitz";
 
 const client = Client({
   url: "ws://localhost:4090/ws",
-  reconnect: { enabled: true },
   observability: {
     logger: {
       log(level, event, fields) {
@@ -58,6 +56,16 @@ const client = Client({
 ```
 
 See `docs/OPERATIONS.md` for lifecycle events, metric names, and production guidance.
+
+## Resilience Defaults
+
+- After a client has connected successfully once, transport loss automatically triggers reconnect with bounded backoff unless `reconnect.enabled` is set to `false`.
+- The initial `connect()` call is still one-shot by default. If service startup should wait out broker availability, build that loop at the application boundary.
+- Safe automatic retries are enabled by default through `ClientConfig.retry`:
+  - idempotent reads: KV `get` / `scan`, Stream `read` / `readPage` / `peek` / `metadata`, Lease `query`
+  - queue `enqueue()` only after Fitz explicitly rejects the write with a known transient commit failure
+- The client does not automatically replay KV mutations, stream writes, queue reservations or acknowledgements, lease ownership changes, RPC calls, or notice publishes after an ambiguous post-send failure.
+- `QueueItem`, `Lease`, `KvTransaction`, and `StreamSession` handles from the pre-disconnect session are stale after reconnect and must be reacquired.
 
 ## Stream Replay
 

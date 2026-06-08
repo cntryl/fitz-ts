@@ -32,7 +32,7 @@ type LeaseSubscriptionState = {
 export type LeaseClient = ReturnType<typeof createLeaseClient>;
 
 export function createLeaseClient(connection: Connection) {
-  const { requestFrame } = createDomainClient(connection);
+  const { requestFrame, runWithRetry } = createDomainClient(connection);
   const subscriptionsByPattern = new Map<string, LeaseSubscriptionState>();
   let initialized = false;
   let nextHandlerId = 1;
@@ -73,19 +73,28 @@ export function createLeaseClient(connection: Connection) {
 
   const query = async (route: string): Promise<LeaseInfo> => {
     assertExactLeaseRoute(route);
-    const payload = LeaseCodec.encodeQuery(route);
-    const response = await requestFrame(MSG_LEASE_QUERY, payload);
-    const decoded = LeaseCodec.decodeQueryResponse(response);
-    if (decoded.status !== 0) {
-      throw new LeaseError("QUERY failed", "QUERY_FAILED", decoded.status);
-    }
-    return {
-      isHeld: decoded.isHeld ?? false,
-      owner: decoded.owner,
-      token: decoded.token,
-      ttlRemainingSecs: decoded.ttlRemainingSecs,
-      expiresAt: decoded.expiresAt,
-    };
+    return runWithRetry(
+      {
+        domain: "lease",
+        operation: "query",
+        retryClass: "replayable_read",
+      },
+      async () => {
+        const payload = LeaseCodec.encodeQuery(route);
+        const response = await requestFrame(MSG_LEASE_QUERY, payload);
+        const decoded = LeaseCodec.decodeQueryResponse(response);
+        if (decoded.status !== 0) {
+          throw new LeaseError("QUERY failed", "QUERY_FAILED", decoded.status);
+        }
+        return {
+          isHeld: decoded.isHeld ?? false,
+          owner: decoded.owner,
+          token: decoded.token,
+          ttlRemainingSecs: decoded.ttlRemainingSecs,
+          expiresAt: decoded.expiresAt,
+        };
+      },
+    );
   };
 
   const subscribe = async (pattern: string, handler: ChangeHandler): Promise<LeaseSubscription> => {

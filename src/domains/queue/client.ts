@@ -3,6 +3,7 @@
  */
 
 import { createDomainClient } from "../base";
+import { attachResilienceMeta } from "../../client/resilience";
 import type { Connection } from "../../client/connection";
 import { QueueError } from "../../core/errors";
 import {
@@ -33,7 +34,7 @@ type QueueSubscriptionState = {
 export type QueueClient = ReturnType<typeof createQueueClient>;
 
 export function createQueueClient(connection: Connection) {
-  const { requestFrame } = createDomainClient(connection);
+  const { requestFrame, runWithRetry } = createDomainClient(connection);
   const subscriptionsByPattern = new Map<string, QueueSubscriptionState>();
   const patternsBySubId = new Map<bigint, string>();
   let notificationHandlerRegistered = false;
@@ -67,16 +68,25 @@ export function createQueueClient(connection: Connection) {
     options?: EnqueueOptions,
   ): Promise<bigint> => {
     assertQueueRoute(route);
-    const payload = QueueCodec.encodeEnqueue(route, body, options);
-    const response = await requestFrame(MSG_QUEUE_ENQUEUE, payload);
-    const decoded = QueueCodec.decodeEnqueueResponse(response);
-    checkStatus(decoded, "ENQUEUE");
+    return runWithRetry(
+      {
+        domain: "queue",
+        operation: "enqueue",
+        retryClass: "confirmed_negative_retry",
+      },
+      async () => {
+        const payload = QueueCodec.encodeEnqueue(route, body, options);
+        const response = await requestFrame(MSG_QUEUE_ENQUEUE, payload);
+        const decoded = QueueCodec.decodeEnqueueResponse(response);
+        checkStatus(decoded, "ENQUEUE");
 
-    if (decoded.messageId === undefined) {
-      throw new QueueError("ENQUEUE response missing messageId", "MISSING_MESSAGE_ID");
-    }
+        if (decoded.messageId === undefined) {
+          throw new QueueError("ENQUEUE response missing messageId", "MISSING_MESSAGE_ID");
+        }
 
-    return decoded.messageId;
+        return decoded.messageId;
+      },
+    );
   };
 
   const reserve = async (
@@ -294,7 +304,14 @@ export function createQueueClient(connection: Connection) {
     const statusName = statusNames[errorCode] ?? `Unknown(${errorCode})`;
     const reason = response.errorMessage ?? statusName;
 
-    throw new QueueError(`${operation} failed: ${reason}`, statusName, errorCode);
+    throw attachResilienceMeta(
+      new QueueError(`${operation} failed: ${reason}`, statusName, errorCode),
+      {
+        boundary: "post-send",
+        failureKind: "domain",
+        explicitNegative: true,
+      },
+    );
   };
 
   return {

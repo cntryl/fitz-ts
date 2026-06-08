@@ -162,11 +162,24 @@ describe("core errors", () => {
         new RpcError("route missing", "ROUTE_NOT_REGISTERED", ErrCodeRpcRouteNotRegistered),
       ),
     ).toBe(true);
+    expect(
+      isRetryable(
+        new QueueError(
+          'ENQUEUE failed: Failed to commit transaction: WriteStall("Memory budget exceeded")',
+          "ERROR",
+        ),
+      ),
+    ).toBe(true);
   });
 
   it("does not classify non-retryable domain errors as retryable", () => {
     expect(isRetryable(new KvError("missing", "KEY_NOT_FOUND", 4))).toBe(false);
     expect(isRetryable(new QueueError("invalid token", "INVALID_TOKEN", 3))).toBe(false);
+    expect(
+      isRetryable(
+        new QueueError("ENQUEUE failed: Failed to commit transaction: InvalidRoute", "ERROR"),
+      ),
+    ).toBe(false);
     expect(isRetryable(new RpcError("handler error", "HANDLER_ERROR", 3))).toBe(false);
     expect(isRetryable(new StreamError("missing", "STREAM_NOT_FOUND", 1))).toBe(false);
     expect(isRetryable(new Error("plain error"))).toBe(false);

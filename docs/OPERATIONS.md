@@ -20,7 +20,9 @@ Caller-triggered abort during `connect({ signal })` fails the attempt without
 marking the client as auth rejected. A later `connect()` attempt may be made on
 the same client instance.
 
-If reconnect is enabled, transport loss moves the client back through `RECONNECTING` and then `AUTHENTICATING`. Reconnect listeners are replayed during the reconnect authentication flow before the client reports `AUTHENTICATED`, so subscriptions and workers are restored before the connection is considered fully ready again.
+After the client has established at least one authenticated session, transport loss moves it back through `RECONNECTING` and then `AUTHENTICATING` unless `reconnect.enabled` is set to `false`. Reconnect listeners are replayed during the reconnect authentication flow before the client reports `AUTHENTICATED`, so subscriptions and workers are restored before the connection is considered fully ready again.
+
+The initial `connect()` call is still one-shot by default. If startup should keep waiting for Fitz to come back, add that outer loop in the application process manager or bootstrap code.
 
 ## Token Provider Expectations
 
@@ -112,6 +114,22 @@ Current emitted lifecycle events:
 - `reconnect_exhausted`
 - `closed`
 
+## Retry Defaults
+
+`ClientConfig.retry` is enabled by default:
+
+- `maxAttempts: 3`
+- `backoffMs: 100`
+- `maxBackoffMs: 1000`
+
+Automatic retries are deliberately narrow:
+
+- idempotent reads are retried on transient transport, connection, timeout, and retryable typed domain failures
+- `queue.enqueue()` is retried only after Fitz explicitly rejects the write with a known transient commit failure or queue backpressure response
+- all other writes and session-bound operations wait for reconnect before their first send, but are not replayed after an ambiguous post-send failure
+
+The retry classifier does not hide invalid routes, auth failures, not-found errors, invalid tokens, invalid fences, or stale transaction/session failures.
+
 Current metric names:
 
 - `fitz.connection.lifecycle`
@@ -136,6 +154,7 @@ Current metric names:
 - `close()` cancels in-flight requests, tears down the receive loop, and closes the active transport.
 - Domain clients are connection-scoped; recreate them after building a new top-level `Client`.
 - Stateful handles obtained before `close()` are no longer valid after shutdown or reconnect recovery. Treat post-close use as an application bug and reacquire fresh handles.
+- Queue inflight reservations and lease ownership state are broker-session scoped. `QueueItem` and `Lease` handles from before a disconnect now fail fast instead of waiting for a dead session to recover.
 - Pending RPC iterators fail promptly when the underlying connection closes or resets.
 
 ## Verification Workflow

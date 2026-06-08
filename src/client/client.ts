@@ -20,9 +20,9 @@ export type Client = ReturnType<typeof createClient>;
 export function createClient(config: ClientConfig) {
   const observability = config.observability;
   const resolvedConfig: Required<
-    Omit<ClientConfig, "tokenProvider" | "reconnect" | "asyncHandlers">
+    Omit<ClientConfig, "tokenProvider" | "reconnect" | "asyncHandlers" | "retry">
   > &
-    Pick<ClientConfig, "tokenProvider" | "reconnect" | "asyncHandlers"> = {
+    Pick<ClientConfig, "tokenProvider" | "reconnect" | "asyncHandlers" | "retry"> = {
     timeout: 30000,
     transport: "auto",
     maxFrameSize: 65535,
@@ -31,11 +31,18 @@ export function createClient(config: ClientConfig) {
     maxRequestQueueSize: 1024,
     observability: config.observability ?? {},
     reconnect: {
-      enabled: false,
+      enabled: true,
       maxAttempts: Infinity,
       backoffMs: 250,
       maxBackoffMs: 5000,
       ...config.reconnect,
+    },
+    retry: {
+      enabled: true,
+      maxAttempts: 3,
+      backoffMs: 100,
+      maxBackoffMs: 1000,
+      ...config.retry,
     },
     asyncHandlers: {
       maxConcurrency: Infinity,
@@ -96,6 +103,7 @@ export function createClient(config: ClientConfig) {
         maxInFlightRequests: resolvedConfig.maxInFlightRequests,
         maxRequestQueueSize: resolvedConfig.maxRequestQueueSize,
         reconnect: resolvedConfig.reconnect,
+        retry: resolvedConfig.retry,
         observability,
         asyncHandlers: resolvedConfig.asyncHandlers,
       },

@@ -38,19 +38,47 @@ type DecodedInboundRequest = {
   body: Uint8Array;
 };
 
+type ManagedResponseWriter = ResponseWriter & {
+  dispose(): void;
+};
+
 function createRpcResponseWriter(
   connection: Connection,
   correlationId: Uint8Array,
-): ResponseWriter {
+): ManagedResponseWriter {
   let sequence = 0n;
+  let stale = false;
+  let unsubscribeDisconnect: () => void = () => undefined;
+
+  const dispose = (): void => {
+    if (stale) {
+      return;
+    }
+
+    stale = true;
+    unsubscribeDisconnect();
+    unsubscribeDisconnect = () => undefined;
+  };
+
+  unsubscribeDisconnect = connection.onDisconnect(() => {
+    dispose();
+  });
 
   const send = async (body: Uint8Array, isEnd: boolean): Promise<void> => {
+    if (stale) {
+      throw new ConnectionError("RPC response writer is no longer valid");
+    }
+
     const payload = RpcCodec.encodeResponse(correlationId, sequence++, body, isEnd);
 
     try {
       await connection.send(MSG_RPC_RESPONSE, payload);
+      if (isEnd) {
+        dispose();
+      }
     } catch (error) {
       if (isBenignShutdownError(error, connection)) {
+        dispose();
         return;
       }
       throw error;
@@ -59,6 +87,7 @@ function createRpcResponseWriter(
 
   return {
     send,
+    dispose,
   };
 }
 
@@ -470,6 +499,8 @@ export function createRpcClient(connection: Connection) {
         } catch {
           // Best-effort error response.
         }
+      } finally {
+        writer.dispose();
       }
     });
   };

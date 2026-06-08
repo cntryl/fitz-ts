@@ -52,6 +52,7 @@ describe("public surface", () => {
       "TransportType",
       "TokenProvider",
       "ReconnectOptions",
+      "RetryOptions",
       "ConnectionState",
       "ErrKvTransactionAborted",
       "ErrKvLeaseExpired",
