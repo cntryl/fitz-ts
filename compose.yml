@@ -23,12 +23,15 @@ services:
       FITZ_AUTH_REQUIRED: "true"
       FITZ_JWT_HMAC_SECRET: "test-secret-key"
       FITZ_JWT_AUDIENCE: "fitz"
+      FITZ_ROUTE_FAMILIES: "1"
+      FITZ_ROUTE_FAMILY_MAP: "fitz-ts-tests=1"
       FITZ_STORAGE_MODE: "memory"
       FITZ_STORAGE_PATH: "/data"
       RUST_LOG: "info,fitz=trace"
     restart: unless-stopped
     healthcheck:
       disable: true
+
   fitz-anon:
     image: ghcr.io/cntryl/fitz:latest
     container_name: fitz-anon

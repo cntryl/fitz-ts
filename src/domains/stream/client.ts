@@ -44,7 +44,7 @@ type StreamSubscriptionState = {
 export type StreamClient = ReturnType<typeof createStreamClient>;
 
 export function createStreamClient(connection: Connection) {
-  const { requestFrame, runWithRetry } = createDomainClient(connection);
+  const { requestFrame, requestReconnectFrame, runWithRetry } = createDomainClient(connection);
   const subscriptionsByPattern = new Map<string, StreamSubscriptionState>();
   const patternsBySubId = new Map<bigint, string>();
   let initialized = false;
@@ -63,7 +63,7 @@ export function createStreamClient(connection: Connection) {
     patternsBySubId.clear();
 
     for (const subscription of snapshot) {
-      const subId = await subscribeWire(subscription.pattern);
+      const subId = await subscribeWire(subscription.pattern, requestReconnectFrame);
       subscriptionsByPattern.set(subscription.pattern, {
         subId,
         handlers: new Map(subscription.handlers),
@@ -202,9 +202,9 @@ export function createStreamClient(connection: Connection) {
     return addLocalSubscription(pattern, subId, handler);
   };
 
-  const subscribeWire = async (pattern: string): Promise<bigint> => {
+  const subscribeWire = async (pattern: string, request = requestFrame): Promise<bigint> => {
     const payload = StreamCodec.encodeSubscribe(pattern);
-    const response = await requestFrame(MSG_STREAM_SUBSCRIBE, payload);
+    const response = await request(MSG_STREAM_SUBSCRIBE, payload);
     const decoded = StreamCodec.decodeSubscribeResponse(response);
     checkStatus(decoded.status, "SUBSCRIBE");
 

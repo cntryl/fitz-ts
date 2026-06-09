@@ -1,3 +1,5 @@
+/// <reference types="node" />
+
 import { createHmac } from "node:crypto";
 
 const DEFAULT_PERMISSIONS = [
@@ -34,10 +36,7 @@ function generateTestJwt(secret: string, audience: string, expiresAtSeconds: num
       tid: "fitz-ts-tests",
       exp: expiresAtSeconds,
       iat: now,
-      fitz: {
-        route_family: 1,
-        permissions: DEFAULT_PERMISSIONS,
-      },
+      permissions: DEFAULT_PERMISSIONS,
     }),
   );
   const signature = sign(`${header}.${payload}`, secret);

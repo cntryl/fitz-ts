@@ -331,6 +331,49 @@ function isAbortError(error: unknown): boolean {
   return error instanceof Error && error.name === "AbortError";
 }
 
+const waitForSharedPromise = async <T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> => {
+  if (!signal) {
+    return promise;
+  }
+
+  if (signal.aborted) {
+    throw abortError();
+  }
+
+  return await new Promise<T>((resolve, reject) => {
+    let settled = false;
+
+    const cleanup = () => {
+      signal.removeEventListener("abort", onAbort);
+    };
+
+    const settle = (callback: () => void) => {
+      if (settled) {
+        return;
+      }
+
+      settled = true;
+      cleanup();
+      callback();
+    };
+
+    const onAbort = () => {
+      settle(() => reject(abortError()));
+    };
+
+    signal.addEventListener("abort", onAbort, { once: true });
+
+    void promise.then(
+      (value) => {
+        settle(() => resolve(value));
+      },
+      (error) => {
+        settle(() => reject(error));
+      },
+    );
+  });
+};
+
 export type Connection = ReturnType<typeof createConnection>;
 
 export function createConnection(
@@ -363,7 +406,10 @@ export function createConnection(
   let receiveLoop: Promise<void> | null = null;
   let receiveLoopAbort = false;
   let closeRequested = false;
+  let permanentlyClosed = false;
+  let connectPromise: Promise<void> | null = null;
   let reconnectPromise: Promise<void> | null = null;
+  let reconnectRestoreActive = false;
   let authOutcome: Deferred<void> | null = null;
   let authRejected = false;
   let hasEstablishedSession = false;
@@ -458,10 +504,44 @@ export function createConnection(
   );
 
   const connect = async (options: ConnectOptions = {}): Promise<void> => {
-    closeRequested = false;
+    if (permanentlyClosed || closeRequested) {
+      throw connectionClosedError();
+    }
+
+    throwIfAborted(options.signal);
+
+    if (state === ConnectionState.Authenticated) {
+      return;
+    }
+
+    if (connectPromise) {
+      await waitForSharedPromise(connectPromise, options.signal);
+      return;
+    }
+
+    if (
+      reconnectPromise ||
+      state === ConnectionState.Connecting ||
+      state === ConnectionState.Connected ||
+      state === ConnectionState.Authenticating ||
+      state === ConnectionState.Reconnecting ||
+      (state === ConnectionState.Disconnected && canWaitForReconnect())
+    ) {
+      await waitForReady(options.signal, timeout);
+      return;
+    }
+
     authRejected = false;
     reconnectExhausted = false;
-    await openAndAuthenticate(false, options.signal);
+
+    const sharedConnectPromise = openAndAuthenticate(false, options.signal).finally(() => {
+      if (connectPromise === sharedConnectPromise) {
+        connectPromise = null;
+      }
+    });
+    connectPromise = sharedConnectPromise;
+
+    await sharedConnectPromise;
   };
 
   const close = async (): Promise<void> => {
@@ -470,6 +550,7 @@ export function createConnection(
       return;
     }
 
+    permanentlyClosed = true;
     closeRequested = true;
     receiveLoopAbort = true;
     closeAbortController.abort();
@@ -499,12 +580,21 @@ export function createConnection(
     await scopeDisposePromise;
   };
 
-  const request = async (
-    messageType: number,
-    requestPayload: Uint8Array,
+  const waitForRequestReady = async (
     signal?: AbortSignal,
-  ): Promise<Uint8Array> => {
-    let sendStarted = false;
+    allowReconnectRestore: boolean = false,
+  ): Promise<void> => {
+    if (
+      allowReconnectRestore &&
+      reconnectRestoreActive &&
+      state === ConnectionState.Authenticating &&
+      !closeRequested &&
+      !authRejected &&
+      transport
+    ) {
+      return;
+    }
+
     const releaseReadyWaitSlot = acquireReadyWaitSlot();
     try {
       await waitForReady(signal, timeout);
@@ -512,6 +602,16 @@ export function createConnection(
       releaseReadyWaitSlot?.();
     }
     ensureAuthenticated();
+  };
+
+  const requestInternal = async (
+    messageType: number,
+    requestPayload: Uint8Array,
+    signal?: AbortSignal,
+    allowReconnectRestore: boolean = false,
+  ): Promise<Uint8Array> => {
+    let sendStarted = false;
+    await waitForRequestReady(signal, allowReconnectRestore);
     const releaseRequestSlot = await requestGate.acquire(signal);
     const startedAt = Date.now();
 
@@ -548,6 +648,22 @@ export function createConnection(
     } finally {
       releaseRequestSlot();
     }
+  };
+
+  const request = async (
+    messageType: number,
+    requestPayload: Uint8Array,
+    signal?: AbortSignal,
+  ): Promise<Uint8Array> => {
+    return await requestInternal(messageType, requestPayload, signal);
+  };
+
+  const requestDuringReconnectRestore = async (
+    messageType: number,
+    requestPayload: Uint8Array,
+    signal?: AbortSignal,
+  ): Promise<Uint8Array> => {
+    return await requestInternal(messageType, requestPayload, signal, true);
   };
 
   const send = async (
@@ -769,6 +885,21 @@ export function createConnection(
     });
   };
 
+  const waitUntilReady = async (
+    signal?: AbortSignal,
+    waitTimeoutMs: number = timeout,
+  ): Promise<void> => {
+    await waitForReady(signal, waitTimeoutMs);
+  };
+
+  const shouldWaitForReconnect = (): boolean => {
+    return (
+      reconnectPromise !== null ||
+      state === ConnectionState.Reconnecting ||
+      (state === ConnectionState.Disconnected && canWaitForReconnect())
+    );
+  };
+
   const getRetryDelayMs = (baseDelayMs: number): number => {
     const jitter = Math.floor(Math.random() * baseDelayMs * 0.5);
     return Math.min(Math.max(baseDelayMs + jitter, 1), retryMaxBackoffMs);
@@ -900,18 +1031,27 @@ export function createConnection(
       authOutcome?.resolve();
       authOutcome = null;
       if (isReconnect) {
-        await restoreReconnectState();
-        if (closeRequested) {
-          throw connectionClosedError();
+        multiplexer.setConnected();
+        reconnectRestoreActive = true;
+        try {
+          await restoreReconnectState();
+          if (closeRequested) {
+            throw connectionClosedError();
+          }
+        } finally {
+          reconnectRestoreActive = false;
         }
       }
       hasEstablishedSession = true;
       reconnectExhausted = false;
       setState(ConnectionState.Authenticated);
-      multiplexer.setConnected();
+      if (!isReconnect) {
+        multiplexer.setConnected();
+      }
       emitLifecycleEvent(isReconnect ? "reconnect_succeeded" : "connect_succeeded");
     } catch (error) {
       authOutcome = null;
+      reconnectRestoreActive = false;
       multiplexer.setDisconnected();
       emitDisconnect();
       if (activeTransport) {
@@ -1137,6 +1277,7 @@ export function createConnection(
     connect,
     close,
     request,
+    requestDuringReconnectRestore,
     send,
     sendFireAndForget,
     registerNotificationHandler,
@@ -1146,6 +1287,8 @@ export function createConnection(
     getMultiplexer,
     dispatchAsyncHandler,
     executeWithRetry,
+    waitUntilReady,
+    shouldWaitForReconnect,
     getScope,
     getState,
     isConnected,

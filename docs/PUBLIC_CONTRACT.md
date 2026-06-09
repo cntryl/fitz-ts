@@ -7,6 +7,10 @@ contractual.
 
 - `Client#getState()` may report: `DISCONNECTED`, `CONNECTING`, `CONNECTED`,
   `AUTHENTICATING`, `AUTHENTICATED`, `RECONNECTING`, or `CLOSED`.
+- A live `Client` owns exactly one `Connection` instance until `close()`.
+- `connect()` is idempotent on a live client. Concurrent callers coalesce onto
+  the same connect or reconnect lifecycle instead of replacing the owned
+  connection.
 - `connect({ signal })` uses `AbortSignal` as the control plane for caller
   cancellation.
 - Aborting `connect()` fails the attempt without treating the client as auth
@@ -17,6 +21,9 @@ contractual.
 
 - Automatic reconnect is enabled by default after the client has established at least one authenticated session. Set `reconnect.enabled` to `false` to disable it.
 - The initial `connect()` attempt is single-shot unless the caller explicitly retries it.
+- Calling `connect()` while the client is already connecting or reconnecting
+  waits for that in-flight lifecycle. It does not create a second transport or
+  replace cached domain clients.
 - Reconnect replays notice, queue, lease, schedule, and stream subscriptions.
 - Reconnect re-registers RPC workers before reporting `AUTHENTICATED`.
 - In-flight request or iterator work from the pre-disconnect connection is

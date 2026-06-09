@@ -285,7 +285,7 @@ export const RpcClient: RpcClientConstructor = function (connection: Connection)
 } as unknown as RpcClientConstructor;
 
 export function createRpcClient(connection: Connection) {
-  const { requestFrame } = createDomainClient(connection);
+  const { requestFrame, requestReconnectFrame } = createDomainClient(connection);
   type PendingRpcEntry = { iterator: RpcIterator; correlationId: Uint8Array };
   const pendingRpcs = new Map<bigint, PendingRpcEntry>();
   const workers = new Map<string, RpcHandler>();
@@ -319,7 +319,7 @@ export function createRpcClient(connection: Connection) {
     const registeredWorkers = Array.from(workers.entries());
     workers.clear();
     for (const [route, handler] of registeredWorkers) {
-      await registerWorker(route, handler);
+      await registerWorkerInternal(route, handler, requestReconnectFrame);
     }
   });
 
@@ -363,11 +363,13 @@ export function createRpcClient(connection: Connection) {
     }
   };
 
-  const registerWorker = async (route: string, handler: RpcHandler): Promise<RpcSubscription> => {
-    assertRpcRoute(route);
-    initRpcHandler();
+  const registerWorkerInternal = async (
+    route: string,
+    handler: RpcHandler,
+    request = requestFrame,
+  ): Promise<void> => {
     const payload = RpcCodec.encodeSubscribeWorker(route);
-    const response = await requestFrame(MSG_RPC_SUBSCRIBE_WORKER, payload);
+    const response = await request(MSG_RPC_SUBSCRIBE_WORKER, payload);
     const decoded = RpcCodec.decodeSubscribeWorkerResponse(response);
 
     if (decoded.status !== RpcStatus.Ok) {
@@ -379,6 +381,12 @@ export function createRpcClient(connection: Connection) {
     }
 
     workers.set(route, handler);
+  };
+
+  const registerWorker = async (route: string, handler: RpcHandler): Promise<RpcSubscription> => {
+    assertRpcRoute(route);
+    initRpcHandler();
+    await registerWorkerInternal(route, handler);
 
     const unsubscribeFn = async (registeredRoute: string) => {
       await unregisterWorker(registeredRoute);

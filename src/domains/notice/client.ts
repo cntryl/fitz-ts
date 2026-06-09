@@ -23,7 +23,7 @@ type NoticeSubscriptionState = {
 export type NoticeClient = ReturnType<typeof createNoticeClient>;
 
 export function createNoticeClient(connection: ConnectionType) {
-  const { requestFrame } = createDomainClient(connection);
+  const { requestFrame, requestReconnectFrame } = createDomainClient(connection);
   const subscriptionsByPattern = new Map<string, NoticeSubscriptionState>();
   const patternsBySubId = new Map<bigint, string>();
   let initialized = false;
@@ -42,7 +42,7 @@ export function createNoticeClient(connection: ConnectionType) {
     patternsBySubId.clear();
 
     for (const subscription of subscriptions) {
-      const subId = await subscribeWire(subscription.pattern);
+      const subId = await subscribeWire(subscription.pattern, requestReconnectFrame);
       subscriptionsByPattern.set(subscription.pattern, {
         subId,
         handlers: new Map(subscription.handlers),
@@ -80,9 +80,9 @@ export function createNoticeClient(connection: ConnectionType) {
     return addLocalSubscription(pattern, subId, handler);
   };
 
-  const subscribeWire = async (pattern: string): Promise<bigint> => {
+  const subscribeWire = async (pattern: string, request = requestFrame): Promise<bigint> => {
     const payload = NoticeCodec.encodeSubscribe(pattern);
-    const response = await requestFrame(MSG_NOTICE_SUBSCRIBE, payload);
+    const response = await request(MSG_NOTICE_SUBSCRIBE, payload);
     const decoded = NoticeCodec.decodeSubscribeResponse(response);
 
     if (decoded.subId === undefined) {

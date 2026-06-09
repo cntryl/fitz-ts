@@ -60,7 +60,7 @@ describe("Transport integration", () => {
       await expect(connectAttempt).rejects.toBeTruthy();
     });
 
-    it("should transition to closed and never auto-reconnect after auth rejection", async () => {
+    it("should remain disconnected and never auto-reconnect after auth rejection", async () => {
       const f = new TestFixture(transport, "invalid_signature");
 
       await expect(
@@ -75,7 +75,7 @@ describe("Transport integration", () => {
         }),
       ).rejects.toBeInstanceOf(AuthenticationError);
 
-      expect(f.client().getState()).toBe("CLOSED");
+      expect(f.client().getState()).toBe("DISCONNECTED");
       expect(f.client().isConnected()).toBe(false);
     });
   });

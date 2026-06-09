@@ -17,6 +17,66 @@ import { ScheduleClient } from "../domains/schedule/client";
 
 export type Client = ReturnType<typeof createClient>;
 
+type ManagedConnection = Connection & {
+  waitUntilReady?: (signal?: AbortSignal, waitTimeoutMs?: number) => Promise<void>;
+  shouldWaitForReconnect?: () => boolean;
+};
+
+const abortError = (): Error => {
+  const error = new Error("The operation was aborted");
+  error.name = "AbortError";
+  return error;
+};
+
+const throwIfAborted = (signal?: AbortSignal): void => {
+  if (signal?.aborted) {
+    throw abortError();
+  }
+};
+
+const waitForSharedPromise = async <T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> => {
+  if (!signal) {
+    return promise;
+  }
+
+  if (signal.aborted) {
+    throw abortError();
+  }
+
+  return await new Promise<T>((resolve, reject) => {
+    let settled = false;
+
+    const cleanup = () => {
+      signal.removeEventListener("abort", onAbort);
+    };
+
+    const settle = (callback: () => void) => {
+      if (settled) {
+        return;
+      }
+
+      settled = true;
+      cleanup();
+      callback();
+    };
+
+    const onAbort = () => {
+      settle(() => reject(abortError()));
+    };
+
+    signal.addEventListener("abort", onAbort, { once: true });
+
+    void promise.then(
+      (value) => {
+        settle(() => resolve(value));
+      },
+      (error) => {
+        settle(() => reject(error));
+      },
+    );
+  });
+};
+
 export function createClient(config: ClientConfig) {
   const observability = config.observability;
   const resolvedConfig: Required<
@@ -64,6 +124,8 @@ export function createClient(config: ClientConfig) {
   let noticeClient: NoticeClient | null = null;
   let streamClient: StreamClient | null = null;
   let scheduleClient: ScheduleClient | null = null;
+  let clientClosed = false;
+  let pendingConnectPromise: Promise<void> | null = null;
 
   const resolveTokenProvider = (): TokenProvider => {
     if (resolvedConfig.tokenProvider) {
@@ -74,6 +136,12 @@ export function createClient(config: ClientConfig) {
   };
 
   const ensureConnection = (): Connection => {
+    if (clientClosed) {
+      throw new ConnectionError("Client is closed", {
+        state: ConnectionState.Closed,
+      });
+    }
+
     if (!connection) {
       throw new ConnectionError("Not connected to Fitz server. Call connect() first.", {
         state: getState(),
@@ -83,9 +151,9 @@ export function createClient(config: ClientConfig) {
     return connection;
   };
 
-  const connect = async (options: ClientConnectOptions = {}): Promise<void> => {
-    if (connection?.isConnected()) {
-      return;
+  const createOwnedConnection = (): ManagedConnection => {
+    if (connection) {
+      return connection as ManagedConnection;
     }
 
     const tokenProvider = resolveTokenProvider();
@@ -109,13 +177,79 @@ export function createClient(config: ClientConfig) {
       },
     );
 
-    await connection.connect(options);
+    return connection as ManagedConnection;
+  };
+
+  const connect = async (options: ClientConnectOptions = {}): Promise<void> => {
+    if (clientClosed) {
+      throw new ConnectionError("Client is closed", {
+        state: ConnectionState.Closed,
+      });
+    }
+
+    throwIfAborted(options.signal);
+
+    const activeConnection = createOwnedConnection();
+
+    if (activeConnection.isConnected()) {
+      return;
+    }
+
+    if (pendingConnectPromise) {
+      await waitForSharedPromise(pendingConnectPromise, options.signal);
+      return;
+    }
+
+    const state = activeConnection.getState();
+    const shouldWait =
+      state === ConnectionState.Connecting ||
+      state === ConnectionState.Connected ||
+      state === ConnectionState.Authenticating ||
+      state === ConnectionState.Reconnecting ||
+      (state === ConnectionState.Disconnected &&
+        typeof activeConnection.shouldWaitForReconnect === "function" &&
+        activeConnection.shouldWaitForReconnect());
+
+    const sharedConnectPromise = shouldWait
+      ? typeof activeConnection.waitUntilReady === "function"
+        ? activeConnection.waitUntilReady(undefined, resolvedConfig.timeout)
+        : activeConnection.connect()
+      : activeConnection.connect(options);
+
+    const trackedConnectPromise = sharedConnectPromise.finally(() => {
+      if (pendingConnectPromise === trackedConnectPromise) {
+        pendingConnectPromise = null;
+      }
+    });
+    pendingConnectPromise = trackedConnectPromise;
+
+    await waitForSharedPromise(trackedConnectPromise, options.signal);
   };
 
   const close = async (): Promise<void> => {
+    if (clientClosed && !connection) {
+      kvClient = null;
+      queueClient = null;
+      rpcClient = null;
+      leaseClient = null;
+      noticeClient = null;
+      streamClient = null;
+      scheduleClient = null;
+      return;
+    }
+
+    clientClosed = true;
+    pendingConnectPromise = null;
+
     if (connection) {
-      await connection.close();
-      connection = null;
+      const activeConnection = connection;
+      try {
+        await activeConnection.close();
+      } finally {
+        if (connection === activeConnection) {
+          connection = null;
+        }
+      }
     }
     kvClient = null;
     queueClient = null;
@@ -127,7 +261,7 @@ export function createClient(config: ClientConfig) {
   };
 
   const isConnected = (): boolean => {
-    return connection?.isConnected() ?? false;
+    return !clientClosed && (connection?.isConnected() ?? false);
   };
 
   const kv = (): KvClient => {
@@ -191,7 +325,16 @@ export function createClient(config: ClientConfig) {
   };
 
   const getState = (): ConnectionState => {
-    return connection?.getState() ?? ConnectionState.Disconnected;
+    if (clientClosed) {
+      return ConnectionState.Closed;
+    }
+
+    if (!connection) {
+      return ConnectionState.Disconnected;
+    }
+
+    const state = connection.getState();
+    return state === ConnectionState.Closed ? ConnectionState.Disconnected : state;
   };
 
   return {

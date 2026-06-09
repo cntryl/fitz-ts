@@ -34,7 +34,7 @@ type QueueSubscriptionState = {
 export type QueueClient = ReturnType<typeof createQueueClient>;
 
 export function createQueueClient(connection: Connection) {
-  const { requestFrame, runWithRetry } = createDomainClient(connection);
+  const { requestFrame, requestReconnectFrame, runWithRetry } = createDomainClient(connection);
   const subscriptionsByPattern = new Map<string, QueueSubscriptionState>();
   const patternsBySubId = new Map<bigint, string>();
   let notificationHandlerRegistered = false;
@@ -53,7 +53,7 @@ export function createQueueClient(connection: Connection) {
     patternsBySubId.clear();
 
     for (const subscription of subscriptions) {
-      const subId = await subscribeWire(subscription.pattern);
+      const subId = await subscribeWire(subscription.pattern, requestReconnectFrame);
       subscriptionsByPattern.set(subscription.pattern, {
         subId,
         handlers: new Map(subscription.handlers),
@@ -185,9 +185,9 @@ export function createQueueClient(connection: Connection) {
     return addLocalSubscription(pattern, subId, handler);
   };
 
-  const subscribeWire = async (pattern: string): Promise<bigint> => {
+  const subscribeWire = async (pattern: string, request = requestFrame): Promise<bigint> => {
     const payload = QueueCodec.encodeSubscribe(wireWatchPattern(pattern));
-    const response = await requestFrame(MSG_QUEUE_SUBSCRIBE, payload);
+    const response = await request(MSG_QUEUE_SUBSCRIBE, payload);
     const decoded = QueueCodec.decodeSubscribeResponse(response);
     checkStatus(decoded, "SUBSCRIBE");
 

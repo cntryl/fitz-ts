@@ -8,9 +8,11 @@ import type {
   FitzSpan,
   FitzTracer,
 } from "../../../src/core/types";
+import { BufferWriter } from "../../../src/core/buffer";
 import { AuthenticationError } from "../../../src/core/errors";
+import { NoticeClient } from "../../../src/domains/notice/client";
 import { FrameCodec } from "../../../src/frame/codec";
-import { MSG_CONNECT } from "../../../src/frame/types";
+import { MSG_CONNECT, MSG_NOTICE_NOTIFY, MSG_NOTICE_SUBSCRIBE } from "../../../src/frame/types";
 import type { Transport } from "../../../src/transport/types";
 
 class FakeTransport implements Transport {
@@ -175,6 +177,24 @@ class FakeMeter implements FitzMeter {
   }
 }
 
+function encodeNoticeSubscribeResponse(subId: bigint): Uint8Array {
+  const payload = new Uint8Array(10);
+  payload[0] = 0;
+  payload[1] = 1;
+  const view = new DataView(payload.buffer);
+  view.setBigUint64(2, subId, false);
+  return payload;
+}
+
+function encodeNoticeNotification(subId: bigint, route: string, body: Uint8Array): Uint8Array {
+  const writer = new BufferWriter(128);
+  writer.writeU64BE(subId);
+  writer.writeString(route);
+  writer.writeU32BE(body.length);
+  writer.writeBytes(body);
+  return writer.getBuffer();
+}
+
 describe("Connection", () => {
   it("authenticates using the token provider and sends CONNECT first", async () => {
     const tokenProvider = vi.fn(async () => "jwt-token");
@@ -207,6 +227,57 @@ describe("Connection", () => {
 
     expect(connection.isConnected()).toBe(true);
     expect(transport.sent).toHaveLength(1);
+
+    await connection.close();
+  });
+
+  it("coalesces concurrent initial connect calls onto one transport dial", async () => {
+    const transport = new FakeTransport();
+    let releaseConnect: () => void = () => undefined;
+    transport.connectGate = new Promise<void>((resolve) => {
+      releaseConnect = resolve;
+    });
+    const factory = vi.fn<() => Transport>().mockReturnValue(transport);
+    const connection = new Connection(factory, async () => "jwt-token", {
+      authSettleDelayMs: 0,
+    });
+
+    const firstConnect = connection.connect();
+    const secondConnect = connection.connect();
+
+    expect(factory).toHaveBeenCalledTimes(1);
+    expect(transport.connectStarted).toBe(true);
+
+    releaseConnect();
+    await Promise.all([firstConnect, secondConnect]);
+
+    expect(connection.isConnected()).toBe(true);
+
+    await connection.close();
+  });
+
+  it("does not let an aborted secondary waiter cancel a shared initial connect", async () => {
+    const transport = new FakeTransport();
+    let releaseConnect: () => void = () => undefined;
+    transport.connectGate = new Promise<void>((resolve) => {
+      releaseConnect = resolve;
+    });
+    const factory = vi.fn<() => Transport>().mockReturnValue(transport);
+    const connection = new Connection(factory, async () => "jwt-token", {
+      authSettleDelayMs: 0,
+    });
+
+    const firstConnect = connection.connect();
+    const controller = new AbortController();
+    const secondConnect = connection.connect({ signal: controller.signal });
+
+    controller.abort();
+    await expect(secondConnect).rejects.toHaveProperty("name", "AbortError");
+
+    releaseConnect();
+    await expect(firstConnect).resolves.toBeUndefined();
+    expect(factory).toHaveBeenCalledTimes(1);
+    expect(connection.isConnected()).toBe(true);
 
     await connection.close();
   });
@@ -307,6 +378,119 @@ describe("Connection", () => {
     expect(second.connected).toBe(false);
     expect(connection.getState()).toBe("CLOSED");
     expect(factory).toHaveBeenCalledTimes(2);
+  });
+
+  it("waits on the active reconnect instead of starting a foreground reconnecting connect", async () => {
+    const first = new FakeTransport();
+    const second = new FakeTransport();
+    const third = new FakeTransport();
+    const factory = vi
+      .fn<() => Transport>()
+      .mockReturnValueOnce(first)
+      .mockReturnValueOnce(second)
+      .mockReturnValueOnce(third);
+    let releaseReconnectConnect: () => void = () => undefined;
+
+    second.connectGate = new Promise<void>((resolve) => {
+      releaseReconnectConnect = resolve;
+    });
+
+    const connection = new Connection(factory, async () => "jwt-token", {
+      authSettleDelayMs: 0,
+      reconnect: {
+        enabled: true,
+        maxAttempts: 1,
+        backoffMs: 0,
+        maxBackoffMs: 0,
+      },
+    });
+
+    await connection.connect();
+    first.fail(new Error("boom"));
+
+    await vi.waitFor(() => {
+      expect(second.connectStarted).toBe(true);
+      expect(connection.getState()).toBe("RECONNECTING");
+    });
+
+    const waitingConnect = connection.connect();
+    await Promise.resolve();
+
+    expect(factory).toHaveBeenCalledTimes(2);
+    expect(third.connectStarted).toBe(false);
+
+    releaseReconnectConnect();
+    await expect(waitingConnect).resolves.toBeUndefined();
+    expect(connection.isConnected()).toBe(true);
+
+    await connection.close();
+  });
+
+  it("replays reconnect listeners that issue request/response traffic before reporting authenticated", async () => {
+    const first = new FakeTransport();
+    const second = new FakeTransport();
+    const factory = vi.fn<() => Transport>().mockReturnValueOnce(first).mockReturnValueOnce(second);
+
+    const connection = new Connection(factory, async () => "", {
+      authSettleDelayMs: 0,
+      reconnect: {
+        enabled: true,
+        maxAttempts: 1,
+        backoffMs: 0,
+        maxBackoffMs: 0,
+      },
+    });
+    const notice = new NoticeClient(connection);
+    const received: string[] = [];
+
+    await connection.connect();
+
+    const subscriptionPromise = notice.subscribe("notice://realm/area/resource", async (msg) => {
+      received.push(Buffer.from(msg.body).toString());
+    });
+
+    await vi.waitFor(() => {
+      expect(first.sent).toHaveLength(2);
+      expect(FrameCodec.decodeFrame(first.sent[1]).messageType).toBe(MSG_NOTICE_SUBSCRIBE);
+    });
+    first.pushRead(FrameCodec.encodeFrame(MSG_NOTICE_SUBSCRIBE, encodeNoticeSubscribeResponse(1n)));
+
+    await subscriptionPromise;
+
+    first.fail(new Error("boom"));
+
+    await vi.waitFor(() => {
+      expect(second.connectStarted).toBe(true);
+    });
+
+    await vi.waitFor(() => {
+      expect(second.sent).toHaveLength(2);
+      expect(FrameCodec.decodeFrame(second.sent[1]).messageType).toBe(MSG_NOTICE_SUBSCRIBE);
+    });
+    second.pushRead(
+      FrameCodec.encodeFrame(MSG_NOTICE_SUBSCRIBE, encodeNoticeSubscribeResponse(2n)),
+    );
+
+    await vi.waitFor(() => {
+      expect(connection.isConnected()).toBe(true);
+    });
+
+    second.pushRead(
+      FrameCodec.encodeFrame(
+        MSG_NOTICE_NOTIFY,
+        encodeNoticeNotification(
+          2n,
+          "notice://realm/area/resource",
+          Buffer.from("after-reconnect"),
+        ),
+      ),
+    );
+
+    await vi.waitFor(() => {
+      expect(received).toEqual(["after-reconnect"]);
+    });
+
+    await connection.close();
   });
 
   it("bounds concurrent outbound requests to the configured limit", async () => {

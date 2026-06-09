@@ -32,7 +32,7 @@ type LeaseSubscriptionState = {
 export type LeaseClient = ReturnType<typeof createLeaseClient>;
 
 export function createLeaseClient(connection: Connection) {
-  const { requestFrame, runWithRetry } = createDomainClient(connection);
+  const { requestFrame, requestReconnectFrame, runWithRetry } = createDomainClient(connection);
   const subscriptionsByPattern = new Map<string, LeaseSubscriptionState>();
   let initialized = false;
   let nextHandlerId = 1;
@@ -49,7 +49,7 @@ export function createLeaseClient(connection: Connection) {
     subscriptionsByPattern.clear();
 
     for (const subscription of subscriptions) {
-      const subId = await subscribeWire(subscription.pattern);
+      const subId = await subscribeWire(subscription.pattern, requestReconnectFrame);
       subscriptionsByPattern.set(subscription.pattern, {
         subId,
         handlers: new Map(subscription.handlers),
@@ -109,9 +109,9 @@ export function createLeaseClient(connection: Connection) {
     return addLocalSubscription(pattern, subId, handler);
   };
 
-  const subscribeWire = async (pattern: string): Promise<bigint> => {
+  const subscribeWire = async (pattern: string, request = requestFrame): Promise<bigint> => {
     const payload = LeaseCodec.encodeSubscribe(pattern);
-    const response = await requestFrame(MSG_LEASE_SUBSCRIBE, payload);
+    const response = await request(MSG_LEASE_SUBSCRIBE, payload);
     const decoded = LeaseCodec.decodeSubscribeResponse(response);
 
     if (decoded.subId === undefined) {
