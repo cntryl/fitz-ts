@@ -17,6 +17,7 @@ import type { Transport } from "../../../src/transport/types";
 
 class FakeTransport implements Transport {
   public sent: Uint8Array[] = [];
+  public heartbeatCount = 0;
   public connected = false;
   public connectStarted = false;
   public connectGate: Promise<void> | null = null;
@@ -24,6 +25,7 @@ class FakeTransport implements Transport {
   public maxConcurrentSends = 0;
   public sendGate: Promise<void> | null = null;
   public gateAfterSends = 0;
+  public heartbeatMode: "resolve" | "timeout" = "resolve";
   private reads: Array<Uint8Array | Error> = [];
   private pendingRead: {
     resolve: (value: Uint8Array) => void;
@@ -71,6 +73,19 @@ class FakeTransport implements Transport {
           reject(error);
         },
       };
+    });
+  }
+
+  async sendHeartbeat(options: { timeoutMs: number }): Promise<void> {
+    this.heartbeatCount += 1;
+    if (this.heartbeatMode === "resolve") {
+      return;
+    }
+
+    await new Promise<void>((_resolve, reject) => {
+      setTimeout(() => {
+        reject(new Error(`heartbeat timeout after ${options.timeoutMs}ms`));
+      }, options.timeoutMs);
     });
   }
 
@@ -193,6 +208,12 @@ function encodeNoticeNotification(subId: bigint, route: string, body: Uint8Array
   writer.writeU32BE(body.length);
   writer.writeBytes(body);
   return writer.getBuffer();
+}
+
+async function connectWithFakeTimers(connection: Connection): Promise<void> {
+  const pendingConnect = connection.connect();
+  await vi.advanceTimersByTimeAsync(0);
+  await pendingConnect;
 }
 
 describe("Connection", () => {
@@ -847,6 +868,112 @@ describe("Connection", () => {
     await expect(pendingConnect).rejects.toMatchObject({ name: "AbortError" });
     expect(connection.isConnected()).toBe(false);
     expect(connection.getState()).toBe("DISCONNECTED");
+  });
+
+  it("sends a heartbeat after ten seconds of idle time", async () => {
+    vi.useFakeTimers();
+    try {
+      const transport = new FakeTransport();
+      const connection = new Connection(
+        () => transport,
+        () => "",
+        {
+          authSettleDelayMs: 0,
+          heartbeat: {
+            enabled: true,
+            intervalMs: 10000,
+            timeoutMs: 30000,
+          },
+        },
+      );
+
+      await connectWithFakeTimers(connection);
+      await vi.advanceTimersByTimeAsync(9999);
+      expect(transport.heartbeatCount).toBe(0);
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(transport.heartbeatCount).toBe(1);
+
+      const closing = connection.close();
+      await vi.advanceTimersByTimeAsync(1000);
+      await closing;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("skips heartbeats when application traffic was active in the window", async () => {
+    vi.useFakeTimers();
+    try {
+      const transport = new FakeTransport();
+      const connection = new Connection(
+        () => transport,
+        () => "",
+        {
+          authSettleDelayMs: 0,
+          heartbeat: {
+            enabled: true,
+            intervalMs: 10000,
+            timeoutMs: 30000,
+          },
+        },
+      );
+
+      await connectWithFakeTimers(connection);
+      await vi.advanceTimersByTimeAsync(9000);
+      await connection.send(90, new Uint8Array([1]));
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(transport.heartbeatCount).toBe(0);
+
+      await vi.advanceTimersByTimeAsync(10000);
+      expect(transport.heartbeatCount).toBe(1);
+
+      const closing = connection.close();
+      await vi.advanceTimersByTimeAsync(1000);
+      await closing;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("uses missed heartbeats as connection loss and reconnects", async () => {
+    vi.useFakeTimers();
+    try {
+      const first = new FakeTransport();
+      first.heartbeatMode = "timeout";
+      const second = new FakeTransport();
+      const factory = vi
+        .fn<() => Transport>()
+        .mockReturnValueOnce(first)
+        .mockReturnValueOnce(second);
+      const connection = new Connection(factory, () => "", {
+        authSettleDelayMs: 0,
+        heartbeat: {
+          enabled: true,
+          intervalMs: 10000,
+          timeoutMs: 30000,
+        },
+        reconnect: {
+          enabled: true,
+          maxAttempts: 1,
+          backoffMs: 0,
+          maxBackoffMs: 0,
+        },
+      });
+
+      await connectWithFakeTimers(connection);
+      await vi.advanceTimersByTimeAsync(10000);
+      expect(first.heartbeatCount).toBe(1);
+
+      await vi.advanceTimersByTimeAsync(30000);
+      await vi.waitFor(() => {
+        expect(second.connectStarted).toBe(true);
+      });
+
+      await connection.close();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("bounds async handler concurrency", async () => {

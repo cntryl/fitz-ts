@@ -24,6 +24,7 @@ import {
 import { createStreamSession } from "./session";
 import { StreamError } from "../../core/errors";
 import { createSliceIterator, createAsyncIterableIterator } from "../../core/iterator";
+import { createWakeGate } from "../../core/wake-gate";
 import {
   MSG_STREAM_BEGIN,
   MSG_STREAM_READ,
@@ -129,6 +130,53 @@ export function createStreamClient(connection: Connection) {
   ): Promise<StreamRecord[]> => {
     const page = await readPage(route, startOffset, limit, options);
     return StreamCodec.flattenStreamReadItems(page.items);
+  };
+
+  const readWhenCommitted = async function* (
+    route: string,
+    options: {
+      offset: bigint;
+      batchSize?: number;
+      signal?: AbortSignal;
+      maxBytes?: bigint;
+      filter?: StreamReadOptions["filter"];
+    },
+  ): AsyncIterable<StreamRecord[]> {
+    assertStreamPattern(route);
+
+    const wakeGate = createWakeGate();
+    const subscription = await subscribe(route, () => {
+      wakeGate.wake();
+    });
+
+    try {
+      let offset = options.offset;
+
+      while (true) {
+        const observed = wakeGate.version;
+        const page = await readPage(route, offset, options.batchSize ?? 100, {
+          maxBytes: options.maxBytes,
+          filter: options.filter,
+          signal: options.signal,
+        });
+
+        if (page.items.length > 0) {
+          offset = page.cursor.lastResourceOffset + 1n;
+          const records = StreamCodec.flattenStreamReadItems(page.items);
+          if (records.length > 0) {
+            yield records;
+          }
+        }
+
+        if (page.cursor.hasMore) {
+          continue;
+        }
+
+        await wakeGate.waitAfter(observed, { signal: options.signal });
+      }
+    } finally {
+      await subscription.unsubscribe().catch(() => undefined);
+    }
   };
 
   const consume = async (
@@ -339,6 +387,7 @@ export function createStreamClient(connection: Connection) {
     begin,
     readPage,
     read,
+    readWhenCommitted,
     consume,
     peek,
     metadata,

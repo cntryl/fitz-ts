@@ -63,6 +63,12 @@ export interface RetryOptions {
   maxBackoffMs?: number;
 }
 
+export interface HeartbeatOptions {
+  enabled?: boolean;
+  intervalMs?: number;
+  timeoutMs?: number;
+}
+
 export interface ClientConfig {
   url: string;
   tokenProvider?: TokenProvider;
@@ -70,6 +76,7 @@ export interface ClientConfig {
   transport?: TransportType;
   reconnect?: ReconnectOptions;
   retry?: RetryOptions;
+  heartbeat?: HeartbeatOptions;
   maxFrameSize?: number;
   authSettleDelayMs?: number;
   maxInFlightRequests?: number;

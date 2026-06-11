@@ -61,11 +61,25 @@ See `docs/OPERATIONS.md` for lifecycle events, metric names, and production guid
 
 - After a client has connected successfully once, transport loss automatically triggers reconnect with bounded backoff unless `reconnect.enabled` is set to `false`.
 - The initial `connect()` call is still one-shot by default. If service startup should wait out broker availability, build that loop at the application boundary.
+- Idle subscription clients stay connected by default: `heartbeat.enabled` defaults to `true`, `heartbeat.intervalMs` defaults to `10000`, and `heartbeat.timeoutMs` defaults to `30000`.
+- Heartbeats noop when the client was active within the current interval. Node WebSocket uses native ping/pong when available, TCP enables socket keepalive, and browser WebSocket relies on close/error plus receive-timeout suppression.
 - Safe automatic retries are enabled by default through `ClientConfig.retry`:
   - idempotent reads: KV `get` / `scan`, Stream `read` / `readPage` / `peek` / `metadata`, Lease `query`
   - queue `enqueue()` only after Fitz explicitly rejects the write with a known transient commit failure
 - The client does not automatically replay KV mutations, stream writes, queue reservations or acknowledgements, lease ownership changes, RPC calls, or notice publishes after an ambiguous post-send failure.
 - `QueueItem`, `Lease`, `KvTransaction`, and `StreamSession` handles from the pre-disconnect session are stale after reconnect and must be reacquired.
+
+## Wake Gates
+
+`createWakeGate()` exposes the low-level wake primitive used by the client helpers. It is useful whenever a notification wakes the loop and the loop then performs the authoritative read or claim.
+
+Subscription-driven helpers built on the gate:
+
+- `queue.reserveWhenAvailable(route, { leaseSeconds, batchSize, signal })`
+- `stream.readWhenCommitted(route, { offset, batchSize, maxBytes, filter, signal })`
+- `schedule.waitForNotifications(route, { signal })`
+
+Queue and stream subscriptions are wake signals, not work handlers. The authoritative work step remains `reserve()` or `read()`.
 
 ## Stream Replay
 

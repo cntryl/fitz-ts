@@ -32,6 +32,30 @@ swap out cached domain clients, or replace the owned connection object.
 
 The initial `connect()` call is still one-shot by default. If startup should keep waiting for Fitz to come back, add that outer loop in the application process manager or bootstrap code.
 
+## Heartbeats
+
+Idle subscription clients stay connected by default. `heartbeat.enabled` defaults to `true`, `heartbeat.intervalMs` defaults to `10000`, and `heartbeat.timeoutMs` defaults to `30000`.
+
+The heartbeat loop only sends when the client has not seen application traffic within the current interval. That means a busy client stays quiet, while an idle subscribed client keeps its transport alive.
+
+Transport behavior is capability-aware:
+
+- Node WebSocket uses native ping/pong when available
+- TCP enables socket keepalive and suppresses receive-idle disconnects while heartbeat is on
+- browser WebSocket suppresses receive-idle disconnects and relies on close/error for liveness
+
+## Wake Gates
+
+`createWakeGate()` is the primitive for the safe pattern “notification wakes the loop, then the loop performs the authoritative read or claim.”
+
+Use it to avoid lost wakes in subscription-driven consumers:
+
+- queue availability wakes the worker, then `reserve()` claims work
+- stream commit wakes the reader, then `read()` reads records
+- schedule notifications can be consumed directly with `schedule.waitForNotifications()`
+
+Queue and stream callbacks are wake signals only. Do not treat the callback as the work handler unless the domain explicitly says the callback is the source of truth.
+
 ## Token Provider Expectations
 
 - `tokenProvider` may be sync or async.

@@ -80,9 +80,9 @@ const waitForSharedPromise = async <T>(promise: Promise<T>, signal?: AbortSignal
 export function createClient(config: ClientConfig) {
   const observability = config.observability;
   const resolvedConfig: Required<
-    Omit<ClientConfig, "tokenProvider" | "reconnect" | "asyncHandlers" | "retry">
+    Omit<ClientConfig, "tokenProvider" | "reconnect" | "asyncHandlers" | "retry" | "heartbeat">
   > &
-    Pick<ClientConfig, "tokenProvider" | "reconnect" | "asyncHandlers" | "retry"> = {
+    Pick<ClientConfig, "tokenProvider" | "reconnect" | "asyncHandlers" | "retry" | "heartbeat"> = {
     timeout: 30000,
     transport: "auto",
     maxFrameSize: 65535,
@@ -103,6 +103,12 @@ export function createClient(config: ClientConfig) {
       backoffMs: 100,
       maxBackoffMs: 1000,
       ...config.retry,
+    },
+    heartbeat: {
+      enabled: true,
+      intervalMs: 10000,
+      timeoutMs: 30000,
+      ...config.heartbeat,
     },
     asyncHandlers: {
       maxConcurrency: Infinity,
@@ -163,6 +169,7 @@ export function createClient(config: ClientConfig) {
         createTransport(resolvedConfig.url, resolvedConfig.transport, {
           timeout: resolvedConfig.timeout,
           maxFrameSize: resolvedConfig.maxFrameSize,
+          receiveTimeout: resolvedConfig.heartbeat?.enabled === false,
         }),
       tokenProvider,
       {
@@ -172,6 +179,7 @@ export function createClient(config: ClientConfig) {
         maxRequestQueueSize: resolvedConfig.maxRequestQueueSize,
         reconnect: resolvedConfig.reconnect,
         retry: resolvedConfig.retry,
+        heartbeat: resolvedConfig.heartbeat,
         observability,
         asyncHandlers: resolvedConfig.asyncHandlers,
       },

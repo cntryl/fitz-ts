@@ -24,6 +24,7 @@ type TcpSocket = {
   write(data: Uint8Array, callback: (err?: Error | null) => void): void;
   setNoDelay(noDelay?: boolean): void;
   setTimeout(timeout: number): void;
+  setKeepAlive(enable?: boolean, initialDelay?: number): void;
   end(): void;
   destroy(error?: Error): void;
 };
@@ -59,6 +60,7 @@ export function createTcpTransport(url: string, options: TransportOptions = {}):
   let receiverResolve: ((data: Uint8Array) => void) | null = null;
   const timeout = options.timeout ?? 30000;
   const maxFrameSize = options.maxFrameSize ?? 65535;
+  const receiveTimeoutEnabled = options.receiveTimeout ?? true;
   let lengthBuffer = new Uint8Array(4);
   let lengthOffset = 0;
   let currentMessageLength: number | null = null;
@@ -154,7 +156,7 @@ export function createTcpTransport(url: string, options: TransportOptions = {}):
           clearTimeout(connectTimeout);
           connected = true;
           activeSocket.setNoDelay(true);
-          activeSocket.setTimeout(timeout);
+          activeSocket.setTimeout(receiveTimeoutEnabled ? timeout : 0);
           resolve();
         });
 
@@ -180,8 +182,10 @@ export function createTcpTransport(url: string, options: TransportOptions = {}):
         });
 
         activeSocket.on("timeout", () => {
-          activeSocket.destroy();
-          connected = false;
+          if (receiveTimeoutEnabled) {
+            activeSocket.destroy();
+            connected = false;
+          }
         });
       } catch (err) {
         reject(
@@ -222,6 +226,12 @@ export function createTcpTransport(url: string, options: TransportOptions = {}):
     });
   };
 
+  const enableKeepAlive = (intervalMs: number): void => {
+    socket?.setKeepAlive(true, intervalMs);
+  };
+
+  const supportsHeartbeat = (): boolean => false;
+
   const receive = async (): Promise<Uint8Array> => {
     if (receiveQueue.length > 0) {
       const message = receiveQueue.shift();
@@ -232,13 +242,17 @@ export function createTcpTransport(url: string, options: TransportOptions = {}):
     }
 
     return new Promise((resolve, reject) => {
-      const timeoutId = setTimeout(() => {
-        receiverResolve = null;
-        reject(new TimeoutError(`TCP receive timeout after ${timeout}ms`));
-      }, timeout);
+      const timeoutId = receiveTimeoutEnabled
+        ? setTimeout(() => {
+            receiverResolve = null;
+            reject(new TimeoutError(`TCP receive timeout after ${timeout}ms`));
+          }, timeout)
+        : null;
 
       receiverResolve = (data: Uint8Array) => {
-        clearTimeout(timeoutId);
+        if (timeoutId) {
+          clearTimeout(timeoutId);
+        }
         receiverResolve = null;
         if (data.length === 0) {
           reject(new TransportError("Connection closed"));
@@ -279,6 +293,8 @@ export function createTcpTransport(url: string, options: TransportOptions = {}):
     connect,
     send,
     receive,
+    supportsHeartbeat,
+    enableKeepAlive,
     close,
     getUrl,
     isConnected,

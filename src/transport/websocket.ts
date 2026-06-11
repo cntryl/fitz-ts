@@ -21,6 +21,9 @@ type WebSocketLike = {
   onmessage: ((event: WebSocketMessageEvent) => void) | null;
   onerror: ((event: { message?: string }) => void) | null;
   onclose: (() => void) | null;
+  ping?(data?: Uint8Array, mask?: boolean, callback?: (err?: Error) => void): void;
+  once?(event: "pong" | "close" | "error", listener: (...args: unknown[]) => void): void;
+  removeListener?(event: "pong" | "close" | "error", listener: (...args: unknown[]) => void): void;
   send(data: Uint8Array, callback?: (err?: Error) => void): void;
   close(code?: number, reason?: string): void;
   terminate?(): void;
@@ -73,6 +76,7 @@ export function createWebSocketTransport(url: string, options: TransportOptions 
   let receiverResolve: ((data: Uint8Array | null) => void) | null = null;
   const timeout = options.timeout ?? 30000;
   const maxFrameSize = options.maxFrameSize ?? 65535;
+  const receiveTimeoutEnabled = options.receiveTimeout ?? true;
 
   const enqueueMessage = (data: Uint8Array) => {
     if (receiverResolve) {
@@ -184,6 +188,100 @@ export function createWebSocketTransport(url: string, options: TransportOptions 
     });
   };
 
+  const sendHeartbeat = async (heartbeatOptions: { timeoutMs: number }): Promise<void> => {
+    if (!connected || !ws) {
+      throw new TransportError("WebSocket is not connected");
+    }
+
+    const activeWs = ws;
+
+    if (
+      typeof activeWs.ping !== "function" ||
+      typeof activeWs.once !== "function" ||
+      typeof activeWs.removeListener !== "function"
+    ) {
+      throw new TransportError("WebSocket heartbeat is not supported");
+    }
+
+    const socket = activeWs as unknown as WebSocketLike &
+      Required<Pick<WebSocketLike, "ping" | "once" | "removeListener">>;
+
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      let timeoutId: ReturnType<typeof setTimeout> | null = null;
+
+      const cleanup = () => {
+        if (timeoutId) {
+          clearTimeout(timeoutId);
+        }
+        socket.removeListener("pong", onPong);
+        socket.removeListener("close", onClose);
+        socket.removeListener("error", onError);
+      };
+
+      const settle = (callback: () => void) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        cleanup();
+        callback();
+      };
+
+      const onPong = () => {
+        settle(resolve);
+      };
+
+      const onClose = () => {
+        settle(() => reject(new TransportError("WebSocket closed during heartbeat")));
+      };
+
+      const onError = (...args: unknown[]) => {
+        const event = args[0] as { message?: string } | Error | undefined;
+        const message = event instanceof Error ? event.message : event?.message || "unknown error";
+        settle(() => reject(new TransportError(`WebSocket heartbeat failed: ${message}`)));
+      };
+
+      timeoutId = setTimeout(() => {
+        settle(() =>
+          reject(
+            new TimeoutError(`WebSocket heartbeat timeout after ${heartbeatOptions.timeoutMs}ms`),
+          ),
+        );
+      }, heartbeatOptions.timeoutMs);
+
+      socket.once("pong", onPong);
+      socket.once("close", onClose);
+      socket.once("error", onError);
+
+      try {
+        socket.ping(new Uint8Array(), undefined, (err?: Error) => {
+          if (err) {
+            settle(() => reject(new TransportError(`WebSocket ping failed: ${err.message}`)));
+          }
+        });
+      } catch (err) {
+        settle(() =>
+          reject(
+            new TransportError(
+              `WebSocket heartbeat error: ${err instanceof Error ? err.message : String(err)}`,
+            ),
+          ),
+        );
+      }
+    });
+  };
+
+  const supportsHeartbeat = (): boolean => {
+    return (
+      typeof ws?.ping === "function" &&
+      typeof ws?.once === "function" &&
+      typeof ws?.removeListener === "function"
+    );
+  };
+
+  const enableKeepAlive = (): void => undefined;
+
   const receive = async (): Promise<Uint8Array> => {
     if (receiveQueue.length > 0) {
       const message = receiveQueue.shift();
@@ -198,13 +296,17 @@ export function createWebSocketTransport(url: string, options: TransportOptions 
     }
 
     return new Promise((resolve, reject) => {
-      const timeoutId = setTimeout(() => {
-        receiverResolve = null;
-        reject(new TimeoutError(`WebSocket receive timeout after ${timeout}ms`));
-      }, timeout);
+      const timeoutId = receiveTimeoutEnabled
+        ? setTimeout(() => {
+            receiverResolve = null;
+            reject(new TimeoutError(`WebSocket receive timeout after ${timeout}ms`));
+          }, timeout)
+        : null;
 
       receiverResolve = (data: Uint8Array | null) => {
-        clearTimeout(timeoutId);
+        if (timeoutId) {
+          clearTimeout(timeoutId);
+        }
         receiverResolve = null;
         if (data === null) {
           reject(new TransportError("Connection closed"));
@@ -245,6 +347,9 @@ export function createWebSocketTransport(url: string, options: TransportOptions 
     connect,
     send,
     receive,
+    sendHeartbeat,
+    supportsHeartbeat,
+    enableKeepAlive,
     close,
     getUrl,
     isConnected,

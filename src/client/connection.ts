@@ -12,6 +12,7 @@ import {
   ConnectionState,
   Deferred,
   FitzObservability,
+  HeartbeatOptions,
   RetryOptions,
   TokenProvider,
 } from "../core/types";
@@ -46,6 +47,7 @@ export interface ConnectionOptions {
     maxBackoffMs?: number;
   };
   retry?: RetryOptions;
+  heartbeat?: HeartbeatOptions;
   authSettleDelayMs?: number;
   observability?: FitzObservability;
   asyncHandlers?: AsyncHandlerOptions;
@@ -391,6 +393,9 @@ export function createConnection(
   const retryMaxAttempts = options.retry?.maxAttempts ?? 3;
   const retryBackoffMs = options.retry?.backoffMs ?? 100;
   const retryMaxBackoffMs = options.retry?.maxBackoffMs ?? 1000;
+  const heartbeatEnabled = options.heartbeat?.enabled ?? true;
+  const heartbeatIntervalMs = options.heartbeat?.intervalMs ?? 10000;
+  const heartbeatTimeoutMs = options.heartbeat?.timeoutMs ?? 30000;
   const maxInFlightRequests = options.maxInFlightRequests ?? 256;
   const maxRequestQueueSize = options.maxRequestQueueSize ?? 1024;
   const observability = options.observability;
@@ -409,6 +414,7 @@ export function createConnection(
   let permanentlyClosed = false;
   let connectPromise: Promise<void> | null = null;
   let reconnectPromise: Promise<void> | null = null;
+  let connectionLossPromise: Promise<void> | null = null;
   let reconnectRestoreActive = false;
   let authOutcome: Deferred<void> | null = null;
   let authRejected = false;
@@ -418,6 +424,10 @@ export function createConnection(
   const closeAbortController = new AbortController();
   const connectionScope = createScope("connection");
   const readyListeners = new Set<() => void>();
+  let heartbeatTimer: ReturnType<typeof setTimeout> | null = null;
+  let heartbeatTransport: Transport | null = null;
+  let heartbeatPending = false;
+  let lastActivityAt = Date.now();
 
   const log = (
     level: "debug" | "info" | "warn" | "error",
@@ -553,6 +563,7 @@ export function createConnection(
     permanentlyClosed = true;
     closeRequested = true;
     receiveLoopAbort = true;
+    stopHeartbeat();
     closeAbortController.abort();
     asyncHandlerDispatcher.close();
     const scopeDisposePromise = connectionScope.dispose();
@@ -991,6 +1002,108 @@ export function createConnection(
     }
   };
 
+  const withWriteLock = async <T>(operation: () => Promise<T>): Promise<T> => {
+    const prior = writeChain;
+    let release!: () => void;
+    writeChain = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+
+    await prior;
+    try {
+      return await operation();
+    } finally {
+      release();
+    }
+  };
+
+  const markOutboundActivity = (): void => {
+    lastActivityAt = Date.now();
+  };
+
+  const markRemoteActivity = (): void => {
+    lastActivityAt = Date.now();
+  };
+
+  const stopHeartbeat = (): void => {
+    if (heartbeatTimer) {
+      clearTimeout(heartbeatTimer);
+      heartbeatTimer = null;
+    }
+    heartbeatTransport = null;
+    heartbeatPending = false;
+  };
+
+  const startHeartbeat = (activeTransport: Transport): void => {
+    if (!heartbeatEnabled) {
+      return;
+    }
+
+    stopHeartbeat();
+    activeTransport.enableKeepAlive?.(heartbeatIntervalMs);
+    heartbeatTransport = activeTransport;
+    markRemoteActivity();
+
+    const scheduleNext = (): void => {
+      if (closeRequested || receiveLoopAbort || heartbeatTransport !== activeTransport) {
+        return;
+      }
+
+      heartbeatTimer = setTimeout(tick, heartbeatIntervalMs);
+    };
+
+    const tick = (): void => {
+      heartbeatTimer = null;
+      if (closeRequested || receiveLoopAbort || heartbeatTransport !== activeTransport) {
+        return;
+      }
+
+      const now = Date.now();
+      if (now - lastActivityAt < heartbeatIntervalMs) {
+        scheduleNext();
+        return;
+      }
+
+      const supportsHeartbeat = activeTransport.supportsHeartbeat?.() ?? true;
+      if (!heartbeatPending && supportsHeartbeat && activeTransport.sendHeartbeat) {
+        heartbeatPending = true;
+        const heartbeatSentAt = now;
+        const dispatchHeartbeat = (heartbeat: { timeoutMs: number }) =>
+          activeTransport.sendHeartbeat!(heartbeat);
+
+        void withWriteLock(async () => {
+          await dispatchHeartbeat({ timeoutMs: heartbeatTimeoutMs });
+        })
+          .then(() => {
+            if (heartbeatTransport !== activeTransport) {
+              return;
+            }
+
+            heartbeatPending = false;
+            markRemoteActivity();
+          })
+          .catch((error: unknown) => {
+            if (heartbeatTransport !== activeTransport) {
+              return;
+            }
+
+            heartbeatPending = false;
+            if (lastActivityAt > heartbeatSentAt) {
+              return;
+            }
+
+            const heartbeatError = new TransportError(`Heartbeat failed: ${describeError(error)}`);
+            void activeTransport.close().catch(() => undefined);
+            void handleConnectionLoss(heartbeatError);
+          });
+      }
+
+      scheduleNext();
+    };
+
+    scheduleNext();
+  };
+
   const openAndAuthenticate = async (isReconnect: boolean, signal?: AbortSignal): Promise<void> => {
     throwIfAborted(signal);
     receiveLoopAbort = false;
@@ -998,11 +1111,14 @@ export function createConnection(
     requestGate = createRequestGate(maxInFlightRequests, maxRequestQueueSize);
     const activeTransport = transportFactory();
     transport = activeTransport;
+    stopHeartbeat();
     setState(isReconnect ? ConnectionState.Reconnecting : ConnectionState.Connecting);
     emitLifecycleEvent(isReconnect ? "reconnect_start" : "connect_start");
 
     await activeTransport.connect();
+    markRemoteActivity();
     if (closeRequested) {
+      stopHeartbeat();
       await activeTransport.close().catch(() => undefined);
       if (transport === activeTransport) {
         transport = null;
@@ -1045,6 +1161,7 @@ export function createConnection(
       hasEstablishedSession = true;
       reconnectExhausted = false;
       setState(ConnectionState.Authenticated);
+      startHeartbeat(activeTransport);
       if (!isReconnect) {
         multiplexer.setConnected();
       }
@@ -1054,6 +1171,7 @@ export function createConnection(
       reconnectRestoreActive = false;
       multiplexer.setDisconnected();
       emitDisconnect();
+      stopHeartbeat();
       if (activeTransport) {
         await activeTransport.close().catch(() => undefined);
       }
@@ -1079,6 +1197,7 @@ export function createConnection(
     const token = await tokenProvider();
     const frame = FrameCodec.encodeFrame(MSG_CONNECT, utf8Encoder.encode(token));
     await ensureTransport().send(frame);
+    markOutboundActivity();
   };
 
   const startReceiveLoop = async (): Promise<void> => {
@@ -1086,6 +1205,7 @@ export function createConnection(
       try {
         const activeTransport = ensureTransport();
         const data = await activeTransport.receive();
+        markRemoteActivity();
         const frames = frameParser.parseFrames(data);
 
         for (const frame of frames) {
@@ -1103,6 +1223,19 @@ export function createConnection(
   };
 
   const handleConnectionLoss = async (error: unknown): Promise<void> => {
+    if (connectionLossPromise) {
+      await connectionLossPromise;
+      return;
+    }
+
+    connectionLossPromise = handleConnectionLossOnce(error).finally(() => {
+      connectionLossPromise = null;
+    });
+    await connectionLossPromise;
+  };
+
+  const handleConnectionLossOnce = async (error: unknown): Promise<void> => {
+    stopHeartbeat();
     multiplexer.setDisconnected();
     requestGate.close();
     emitDisconnect();
@@ -1231,18 +1364,10 @@ export function createConnection(
   };
 
   const sendSerialized = async (transport: Transport, data: Uint8Array): Promise<void> => {
-    const prior = writeChain;
-    let release!: () => void;
-    writeChain = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-
-    await prior;
-    try {
+    await withWriteLock(async () => {
       await transport.send(data);
-    } finally {
-      release();
-    }
+      markOutboundActivity();
+    });
   };
 
   const emitLifecycleEvent = (event: string, error?: unknown, attempt?: number): void => {

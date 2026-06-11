@@ -10,6 +10,7 @@ export type {
   AsyncHandlerOptions,
   ClientConfig,
   ClientConnectOptions,
+  HeartbeatOptions,
   FitzLifecycleEvent,
   FitzLogger,
   FitzLogLevel,
@@ -23,6 +24,8 @@ export type {
   RetryOptions,
 } from "./core/types";
 export { ConnectionState } from "./core/types";
+export { createWakeGate } from "./core/wake-gate";
+export type { WakeGate, WakeWaitOptions } from "./core/wake-gate";
 export {
   ErrKvTransactionAborted,
   ErrKvLeaseExpired,

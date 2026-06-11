@@ -14,6 +14,7 @@ import {
 } from "../../frame/types";
 import { parseStandardResponse } from "../../protocol/response";
 import { ScheduleCodec } from "./codec";
+import { createWakeGate } from "../../core/wake-gate";
 import {
   ScheduleEntry,
   ScheduleError,
@@ -35,6 +36,7 @@ export function createScheduleClient(connection: Connection) {
   const { requestFrame, requestReconnectFrame } = createDomainClient(connection);
   const subscriptionsByPattern = new Map<string, ScheduleSubscriptionState>();
   const patternsBySubId = new Map<bigint, string>();
+  const pendingNotificationsBySubId = new Map<bigint, ScheduleNotification[]>();
   let notifyHandlerInitialized = false;
   let nextHandlerId = 1;
 
@@ -49,6 +51,7 @@ export function createScheduleClient(connection: Connection) {
     }));
     subscriptionsByPattern.clear();
     patternsBySubId.clear();
+    pendingNotificationsBySubId.clear();
 
     for (const subscription of subscriptions) {
       const subId = await subscribeWire(subscription.pattern, requestReconnectFrame);
@@ -91,6 +94,41 @@ export function createScheduleClient(connection: Connection) {
     return [decoded.entries, decoded.totalCount];
   };
 
+  const waitForNotifications = async function* (
+    route: string,
+    options: {
+      signal?: AbortSignal;
+    } = {},
+  ): AsyncIterable<ScheduleNotification> {
+    assertConcreteScheduleRoute(route);
+
+    const wakeGate = createWakeGate();
+    const pendingNotifications: ScheduleNotification[] = [];
+    const subscription = await subscribe(route, (notification) => {
+      pendingNotifications.push(notification);
+      wakeGate.wake();
+    });
+
+    try {
+      while (true) {
+        const notification = pendingNotifications.shift();
+        if (notification) {
+          yield notification;
+          continue;
+        }
+
+        const observed = wakeGate.version;
+        if (pendingNotifications.length > 0) {
+          continue;
+        }
+
+        await wakeGate.waitAfter(observed, { signal: options.signal });
+      }
+    } finally {
+      await subscription.unsubscribe().catch(() => undefined);
+    }
+  };
+
   const subscribe = async (
     pattern: string,
     handler: ScheduleHandler,
@@ -128,6 +166,7 @@ export function createScheduleClient(connection: Connection) {
     }
 
     subscription.handlers.set(handlerId, handler);
+    flushPendingNotifications(subId);
     return createScheduleSubscription(subId, pattern, async () => {
       await unsubscribe(pattern, handlerId);
     });
@@ -146,6 +185,7 @@ export function createScheduleClient(connection: Connection) {
 
     subscriptionsByPattern.delete(pattern);
     patternsBySubId.delete(subscription.subId);
+    pendingNotificationsBySubId.delete(subscription.subId);
     const response = await requestFrame(
       MSG_SCHEDULE_UNSUBSCRIBE,
       ScheduleCodec.encodeUnsubscribe(pattern),
@@ -164,26 +204,68 @@ export function createScheduleClient(connection: Connection) {
         const decoded = ScheduleCodec.decodeNotification(payload);
         const pattern = patternsBySubId.get(decoded.subId);
         if (!pattern) {
+          queuePendingNotification(decoded.subId, {
+            payload: decoded.payload,
+          });
           return;
         }
 
         const subscription = subscriptionsByPattern.get(pattern);
         if (!subscription) {
+          queuePendingNotification(decoded.subId, {
+            payload: decoded.payload,
+          });
           return;
         }
 
         const notification: ScheduleNotification = {
           payload: decoded.payload,
         };
-        for (const handler of subscription.handlers.values()) {
-          connection.dispatchAsyncHandler(async () => {
-            await handler(notification);
-          });
-        }
+        dispatchNotification(subscription, notification);
       } catch {
         // Best-effort notification dispatch.
       }
     });
+  };
+
+  const queuePendingNotification = (subId: bigint, notification: ScheduleNotification): void => {
+    const existing = pendingNotificationsBySubId.get(subId);
+    if (existing) {
+      existing.push(notification);
+      return;
+    }
+
+    pendingNotificationsBySubId.set(subId, [notification]);
+  };
+
+  const flushPendingNotifications = (subId: bigint): void => {
+    const pending = pendingNotificationsBySubId.get(subId);
+    if (!pending || pending.length === 0) {
+      return;
+    }
+
+    pendingNotificationsBySubId.delete(subId);
+    const subscription = Array.from(subscriptionsByPattern.values()).find(
+      (entry) => entry.subId === subId,
+    );
+    if (!subscription) {
+      return;
+    }
+
+    for (const notification of pending) {
+      dispatchNotification(subscription, notification);
+    }
+  };
+
+  const dispatchNotification = (
+    subscription: ScheduleSubscriptionState,
+    notification: ScheduleNotification,
+  ): void => {
+    for (const handler of subscription.handlers.values()) {
+      connection.dispatchAsyncHandler(async () => {
+        await handler(notification);
+      });
+    }
   };
 
   const assertSuccess = (payload: Uint8Array, operation: string): Uint8Array => {
@@ -217,6 +299,7 @@ export function createScheduleClient(connection: Connection) {
     cancel,
     list,
     subscribe,
+    waitForNotifications,
   };
 }
 

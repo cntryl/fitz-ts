@@ -29,6 +29,15 @@ contractual.
 - In-flight request or iterator work from the pre-disconnect connection is
   failed; callers must reacquire fresh handles after reconnect.
 
+## Heartbeats And Wake Gates
+
+- Heartbeats are enabled by default after authentication settles. The default configuration is `intervalMs: 10000` and `timeoutMs: 30000`.
+- Heartbeats noop when the client has seen application send or receive activity within the current interval.
+- Transport behavior is capability-specific: Node WebSocket uses ping/pong, TCP enables socket keepalive, and browser WebSocket suppresses receive-idle disconnects rather than fabricating a protocol heartbeat.
+- `createWakeGate()` is the client-side wake primitive used by subscription-driven helpers.
+- Queue and stream wake helpers (`reserveWhenAvailable()` and `readWhenCommitted()`) treat subscription callbacks as wake signals only; the authoritative work step remains `reserve()` or `read()`.
+- `schedule.waitForNotifications()` yields notifications directly because schedule has no separate SDK claim/read step.
+
 ## Automatic Retry
 
 - `ClientConfig.retry` defaults to `enabled: true`, `maxAttempts: 3`,

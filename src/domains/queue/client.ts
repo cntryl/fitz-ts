@@ -6,6 +6,7 @@ import { createDomainClient } from "../base";
 import { attachResilienceMeta } from "../../client/resilience";
 import type { Connection } from "../../client/connection";
 import { QueueError } from "../../core/errors";
+import { createWakeGate } from "../../core/wake-gate";
 import {
   MSG_QUEUE_ENQUEUE,
   MSG_QUEUE_NOTIFY,
@@ -106,22 +107,14 @@ export function createQueueClient(connection: Connection) {
     }
 
     const deadline = Date.now() + waitSeconds * 1000;
-    let pendingNotifications = 0;
-    let waiter: (() => void) | undefined;
-    const subscription = await subscribe(route, async () => {
-      pendingNotifications += 1;
-      if (!waiter) {
-        return;
-      }
-
-      const resolve = waiter;
-      waiter = undefined;
-      pendingNotifications = 0;
-      resolve();
+    const wakeGate = createWakeGate();
+    const subscription = await subscribe(route, () => {
+      wakeGate.wake();
     });
 
     try {
       while (true) {
+        const observed = wakeGate.version;
         items = await reserveOnce(route, leaseSeconds, batchSize);
         if (items.length > 0) {
           return items;
@@ -132,26 +125,67 @@ export function createQueueClient(connection: Connection) {
           return items;
         }
 
-        await new Promise<void>((resolve) => {
-          if (pendingNotifications > 0) {
-            pendingNotifications = 0;
-            resolve();
-            return;
-          }
-
-          const release = () => {
-            clearTimeout(timeoutId);
-            if (waiter === release) {
-              waiter = undefined;
-            }
-            resolve();
-          };
-          const timeoutId = setTimeout(release, remainingMs);
-          waiter = release;
+        const waitPromise = wakeGate.waitAfter(observed);
+        let timeoutId: ReturnType<typeof setTimeout> | null = null;
+        const timeoutPromise = new Promise<"timeout">((resolve) => {
+          timeoutId = setTimeout(() => {
+            resolve("timeout");
+          }, remainingMs);
         });
+
+        const result = await Promise.race([
+          waitPromise.then(() => {
+            if (timeoutId) {
+              clearTimeout(timeoutId);
+            }
+            return "wake" as const;
+          }),
+          timeoutPromise,
+        ]);
+
+        if (result === "timeout") {
+          return items;
+        }
       }
     } finally {
-      await subscription.unsubscribe();
+      await subscription.unsubscribe().catch(() => undefined);
+    }
+  };
+
+  const reserveWhenAvailable = async function* (
+    route: string,
+    options: {
+      leaseSeconds: number;
+      batchSize?: number;
+      signal?: AbortSignal;
+    },
+  ): AsyncIterable<QueueItem[]> {
+    assertQueueReserveRoute(route);
+
+    const wakeGate = createWakeGate();
+    const subscription = await subscribe(route, () => {
+      wakeGate.wake();
+    });
+
+    try {
+      while (true) {
+        const observed = wakeGate.version;
+        const items = await reserveOnce(
+          route,
+          options.leaseSeconds,
+          options.batchSize ?? 1,
+          options.signal,
+        );
+
+        if (items.length > 0) {
+          yield items;
+          continue;
+        }
+
+        await wakeGate.waitAfter(observed, { signal: options.signal });
+      }
+    } finally {
+      await subscription.unsubscribe().catch(() => undefined);
     }
   };
 
@@ -159,9 +193,10 @@ export function createQueueClient(connection: Connection) {
     route: string,
     leaseSeconds: number,
     batchSize: number,
+    signal?: AbortSignal,
   ): Promise<QueueItem[]> => {
     const payload = QueueCodec.encodeReserve(route, leaseSeconds, batchSize);
-    const response = await requestFrame(MSG_QUEUE_RESERVE, payload);
+    const response = await requestFrame(MSG_QUEUE_RESERVE, payload, signal);
     const decoded = QueueCodec.decodeReserveResponse(response);
     checkStatus(decoded, "RESERVE");
 
@@ -317,6 +352,7 @@ export function createQueueClient(connection: Connection) {
   return {
     enqueue,
     reserve,
+    reserveWhenAvailable,
     subscribe,
   };
 }
