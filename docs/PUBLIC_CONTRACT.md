@@ -36,6 +36,7 @@ contractual.
 - Transport behavior is capability-specific: Node WebSocket uses ping/pong, TCP enables socket keepalive, and browser WebSocket suppresses receive-idle disconnects rather than fabricating a protocol heartbeat.
 - `createWakeGate()` is the client-side wake primitive used by subscription-driven helpers.
 - Queue and stream wake helpers (`reserveWhenAvailable()` and `readWhenCommitted()`) treat subscription callbacks as wake signals only; the authoritative work step remains `reserve()` or `read()`.
+- `reserveWhenAvailable()` defaults `batchSize` to `1`; `readWhenCommitted()` defaults `batchSize` to `100`.
 - `schedule.waitForNotifications()` yields notifications directly because schedule has no separate SDK claim/read step.
 
 ## Automatic Retry
@@ -45,7 +46,7 @@ contractual.
 - The client automatically retries only:
   - idempotent reads: KV `get` / `scan`, Stream `read` / `readPage` / `peek` /
     `metadata`, Lease `query`
-  - queue `enqueue()` after a broker-confirmed transient negative response
+  - queue `enqueue()` after a broker-confirmed transient negative response or queue backpressure response
 - The client does not automatically replay ambiguous post-send writes, RPC
   calls, queue reservations or acknowledgements, lease ownership changes, or
   notice publishes.

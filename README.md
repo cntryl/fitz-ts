@@ -65,7 +65,7 @@ See `docs/OPERATIONS.md` for lifecycle events, metric names, and production guid
 - Heartbeats noop when the client was active within the current interval. Node WebSocket uses native ping/pong when available, TCP enables socket keepalive, and browser WebSocket relies on close/error plus receive-timeout suppression.
 - Safe automatic retries are enabled by default through `ClientConfig.retry`:
   - idempotent reads: KV `get` / `scan`, Stream `read` / `readPage` / `peek` / `metadata`, Lease `query`
-  - queue `enqueue()` only after Fitz explicitly rejects the write with a known transient commit failure
+  - queue `enqueue()` only after Fitz explicitly rejects the write with a known transient commit failure or queue backpressure response
 - The client does not automatically replay KV mutations, stream writes, queue reservations or acknowledgements, lease ownership changes, RPC calls, or notice publishes after an ambiguous post-send failure.
 - `QueueItem`, `Lease`, `KvTransaction`, and `StreamSession` handles from the pre-disconnect session are stale after reconnect and must be reacquired.
 
@@ -75,8 +75,8 @@ See `docs/OPERATIONS.md` for lifecycle events, metric names, and production guid
 
 Subscription-driven helpers built on the gate:
 
-- `queue.reserveWhenAvailable(route, { leaseSeconds, batchSize, signal })`
-- `stream.readWhenCommitted(route, { offset, batchSize, maxBytes, filter, signal })`
+- `queue.reserveWhenAvailable(route, { leaseSeconds, batchSize = 1, signal })`
+- `stream.readWhenCommitted(route, { offset, batchSize = 100, maxBytes, filter, signal })`
 - `schedule.waitForNotifications(route, { signal })`
 
 Queue and stream subscriptions are wake signals, not work handlers. The authoritative work step remains `reserve()` or `read()`.
@@ -110,7 +110,7 @@ void page.cursor.lastResourceOffset;
 
 - Different domains can operate concurrently on one client connection.
 - Multiple independent KV transactions and stream sessions can also be active concurrently.
-- Do not issue overlapping operations against the same KV transaction or the same stream session. Those stateful handles are intended to be used sequentially.
+- Do not issue overlapping operations against the same KV transaction, stream session, queue item, or lease. Those stateful handles are intended to be used sequentially.
 - Notification and RPC worker handlers run through a shared async dispatcher. Use `asyncHandlers.maxConcurrency` and `asyncHandlers.timeoutMs` to bound handler fan-out in production.
 
 ## Transport Support
@@ -131,9 +131,9 @@ npm run verify:fast
 Broker-backed verification:
 
 ```bash
-docker compose -f ../fitz-go/compose.yml up -d
+docker compose up -d
 npm run verify
-docker compose -f ../fitz-go/compose.yml down --volumes
+docker compose down --volumes
 ```
 
 Package smoke verification:
@@ -147,10 +147,10 @@ Suggested release checklist:
 ```bash
 npm ci
 npm run verify:fast
-docker compose -f ../fitz-go/compose.yml up -d
+docker compose up -d
 npm run verify
 npm run bench
-docker compose -f ../fitz-go/compose.yml down --volumes
+docker compose down --volumes
 ```
 
 Tiered benchmark commands:
@@ -182,7 +182,6 @@ Tooling is direct:
 - `vp test` for unit, integration, and conformance tests
 - `vp pack` for JS bundle output
 - `tsc` for declaration emit
-- `tsc` for typechecking and declaration emit
 
 Published artifacts are smoke-tested from the packed tarball in both ESM and
 CommonJS consumer fixtures before release.

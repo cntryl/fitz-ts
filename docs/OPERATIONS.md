@@ -24,7 +24,7 @@ Caller-triggered abort during `connect({ signal })` fails the attempt without
 marking the client as auth rejected. A later `connect()` attempt may be made on
 the same client instance.
 
-After the client has established at least one authenticated session, transport loss moves it back through `RECONNECTING` and then `AUTHENTICATING` unless `reconnect.enabled` is set to `false`. Reconnect listeners are replayed during the reconnect authentication flow before the client reports `AUTHENTICATED`, so subscriptions and workers are restored before the connection is considered fully ready again.
+After the client has established at least one authenticated session, transport loss moves it back through `RECONNECTING` and then `AUTHENTICATING` unless `reconnect.enabled` is set to `false`. Reconnect listeners are replayed during the reconnect authentication flow before the client reports `AUTHENTICATED`, so notice, queue, lease, and stream subscriptions are restored and RPC workers are re-registered before the connection is considered fully ready again.
 
 If application code calls `connect()` during that recovery window, the call
 waits for the active reconnect path to finish. It does not start a second dial,
@@ -53,6 +53,8 @@ Use it to avoid lost wakes in subscription-driven consumers:
 - queue availability wakes the worker, then `reserve()` claims work
 - stream commit wakes the reader, then `read()` reads records
 - schedule notifications can be consumed directly with `schedule.waitForNotifications()`
+
+`reserveWhenAvailable()` defaults `batchSize` to `1`; `readWhenCommitted()` defaults `batchSize` to `100`.
 
 Queue and stream callbacks are wake signals only. Do not treat the callback as the work handler unless the domain explicitly says the callback is the source of truth.
 
@@ -165,6 +167,8 @@ The retry classifier does not hide invalid routes, auth failures, not-found erro
 Current metric names:
 
 - `fitz.connection.lifecycle`
+- `fitz.request.retry`
+- `fitz.request.retry_exhausted`
 - `fitz.request.started`
 - `fitz.request.failed`
 - `fitz.request.timeout`
@@ -176,9 +180,9 @@ Current metric names:
 
 ## Stateful Handle Discipline
 
-- KV transactions and stream sessions are stateful handles. Use them sequentially.
+- KV transactions, stream sessions, queue items, and leases are stateful handles. Use them sequentially.
 - Parallel work is supported across different transactions, sessions, and domains.
-- Avoid issuing concurrent operations against the same `KvTransaction` or `StreamSession`; the client now serializes transport writes globally, but same-handle sequencing is still an application-level responsibility.
+- Avoid issuing concurrent operations against the same `KvTransaction`, `StreamSession`, `QueueItem`, or `Lease`; the client now serializes transport writes globally, but same-handle sequencing is still an application-level responsibility.
 
 ## Shutdown Expectations
 
@@ -186,7 +190,7 @@ Current metric names:
 - `close()` cancels in-flight requests, tears down the receive loop, and closes the active transport.
 - `close()` is the only permanent terminal state for a `Client`; failed connect
   attempts and reconnect loss do not implicitly replace the owned connection.
-- Domain clients are connection-scoped; recreate them after building a new top-level `Client`.
+- Domain clients are cached on the owning client and survive reconnect; recreate them only after building a new top-level `Client`.
 - Stateful handles obtained before `close()` are no longer valid after shutdown or reconnect recovery. Treat post-close use as an application bug and reacquire fresh handles.
 - Queue inflight reservations and lease ownership state are broker-session scoped. `QueueItem` and `Lease` handles from before a disconnect now fail fast instead of waiting for a dead session to recover.
 - Pending RPC iterators fail promptly when the underlying connection closes or resets.
@@ -203,15 +207,15 @@ npm run verify:fast
 Broker-backed checks:
 
 ```bash
-docker compose -f ../fitz-go/compose.yml up -d
+docker compose up -d
 npm run verify
-docker compose -f ../fitz-go/compose.yml down --volumes
+docker compose down --volumes
 ```
 
 Focused broker-backed connection checks:
 
 ```bash
-npm run test:integration -- --run tests/integration/connection.test.ts
+npm run test:integration -- tests/integration/connection.test.ts
 ```
 
 That suite verifies two operational guarantees across TCP and WebSocket, anonymous and JWT-authenticated brokers:
@@ -224,11 +228,11 @@ Release-oriented checklist:
 ```bash
 npm ci
 npm run verify:fast
-docker compose -f ../fitz-go/compose.yml up -d
+docker compose up -d
 npm run verify
 npm run bench
 npm run test:unit -- tests/unit/perf/hotpath-thresholds.test.ts
-docker compose -f ../fitz-go/compose.yml down --volumes
+docker compose down --volumes
 npm run pack:smoke
 ```
 
