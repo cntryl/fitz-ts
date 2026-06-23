@@ -377,6 +377,10 @@ export function createBufferReader(buffer: Uint8Array) {
       return "";
     }
 
+    if (offset + length > internalBuffer.length) {
+      throw new Error("Buffer overflow: cannot read string");
+    }
+
     const bytes = internalBuffer.subarray(offset, offset + length);
     offset += length;
     return utf8Decoder.decode(bytes);

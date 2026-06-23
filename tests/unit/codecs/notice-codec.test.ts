@@ -128,5 +128,15 @@ describe("NoticeCodec", () => {
       expect(decoded.subId).toBe(333n);
       expect(decoded.body).toEqual(new Uint8Array(0));
     });
+
+    it("should_reject_notification_with_trailing_bytes", () => {
+      const writer = new BufferWriter(64);
+      writer.writeU64BE(333n);
+      writer.writeString("notice://test/event");
+      writer.writeU32BE(0);
+      writer.writeU8(0xff);
+
+      expect(() => NoticeCodec.decodeNotification(writer.getBuffer())).toThrow("trailing bytes");
+    });
   });
 });

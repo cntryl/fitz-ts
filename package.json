@@ -40,7 +40,7 @@
   },
   "scripts": {
     "build": "vp pack && tsc -p tsconfig.build.json",
-    "pack:smoke": "npm pack --pack-destination artifacts && mkdir -p artifacts/smoke && cd artifacts/smoke && npm init -y >/dev/null 2>&1 && npm install \"../$(ls ../*.tgz | head -n 1)\" >/dev/null 2>&1",
+    "pack:smoke": "npm pack --pack-destination artifacts && mkdir -p artifacts/smoke && cd artifacts/smoke && npm init -y >/dev/null 2>&1 && npm install \"$(ls ../*.tgz | head -n 1)\" >/dev/null 2>&1",
     "test": "npm run test:unit && npm run test:integration && npm run test:conformance",
     "test:unit": "vp test run --project unit",
     "test:integration": "vp test run --project integration",
@@ -58,18 +58,17 @@
     "prepare": "vp config"
   },
   "devDependencies": {
-    "@types/node": "^25.9.3",
+    "@types/node": "^26.0.0",
     "@types/ws": "^8.18.1",
     "cross-env": "^10.1.0",
     "typescript": "^6.0.3",
     "vite-plus": "latest",
-    "vitest": "^4.1.8",
     "ws": "^8.21.0"
   },
   "engines": {
     "node": ">=20.19.0"
   },
-  "packageManager": "npm@11.16.0",
+  "packageManager": "npm@11.17.0",
   "allowScripts": {
     "fsevents@2.3.3": true
   }

@@ -11,7 +11,14 @@ type NodeLikeProcess = {
   };
 };
 
-type WebSocketConstructor = new (url: string) => WebSocketLike;
+type WebSocketConstructor = new (
+  url: string,
+  protocols?: string | string[],
+  options?: NodeWebSocketOptions,
+) => WebSocketLike;
+type NodeWebSocketOptions = {
+  headers?: Record<string, string>;
+};
 type WebSocketMessageEvent = {
   data: ArrayBuffer | Uint8Array | Blob;
 };
@@ -30,6 +37,27 @@ type WebSocketLike = {
 };
 
 let cachedWebSocketConstructor: WebSocketConstructor | null = null;
+const nodeDefaultUpgradeHeaders: Record<string, string> = {
+  "User-Agent": "@cntryl/fitz",
+  Accept: "*/*",
+};
+
+function mergeNodeUpgradeHeaders(headers?: Record<string, string>): Record<string, string> {
+  const merged = { ...nodeDefaultUpgradeHeaders };
+  const keyIndex = new Map(Object.keys(merged).map((key) => [key.toLowerCase(), key]));
+
+  for (const [key, value] of Object.entries(headers ?? {})) {
+    const existingKey = keyIndex.get(key.toLowerCase());
+    if (existingKey && existingKey !== key) {
+      delete merged[existingKey];
+    }
+
+    merged[key] = value;
+    keyIndex.set(key.toLowerCase(), key);
+  }
+
+  return merged;
+}
 
 const isNodeEnv = (): boolean => {
   try {
@@ -77,6 +105,7 @@ export function createWebSocketTransport(url: string, options: TransportOptions 
   const timeout = options.timeout ?? 30000;
   const maxFrameSize = options.maxFrameSize ?? 65535;
   const receiveTimeoutEnabled = options.receiveTimeout ?? true;
+  const nodeUpgradeHeaders = mergeNodeUpgradeHeaders(options.webSocket?.headers);
 
   const enqueueMessage = (data: Uint8Array) => {
     if (receiverResolve) {
@@ -101,18 +130,35 @@ export function createWebSocketTransport(url: string, options: TransportOptions 
           }
         }
 
-        ws = new (getWebSocketConstructor())(wsUrl);
+        ws = isNodeEnv()
+          ? new (getWebSocketConstructor())(wsUrl, undefined, { headers: nodeUpgradeHeaders })
+          : new (getWebSocketConstructor())(wsUrl);
         ws.binaryType = "arraybuffer";
 
+        let settled = false;
         const connectTimeout = setTimeout(() => {
-          ws?.close?.();
-          reject(new TimeoutError(`WebSocket connection timeout after ${timeout}ms`));
+          settle(() => {
+            connected = false;
+            ws?.close?.();
+            reject(new TimeoutError(`WebSocket connection timeout after ${timeout}ms`));
+          });
         }, timeout);
 
-        ws.onopen = () => {
+        const settle = (callback: () => void): void => {
+          if (settled) {
+            return;
+          }
+
+          settled = true;
           clearTimeout(connectTimeout);
-          connected = true;
-          resolve();
+          callback();
+        };
+
+        ws.onopen = () => {
+          settle(() => {
+            connected = true;
+            resolve();
+          });
         };
 
         ws.onmessage = (event: WebSocketMessageEvent) => {
@@ -138,9 +184,13 @@ export function createWebSocketTransport(url: string, options: TransportOptions 
         };
 
         ws.onerror = (event: { message?: string }) => {
-          clearTimeout(connectTimeout);
-          const error = new TransportError(`WebSocket error: ${event.message || "unknown error"}`);
-          reject(error);
+          settle(() => {
+            connected = false;
+            const error = new TransportError(
+              `WebSocket error: ${event.message || "unknown error"}`,
+            );
+            reject(error);
+          });
         };
 
         ws.onclose = () => {
@@ -165,23 +215,42 @@ export function createWebSocketTransport(url: string, options: TransportOptions 
     }
 
     return new Promise((resolve, reject) => {
+      let timeoutId: ReturnType<typeof setTimeout> | null = null;
+
+      const settle = (callback: () => void): void => {
+        if (timeoutId) {
+          clearTimeout(timeoutId);
+          timeoutId = null;
+        }
+        callback();
+      };
+
       try {
-        const timeoutId = setTimeout(() => {
+        timeoutId = setTimeout(() => {
           reject(new TimeoutError(`WebSocket send timeout after ${timeout}ms`));
         }, timeout);
 
-        ws?.send(data, (err?: Error) => {
-          clearTimeout(timeoutId);
-          if (err) {
-            reject(new TransportError(`WebSocket send failed: ${err.message}`));
-          } else {
-            resolve();
-          }
-        });
+        if (isNodeEnv()) {
+          ws?.send(data, (err?: Error) => {
+            settle(() => {
+              if (err) {
+                reject(new TransportError(`WebSocket send failed: ${err.message}`));
+              } else {
+                resolve();
+              }
+            });
+          });
+          return;
+        }
+
+        ws?.send(data);
+        settle(resolve);
       } catch (err) {
-        reject(
-          new TransportError(
-            `WebSocket send error: ${err instanceof Error ? err.message : String(err)}`,
+        settle(() =>
+          reject(
+            new TransportError(
+              `WebSocket send error: ${err instanceof Error ? err.message : String(err)}`,
+            ),
           ),
         );
       }

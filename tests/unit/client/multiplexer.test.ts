@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 
 import { Multiplexer } from "../../../src/client/multiplexer";
+import { ConnectionError, TimeoutError } from "../../../src/core/errors";
 import { MSG_RPC_REQUEST, MSG_RPC_RESPONSE } from "../../../src/frame/types";
 import { RpcCodec } from "../../../src/domains/rpc/codec";
 import type { FitzMeter, FitzSpan, FitzTracer } from "../../../src/core/types";
@@ -140,6 +141,127 @@ describe("Multiplexer", () => {
     expect(meter.counters).toContain("fitz.request.timeout");
 
     vi.useRealTimers();
+  });
+
+  it("records disconnect failures once and closes the span", async () => {
+    const tracer = new FakeTracer();
+    const meter = new FakeMeter();
+    const multiplexer = new Multiplexer({ tracer, meter });
+    const controller = new AbortController();
+    const removeAbortListener = vi.spyOn(controller.signal, "removeEventListener");
+    multiplexer.setConnected();
+
+    const request = multiplexer.request(
+      88,
+      new Uint8Array([1]),
+      async () => undefined,
+      1000,
+      controller.signal,
+    );
+
+    const assertion = expect(request).rejects.toBeInstanceOf(ConnectionError);
+
+    multiplexer.setDisconnected();
+
+    await assertion;
+    expect(tracer.spans).toHaveLength(1);
+    expect(tracer.spans[0].ended).toBe(true);
+    expect(tracer.spans[0].exceptions[0]).toBeInstanceOf(ConnectionError);
+    expect(meter.counters).toContain("fitz.request.failed");
+    expect(removeAbortListener).toHaveBeenCalledWith("abort", expect.any(Function));
+  });
+
+  it("rejects all pending requests on disconnect when the FIFO contains holes", async () => {
+    const multiplexer = new Multiplexer();
+    const controller = new AbortController();
+    multiplexer.setConnected();
+
+    const first = multiplexer.request(77, new Uint8Array([1]), async () => undefined, 1000);
+    const second = multiplexer.request(
+      77,
+      new Uint8Array([2]),
+      async () => undefined,
+      1000,
+      controller.signal,
+    );
+    const third = multiplexer.request(77, new Uint8Array([3]), async () => undefined, 1000);
+    void first.catch(() => undefined);
+    void second.catch(() => undefined);
+    void third.catch(() => undefined);
+
+    controller.abort();
+    await expect(second).rejects.toMatchObject({ name: "AbortError" });
+
+    const firstAssertion = expect(first).rejects.toBeInstanceOf(ConnectionError);
+    multiplexer.setDisconnected();
+
+    const thirdResult = await Promise.race<unknown>([
+      third.catch((error: unknown) => error),
+      new Promise((resolve) => setTimeout(() => resolve("pending"), 0)),
+    ]);
+
+    await firstAssertion;
+    expect(thirdResult).toBeInstanceOf(ConnectionError);
+  });
+
+  it("rejects timed-out requests without waiting for send to finish", async () => {
+    vi.useFakeTimers();
+    try {
+      const multiplexer = new Multiplexer();
+      let releaseSend: () => void = () => undefined;
+      const sendBlocked = new Promise<void>((resolve) => {
+        releaseSend = resolve;
+      });
+      multiplexer.setConnected();
+
+      const request = multiplexer.request(
+        77,
+        new Uint8Array([1]),
+        async () => {
+          await sendBlocked;
+        },
+        10,
+      );
+      void request.catch(() => undefined);
+
+      await vi.advanceTimersByTimeAsync(10);
+      const resultPromise = Promise.race<unknown>([
+        request.catch((error: unknown) => error),
+        new Promise((resolve) => setTimeout(() => resolve("pending"), 0)),
+      ]);
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(await resultPromise).toBeInstanceOf(TimeoutError);
+      releaseSend();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("rejects aborted requests without waiting for send to finish", async () => {
+    const multiplexer = new Multiplexer();
+    const controller = new AbortController();
+    const sendBlocked = new Promise<void>(() => undefined);
+    multiplexer.setConnected();
+
+    const request = multiplexer.request(
+      77,
+      new Uint8Array([1]),
+      async () => {
+        await sendBlocked;
+      },
+      1000,
+      controller.signal,
+    );
+    void request.catch(() => undefined);
+
+    controller.abort();
+    const result = await Promise.race<unknown>([
+      request.catch((error: unknown) => error),
+      new Promise((resolve) => setTimeout(() => resolve("pending"), 0)),
+    ]);
+
+    expect(result).toMatchObject({ name: "AbortError" });
   });
 
   it("routes inbound RPC worker requests to handlers while RPC request acks are pending", async () => {

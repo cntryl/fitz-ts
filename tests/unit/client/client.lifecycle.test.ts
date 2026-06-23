@@ -186,6 +186,59 @@ describe("Client lifecycle ownership", () => {
     expect(createConnectionMock).toHaveBeenCalledTimes(1);
   });
 
+  it("rejects an initial connect that resolves after close", async () => {
+    const connection = new FakeOwnedConnection();
+    let releaseConnect: () => void = () => undefined;
+    connection.setConnectImpl(async () => {
+      await new Promise<void>((resolve) => {
+        releaseConnect = () => {
+          connection.state = ConnectionState.Authenticated;
+          resolve();
+        };
+      });
+    });
+    createConnectionMock.mockReturnValue(connection);
+
+    const client = new Client({ url: "ws://example.test" });
+    const connect = client.connect();
+
+    await client.close();
+    releaseConnect();
+
+    await expect(connect).rejects.toBeInstanceOf(ConnectionError);
+    expect(client.getState()).toBe(ConnectionState.Closed);
+    expect(client.isConnected()).toBe(false);
+  });
+
+  it("rejects a reconnect wait that resolves after close", async () => {
+    const connection = new FakeOwnedConnection();
+    createConnectionMock.mockReturnValue(connection);
+
+    const client = new Client({ url: "ws://example.test" });
+    await client.connect();
+
+    connection.state = ConnectionState.Reconnecting;
+    connection.shouldWaitForReconnectValue = true;
+    let releaseReconnect: () => void = () => undefined;
+    connection.setWaitImpl(async () => {
+      await new Promise<void>((resolve) => {
+        releaseReconnect = () => {
+          connection.state = ConnectionState.Authenticated;
+          resolve();
+        };
+      });
+    });
+
+    const waitingConnect = client.connect();
+
+    await client.close();
+    releaseReconnect();
+
+    await expect(waitingConnect).rejects.toBeInstanceOf(ConnectionError);
+    expect(client.getState()).toBe(ConnectionState.Closed);
+    expect(client.isConnected()).toBe(false);
+  });
+
   it("reuses the same owned connection after a failed initial connect", async () => {
     const connection = new FakeOwnedConnection();
     let connectAttempts = 0;

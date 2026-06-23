@@ -119,6 +119,26 @@ void page.cursor.lastResourceOffset;
 - TCP: Node.js only
 - Auto transport detection: defaults to WebSocket when the URL omits a scheme
 
+Node.js WebSocket clients send `User-Agent: @cntryl/fitz` and `Accept: */*`
+on upgrade requests by default so common HTTP front doors treat the client like
+a normal HTTP client. Add or override Node-only upgrade headers with
+`ClientConfig.webSocket.headers`:
+
+```typescript
+const client = Client({
+  url: "wss://fitz.example.com/ws",
+  webSocket: {
+    headers: {
+      "User-Agent": "my-service",
+      "X-Environment": "dev",
+    },
+  },
+});
+```
+
+Browser WebSocket APIs do not allow custom upgrade headers, so
+`webSocket.headers` is ignored in browsers.
+
 ## Verification
 
 Fast local checks:

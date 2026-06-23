@@ -1,0 +1,266 @@
+/// <reference types="node" />
+
+import { createHash } from "node:crypto";
+import { createServer, type IncomingHttpHeaders } from "node:http";
+import type { Duplex } from "node:stream";
+
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
+
+import { createWebSocketTransport } from "../../../src/transport/websocket";
+
+const servers: Array<{ close: (callback?: (err?: Error) => void) => void }> = [];
+const sockets: Duplex[] = [];
+
+function websocketAccept(key: string): string {
+  return createHash("sha1").update(`${key}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`).digest("base64");
+}
+
+async function captureUpgradeHeaders(
+  connect: (url: string) => Promise<void>,
+): Promise<IncomingHttpHeaders> {
+  const server = createServer();
+  servers.push(server);
+
+  const headersPromise = new Promise<IncomingHttpHeaders>((resolve) => {
+    server.once("upgrade", (req, socket) => {
+      sockets.push(socket);
+      const key = req.headers["sec-websocket-key"];
+      if (typeof key !== "string") {
+        socket.destroy();
+        return;
+      }
+
+      socket.write(
+        [
+          "HTTP/1.1 101 Switching Protocols",
+          "Upgrade: websocket",
+          "Connection: Upgrade",
+          `Sec-WebSocket-Accept: ${websocketAccept(key)}`,
+          "",
+          "",
+        ].join("\r\n"),
+      );
+      resolve(req.headers);
+      socket.destroy();
+    });
+  });
+
+  await new Promise<void>((resolve) => {
+    server.listen(0, "127.0.0.1", resolve);
+  });
+
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("expected tcp server address");
+  }
+
+  void connect(`ws://127.0.0.1:${address.port}/ws`).catch(() => undefined);
+  return headersPromise;
+}
+
+afterEach(async () => {
+  for (const socket of sockets.splice(0)) {
+    socket.destroy();
+  }
+
+  await Promise.all(
+    servers.splice(0).map(
+      (server) =>
+        new Promise<void>((resolve, reject) => {
+          server.close((error) => {
+            if (error) {
+              reject(error);
+              return;
+            }
+
+            resolve();
+          });
+        }),
+    ),
+  );
+});
+
+describe("websocket transport", () => {
+  it("sends normal Node upgrade headers by default", async () => {
+    const headers = await captureUpgradeHeaders(async (url) => {
+      const transport = createWebSocketTransport(url);
+      await transport.connect();
+    });
+
+    expect(headers["user-agent"]).toBe("@cntryl/fitz");
+    expect(headers.accept).toBe("*/*");
+  });
+
+  it("merges configured Node upgrade headers over defaults", async () => {
+    const headers = await captureUpgradeHeaders(async (url) => {
+      const transport = createWebSocketTransport(url, {
+        webSocket: {
+          headers: {
+            "User-Agent": "fitz-test",
+            "X-Fitz-Test": "present",
+          },
+        },
+      });
+      await transport.connect();
+    });
+
+    expect(headers["user-agent"]).toBe("fitz-test");
+    expect(headers.accept).toBe("*/*");
+    expect(headers["x-fitz-test"]).toBe("present");
+  });
+
+  it("overrides default Node upgrade headers case-insensitively", async () => {
+    const headers = await captureUpgradeHeaders(async (url) => {
+      const transport = createWebSocketTransport(url, {
+        webSocket: {
+          headers: {
+            accept: "application/octet-stream",
+            "user-agent": "fitz-test",
+          },
+        },
+      });
+      await transport.connect();
+    });
+
+    expect(headers["user-agent"]).toBe("fitz-test");
+    expect(headers.accept).toBe("application/octet-stream");
+  });
+
+  it("resolves browser sends without waiting for a Node callback", async () => {
+    vi.resetModules();
+
+    const originalProcess = globalThis.process;
+    const originalWebSocket = globalThis.WebSocket;
+
+    class BrowserWebSocket {
+      binaryType = "";
+      onopen: (() => void) | null = null;
+      onmessage: ((event: { data: ArrayBuffer | Uint8Array | Blob }) => void) | null = null;
+      onerror: ((event: { message?: string }) => void) | null = null;
+      onclose: (() => void) | null = null;
+      readonly sent: Uint8Array[] = [];
+
+      constructor(_url: string) {
+        setTimeout(() => this.onopen?.(), 0);
+      }
+
+      send(data: Uint8Array): void {
+        this.sent.push(data);
+      }
+
+      close(): void {
+        this.onclose?.();
+      }
+    }
+
+    vi.stubGlobal("process", undefined);
+    vi.stubGlobal("WebSocket", BrowserWebSocket);
+
+    try {
+      const { createWebSocketTransport: createBrowserTransport } =
+        await import("../../../src/transport/websocket");
+      const transport = createBrowserTransport("ws://example.test/ws", { timeout: 20 });
+
+      await transport.connect();
+
+      await expect(transport.send(new Uint8Array([1, 2, 3]))).resolves.toBeUndefined();
+    } finally {
+      vi.stubGlobal("process", originalProcess);
+      vi.stubGlobal("WebSocket", originalWebSocket);
+    }
+  });
+
+  it("stays disconnected when browser onopen fires after connect timeout", async () => {
+    vi.useFakeTimers();
+    vi.resetModules();
+
+    const originalProcess = globalThis.process;
+    const originalWebSocket = globalThis.WebSocket;
+
+    class SlowWebSocket {
+      static instances: SlowWebSocket[] = [];
+
+      binaryType = "";
+      onopen: (() => void) | null = null;
+      onmessage: ((event: { data: ArrayBuffer | Uint8Array | Blob }) => void) | null = null;
+      onerror: ((event: { message?: string }) => void) | null = null;
+      onclose: (() => void) | null = null;
+
+      constructor(_url: string) {
+        SlowWebSocket.instances.push(this);
+      }
+
+      send(_data: Uint8Array): void {}
+
+      close(): void {}
+    }
+
+    vi.stubGlobal("process", undefined);
+    vi.stubGlobal("WebSocket", SlowWebSocket);
+
+    try {
+      const { createWebSocketTransport: createBrowserTransport } =
+        await import("../../../src/transport/websocket");
+      const transport = createBrowserTransport("ws://example.test/ws", { timeout: 10 });
+      const connect = transport.connect();
+      const connectResult = connect.catch((error: unknown) => error);
+
+      await vi.advanceTimersByTimeAsync(10);
+      expect(await connectResult).toBeInstanceOf(Error);
+      expect(await connectResult).toMatchObject({ message: expect.stringMatching(/timeout/i) });
+
+      SlowWebSocket.instances[0].onopen?.();
+
+      expect(transport.isConnected()).toBe(false);
+    } finally {
+      vi.stubGlobal("process", originalProcess);
+      vi.stubGlobal("WebSocket", originalWebSocket);
+      vi.useRealTimers();
+    }
+  });
+
+  it("stays disconnected when browser onopen fires after connect error", async () => {
+    vi.resetModules();
+
+    const originalProcess = globalThis.process;
+    const originalWebSocket = globalThis.WebSocket;
+
+    class ErrorWebSocket {
+      static instances: ErrorWebSocket[] = [];
+
+      binaryType = "";
+      onopen: (() => void) | null = null;
+      onmessage: ((event: { data: ArrayBuffer | Uint8Array | Blob }) => void) | null = null;
+      onerror: ((event: { message?: string }) => void) | null = null;
+      onclose: (() => void) | null = null;
+
+      constructor(_url: string) {
+        ErrorWebSocket.instances.push(this);
+      }
+
+      send(_data: Uint8Array): void {}
+
+      close(): void {}
+    }
+
+    vi.stubGlobal("process", undefined);
+    vi.stubGlobal("WebSocket", ErrorWebSocket);
+
+    try {
+      const { createWebSocketTransport: createBrowserTransport } =
+        await import("../../../src/transport/websocket");
+      const transport = createBrowserTransport("ws://example.test/ws", { timeout: 20 });
+      const connect = transport.connect();
+
+      ErrorWebSocket.instances[0].onerror?.({ message: "dial failed" });
+      await expect(connect).rejects.toThrow("dial failed");
+
+      ErrorWebSocket.instances[0].onopen?.();
+
+      expect(transport.isConnected()).toBe(false);
+    } finally {
+      vi.stubGlobal("process", originalProcess);
+      vi.stubGlobal("WebSocket", originalWebSocket);
+    }
+  });
+});

@@ -169,6 +169,11 @@ export const ScheduleCodec = {
       throw new Error("SCHEDULE_NOTIFY payload truncated");
     }
 
-    return { subId, payload: reader.readBytes(payloadLength) };
+    const notificationPayload = reader.readBytes(payloadLength);
+    if (!reader.isEOF()) {
+      throw new Error("SCHEDULE_NOTIFY payload has trailing bytes");
+    }
+
+    return { subId, payload: notificationPayload };
   },
 };

@@ -74,6 +74,20 @@ describe("RpcCodec", () => {
     it("throws ProtocolError for empty request responses", () => {
       expect(() => RpcCodec.decodeRequestResponse(new Uint8Array())).toThrowError(ProtocolError);
     });
+
+    it("throws ProtocolError for inbound requests with trailing bytes", () => {
+      const request = RpcCodec.encodeRequest(
+        new Uint8Array(16),
+        "rpc://test/svc",
+        "rpc://reply/temp",
+        testData("test"),
+      );
+      const malformed = new Uint8Array(request.length + 1);
+      malformed.set(request);
+      malformed[malformed.length - 1] = 0xff;
+
+      expect(() => RpcCodec.decodeInboundRequest(malformed)).toThrowError(ProtocolError);
+    });
   });
 
   describe("SUBSCRIBE_WORKER encoding", () => {

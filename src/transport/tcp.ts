@@ -241,6 +241,10 @@ export function createTcpTransport(url: string, options: TransportOptions = {}):
       return message;
     }
 
+    if (!connected) {
+      throw new TransportError("Connection closed");
+    }
+
     return new Promise((resolve, reject) => {
       const timeoutId = receiveTimeoutEnabled
         ? setTimeout(() => {

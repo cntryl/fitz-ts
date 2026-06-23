@@ -1,3 +1,5 @@
+/// <reference types="node" />
+
 /**
  * Stream Codec unit tests
  */
@@ -291,6 +293,16 @@ describe("StreamCodec", () => {
 
       // Assert
       expect(decoded.status).toBe(1);
+    });
+
+    it("should_reject_wrapped_response_with_trailing_bytes", () => {
+      const writer = new BufferWriter(16);
+      writer.writeU8(0);
+      writer.writeU8(0);
+      writer.writeU32BE(0);
+      writer.writeU8(0xff);
+
+      expect(() => StreamCodec.decodeBeginResponse(writer.getBuffer())).toThrow("trailing bytes");
     });
   });
 

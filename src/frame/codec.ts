@@ -15,8 +15,15 @@ const encodeFrame = (messageType: number, payload: Uint8Array): Uint8Array => {
   if (messageType < 0) {
     throw new CodecError(`Invalid message type: ${messageType}`);
   }
+  if (messageType > 0xffff) {
+    throw new CodecError(`Invalid message type: ${messageType}`);
+  }
 
   const payloadLength = payload.length;
+  if (payloadLength > 0xffff) {
+    throw new CodecError(`Frame payload too large: ${payloadLength} bytes`);
+  }
+
   const typeSize = messageType <= 254 ? 1 : 3;
   const buffer = new Uint8Array(typeSize + 2 + payloadLength);
   let offset = 0;

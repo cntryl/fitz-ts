@@ -69,11 +69,22 @@ export interface HeartbeatOptions {
   timeoutMs?: number;
 }
 
+export interface WebSocketOptions {
+  /**
+   * Extra HTTP headers for Node.js WebSocket upgrade requests.
+   *
+   * Browser WebSocket implementations do not allow callers to set upgrade
+   * headers, so these are applied only when the Node `ws` transport is used.
+   */
+  headers?: Record<string, string>;
+}
+
 export interface ClientConfig {
   url: string;
   tokenProvider?: TokenProvider;
   timeout?: number;
   transport?: TransportType;
+  webSocket?: WebSocketOptions;
   reconnect?: ReconnectOptions;
   retry?: RetryOptions;
   heartbeat?: HeartbeatOptions;

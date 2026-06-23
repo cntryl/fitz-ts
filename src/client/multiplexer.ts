@@ -393,16 +393,24 @@ export function createMultiplexer(observability: MultiplexerObservability = {}) 
     meter?.counter("fitz.request.started", 1, attributes);
     meter?.gauge?.("fitz.requests.in_flight", requestsInFlight, attributes);
 
-    const sendResult = send(frameData);
-    return sendResult.then(
+    let sendResult: Promise<void>;
+    try {
+      sendResult = send(frameData);
+    } catch (err) {
+      const error = err instanceof Error ? err : new Error(String(err));
+      failRequest(error);
+      return Promise.reject(error);
+    }
+
+    const responsePromise = deferred.promise;
+    const sendPromise = sendResult.then(
       () => {
         if (state !== ConnectionState.Authenticated) {
           const error = new ConnectionError("Connection closed or reset", { state });
-          unregisterRequest(messageType, requestEntry);
-          finalize();
+          failRequest(error);
           throw error;
         }
-        return deferred.promise;
+        return responsePromise;
       },
       (err) => {
         const alreadySettled = !finalize();
@@ -429,6 +437,8 @@ export function createMultiplexer(observability: MultiplexerObservability = {}) 
         throw err;
       },
     );
+
+    return Promise.race([sendPromise, responsePromise]);
   };
 
   const unregisterRequest = (messageType: number, requestEntry: PendingRequest): void => {
@@ -545,28 +555,30 @@ export function createMultiplexer(observability: MultiplexerObservability = {}) 
       clearTimeout(timeoutHandle);
       timeoutHandle = undefined;
     }
-    timeoutEntries = [];
+    const requestsToCancel: PendingRequest[] = [];
 
     for (const queueEntry of Object.values(pending)) {
       if (!queueEntry) {
         continue;
       }
-      for (let i = 0; i < queueEntry.size; i += 1) {
-        const index = (queueEntry.head + i) % queueEntry.queue.length;
-        const request = queueEntry.queue[index];
-        if (!request) {
-          continue;
+
+      for (const request of queueEntry.queue) {
+        if (request) {
+          requestsToCancel.push(request);
         }
-        void request.deferred.promise.catch(() => undefined);
-        void Promise.resolve().then(() =>
-          request.deferred.reject(
-            new ConnectionError("Connection closed or reset", {
-              state,
-            }),
-          ),
-        );
       }
     }
+
+    for (const request of requestsToCancel) {
+      request.rejectRequest(
+        new ConnectionError("Connection closed or reset", {
+          state,
+        }),
+      );
+    }
+
+    timeoutEntries = [];
+    nextTimeoutDeadline = Infinity;
 
     for (const key in pending) {
       delete pending[key];

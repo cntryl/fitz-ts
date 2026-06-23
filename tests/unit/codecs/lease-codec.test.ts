@@ -148,8 +148,7 @@ describe("LeaseCodec", () => {
       // Arrange
       const writer = new BufferWriter(32);
       writer.writeU64BE(222n); // subId
-      writer.writeU8(0); // change type = released
-      writer.writeU64BE(888n); // token
+      writer.writeString("lease://acme/resources/db_connection");
       const payload = writer.getBuffer();
 
       // Act
@@ -157,6 +156,7 @@ describe("LeaseCodec", () => {
 
       // Assert
       expect(decoded.subId).toBe(222n);
+      expect(decoded.route).toBe("lease://acme/resources/db_connection");
     });
   });
 });

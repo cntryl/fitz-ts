@@ -449,6 +449,10 @@ export const StreamCodec = {
 
     const dataLength = reader.readU32BE();
     const data = reader.readBytes(dataLength);
+    if (!reader.isEOF()) {
+      throw new Error("wrapped response has trailing bytes");
+    }
+
     return { status, sessionId, data };
   },
 };

@@ -85,6 +85,7 @@ export function createClient(config: ClientConfig) {
     Pick<ClientConfig, "tokenProvider" | "reconnect" | "asyncHandlers" | "retry" | "heartbeat"> = {
     timeout: 30000,
     transport: "auto",
+    webSocket: {},
     maxFrameSize: 65535,
     authSettleDelayMs: 100,
     maxInFlightRequests: 256,
@@ -141,11 +142,20 @@ export function createClient(config: ClientConfig) {
     return () => "";
   };
 
+  const clientClosedError = (): ConnectionError =>
+    new ConnectionError("Client is closed", {
+      state: ConnectionState.Closed,
+    });
+
+  const throwIfClientClosed = (): void => {
+    if (clientClosed) {
+      throw clientClosedError();
+    }
+  };
+
   const ensureConnection = (): Connection => {
     if (clientClosed) {
-      throw new ConnectionError("Client is closed", {
-        state: ConnectionState.Closed,
-      });
+      throw clientClosedError();
     }
 
     if (!connection) {
@@ -170,6 +180,7 @@ export function createClient(config: ClientConfig) {
           timeout: resolvedConfig.timeout,
           maxFrameSize: resolvedConfig.maxFrameSize,
           receiveTimeout: resolvedConfig.heartbeat?.enabled === false,
+          webSocket: resolvedConfig.webSocket,
         }),
       tokenProvider,
       {
@@ -190,9 +201,7 @@ export function createClient(config: ClientConfig) {
 
   const connect = async (options: ClientConnectOptions = {}): Promise<void> => {
     if (clientClosed) {
-      throw new ConnectionError("Client is closed", {
-        state: ConnectionState.Closed,
-      });
+      throw clientClosedError();
     }
 
     throwIfAborted(options.signal);
@@ -205,6 +214,7 @@ export function createClient(config: ClientConfig) {
 
     if (pendingConnectPromise) {
       await waitForSharedPromise(pendingConnectPromise, options.signal);
+      throwIfClientClosed();
       return;
     }
 
@@ -232,6 +242,7 @@ export function createClient(config: ClientConfig) {
     pendingConnectPromise = trackedConnectPromise;
 
     await waitForSharedPromise(trackedConnectPromise, options.signal);
+    throwIfClientClosed();
   };
 
   const close = async (): Promise<void> => {

@@ -198,6 +198,15 @@ describe("ScheduleCodec", () => {
         "payload truncated",
       );
     });
+
+    it("should_reject_schedule_fire_notification_with_trailing_bytes", () => {
+      const writer = new BufferWriter(256);
+      writer.writeU64BE(444n);
+      writer.writeU32BE(0);
+      writer.writeU8(0xff);
+
+      expect(() => ScheduleCodec.decodeNotification(writer.getBuffer())).toThrow("trailing bytes");
+    });
   });
 
   describe("Cron expression handling", () => {

@@ -82,6 +82,16 @@ describe("protocol primitives", () => {
     ).toThrowError(CodecError);
   });
 
+  it("rejects frames larger than the u16 payload length field", () => {
+    expect(() => FrameCodec.encodeFrame(MSG_CONNECT, new Uint8Array(65536))).toThrowError(
+      CodecError,
+    );
+  });
+
+  it("rejects message types larger than the escaped u16 field", () => {
+    expect(() => FrameCodec.encodeFrame(65536, new Uint8Array())).toThrowError(CodecError);
+  });
+
   it("parses streamed frames across chunk boundaries", () => {
     const parser = new FrameParser();
     const first = FrameCodec.encodeFrame(MSG_KV_BEGIN, new Uint8Array([1, 2]));
@@ -156,6 +166,12 @@ describe("protocol primitives", () => {
     const reader = new BufferReader(new Uint8Array([0x12]));
 
     expect(() => reader.readU16BE()).toThrow("Buffer overflow");
+  });
+
+  it("rejects truncated string contents", () => {
+    const reader = new BufferReader(new Uint8Array([0x00, 0x00, 0x00, 0x05, 0x68, 0x69]));
+
+    expect(() => reader.readString()).toThrow("Buffer overflow");
   });
 
   it("keeps message constants aligned with the canonical registry", () => {

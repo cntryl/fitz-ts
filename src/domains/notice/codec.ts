@@ -86,6 +86,9 @@ export const NoticeCodec = {
     const route = reader.readRoute();
     const bodyLen = reader.readU32BE();
     const body = reader.readBytes(bodyLen);
+    if (!reader.isEOF()) {
+      throw new Error("NOTICE_NOTIFY payload has trailing bytes");
+    }
 
     return { subId, route, body };
   },

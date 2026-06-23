@@ -24,4 +24,15 @@ export interface TransportOptions {
   timeout?: number;
   maxFrameSize?: number;
   receiveTimeout?: boolean;
+  webSocket?: WebSocketTransportOptions;
+}
+
+export interface WebSocketTransportOptions {
+  /**
+   * Extra HTTP headers for Node.js WebSocket upgrade requests.
+   *
+   * Browser WebSocket implementations do not allow callers to set upgrade
+   * headers, so these are applied only when the Node `ws` transport is used.
+   */
+  headers?: Record<string, string>;
 }

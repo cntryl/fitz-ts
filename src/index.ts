@@ -11,6 +11,7 @@ export type {
   ClientConfig,
   ClientConnectOptions,
   HeartbeatOptions,
+  WebSocketOptions,
   FitzLifecycleEvent,
   FitzLogger,
   FitzLogLevel,

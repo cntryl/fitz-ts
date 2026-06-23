@@ -433,6 +433,13 @@ export const RpcCodec = {
       });
     }
     const body = payload.subarray(offset, offset + bodyLen);
+    offset += bodyLen;
+
+    if (offset !== payload.length) {
+      throw new ProtocolError("Invalid RPC request payload structure", undefined, {
+        operation: "RPC_DECODE_INBOUND_REQUEST",
+      });
+    }
 
     return { correlationId, route, replyRoute, body };
   },
