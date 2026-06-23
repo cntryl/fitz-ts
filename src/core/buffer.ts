@@ -28,6 +28,25 @@ export function writeU64BEAt(buffer: Uint8Array, offset: number, value: bigint):
   return offset;
 }
 
+export function writeU64BENumberAt(buffer: Uint8Array, offset: number, value: number): number {
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new RangeError(`Invalid u64 number: ${value}`);
+  }
+
+  const high = Math.floor(value / 0x100000000);
+  const low = value >>> 0;
+
+  buffer[offset++] = (high >>> 24) & 0xff;
+  buffer[offset++] = (high >>> 16) & 0xff;
+  buffer[offset++] = (high >>> 8) & 0xff;
+  buffer[offset++] = high & 0xff;
+  buffer[offset++] = (low >>> 24) & 0xff;
+  buffer[offset++] = (low >>> 16) & 0xff;
+  buffer[offset++] = (low >>> 8) & 0xff;
+  buffer[offset++] = low & 0xff;
+  return offset;
+}
+
 export function readU32BEAt(buffer: Uint8Array, offset: number): number {
   return (
     ((buffer[offset] << 24) |
@@ -123,6 +142,11 @@ export function createBufferWriter(capacity: number = 4096) {
     buffer[offset++] = Number((value >> 16n) & 0xffn);
     buffer[offset++] = Number((value >> 8n) & 0xffn);
     buffer[offset++] = Number(value & 0xffn);
+  };
+
+  const writeU64BENumber = (value: number): void => {
+    ensureCapacity(8);
+    offset = writeU64BENumberAt(buffer, offset, value);
   };
 
   const writeU64LE = (value: bigint): void => {
@@ -279,6 +303,7 @@ export function createBufferWriter(capacity: number = 4096) {
     writeU32BE,
     writeU32LE,
     writeU64BE,
+    writeU64BENumber,
     writeU64LE,
     writeBytes,
     writeString,

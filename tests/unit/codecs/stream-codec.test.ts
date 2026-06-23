@@ -348,6 +348,24 @@ describe("StreamCodec", () => {
       expect(reader.readString()).toBe("proj.alpha");
       expect(reader.isEOF()).toBe(true);
     });
+
+    it("should_encode_append_with_metadata_and_discriminator", () => {
+      const body = testData("record1");
+      const metadata = testData("metadata1");
+      const encoded = StreamCodec.encodeAppend(456n, 100n, body, metadata, "proj.alpha");
+      const reader = new BufferReader(encoded);
+
+      expect(reader.readU64BE()).toBe(456n);
+      expect(reader.readU64BE()).toBe(100n);
+      expect(reader.readU32BE()).toBe(body.length);
+      expect(reader.readBytes(body.length)).toEqual(body);
+      expect(reader.readU8()).toBe(1);
+      expect(reader.readU32BE()).toBe(metadata.length);
+      expect(reader.readBytes(metadata.length)).toEqual(metadata);
+      expect(reader.readU8()).toBe(1);
+      expect(reader.readString()).toBe("proj.alpha");
+      expect(reader.isEOF()).toBe(true);
+    });
   });
 
   describe("COMMIT encoding", () => {
@@ -374,6 +392,29 @@ describe("StreamCodec", () => {
 
       // Assert
       expect(encoded).toBeInstanceOf(Uint8Array);
+
+      const reader = new BufferReader(encoded);
+      expect(reader.readRoute()).toBe("stream://test/events");
+      expect(reader.readU64BE()).toBe(50n);
+      expect(reader.readU64BE()).toBe(25n);
+      expect(reader.readU8()).toBe(0);
+      expect(reader.readU8()).toBe(0);
+      expect(reader.isEOF()).toBe(true);
+    });
+
+    it("should_encode_read_with_max_bytes", () => {
+      const encoded = StreamCodec.encodeRead("stream://test/events", 50n, 25, {
+        maxBytes: 1024n,
+      });
+      const reader = new BufferReader(encoded);
+
+      expect(reader.readRoute()).toBe("stream://test/events");
+      expect(reader.readU64BE()).toBe(50n);
+      expect(reader.readU64BE()).toBe(25n);
+      expect(reader.readU8()).toBe(1);
+      expect(reader.readU64BE()).toBe(1024n);
+      expect(reader.readU8()).toBe(0);
+      expect(reader.isEOF()).toBe(true);
     });
 
     it("should_encode_read_with_filter", () => {

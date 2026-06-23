@@ -4,7 +4,7 @@
 
 import { describe, it, expect } from "vite-plus/test";
 import { QueueCodec } from "../../../src/domains/queue/codec";
-import { BufferWriter } from "../../../src/core/buffer";
+import { BufferReader, BufferWriter } from "../../../src/core/buffer";
 import { testData } from "../helpers/test-utils";
 
 describe("QueueCodec", () => {
@@ -20,6 +20,13 @@ describe("QueueCodec", () => {
       // Assert
       expect(encoded).toBeInstanceOf(Uint8Array);
       expect(encoded.length).toBeGreaterThan(0);
+
+      const reader = new BufferReader(encoded);
+      expect(reader.readRoute()).toBe(route);
+      expect(reader.readU32BE()).toBe(body.length);
+      expect(reader.readBytes(body.length)).toEqual(body);
+      expect(reader.readU8()).toBe(0);
+      expect(reader.isEOF()).toBe(true);
     });
 
     it("should_encode_enqueue_with_empty_body", () => {
@@ -28,6 +35,21 @@ describe("QueueCodec", () => {
 
       // Assert
       expect(encoded).toBeInstanceOf(Uint8Array);
+    });
+
+    it("should_encode_enqueue_with_delay_seconds", () => {
+      const route = "queue://test/tasks";
+      const body = testData("delayed");
+
+      const encoded = QueueCodec.encodeEnqueue(route, body, { delayMs: 2500 });
+      const reader = new BufferReader(encoded);
+
+      expect(reader.readRoute()).toBe(route);
+      expect(reader.readU32BE()).toBe(body.length);
+      expect(reader.readBytes(body.length)).toEqual(body);
+      expect(reader.readU8()).toBe(1);
+      expect(reader.readU64BE()).toBe(2n);
+      expect(reader.isEOF()).toBe(true);
     });
   });
 
@@ -59,6 +81,26 @@ describe("QueueCodec", () => {
 
       // Assert
       expect(encoded).toBeInstanceOf(Uint8Array);
+
+      const reader = new BufferReader(encoded);
+      expect(reader.readRoute()).toBe(route);
+      expect(reader.readU64BE()).toBe(BigInt(ttlSecs));
+      expect(reader.readU8()).toBe(0);
+      expect(reader.isEOF()).toBe(true);
+    });
+
+    it("should_encode_reserve_with_batch_size", () => {
+      const route = "queue://acme/jobs/tasks";
+      const ttlSecs = 30;
+
+      const encoded = QueueCodec.encodeReserve(route, ttlSecs, 10);
+      const reader = new BufferReader(encoded);
+
+      expect(reader.readRoute()).toBe(route);
+      expect(reader.readU64BE()).toBe(BigInt(ttlSecs));
+      expect(reader.readU8()).toBe(1);
+      expect(reader.readU32BE()).toBe(10);
+      expect(reader.isEOF()).toBe(true);
     });
   });
 
@@ -132,6 +174,13 @@ describe("QueueCodec", () => {
 
       // Assert
       expect(encoded).toBeInstanceOf(Uint8Array);
+
+      const reader = new BufferReader(encoded);
+      expect(reader.readRoute()).toBe(route);
+      expect(reader.readU64BE()).toBe(messageId);
+      expect(reader.readU64BE()).toBe(token);
+      expect(reader.readU64BE()).toBe(BigInt(ttlSecs));
+      expect(reader.isEOF()).toBe(true);
     });
   });
 
@@ -147,6 +196,12 @@ describe("QueueCodec", () => {
 
       // Assert
       expect(encoded).toBeInstanceOf(Uint8Array);
+
+      const reader = new BufferReader(encoded);
+      expect(reader.readRoute()).toBe(route);
+      expect(reader.readU64BE()).toBe(messageId);
+      expect(reader.readU64BE()).toBe(token);
+      expect(reader.isEOF()).toBe(true);
     });
   });
 

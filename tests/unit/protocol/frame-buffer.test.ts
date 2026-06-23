@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { BufferReader, BufferWriter } from "../../../src/core/buffer";
+import {
+  BufferReader,
+  BufferWriter,
+  writeU64BEAt,
+  writeU64BENumberAt,
+} from "../../../src/core/buffer";
 import { CodecError } from "../../../src/core/errors";
 import { FrameCodec, FrameParser } from "../../../src/frame/codec";
 import {
@@ -160,6 +165,31 @@ describe("protocol primitives", () => {
     expect(reader.readOptionalString()).toBeUndefined();
     expect(reader.readOptionalBytes()).toEqual(new Uint8Array([4, 5]));
     expect(reader.readOptionalBytes()).toBeUndefined();
+  });
+
+  it("encodes safe integer u64 values with the number fast path", () => {
+    const values = [0, 1, 255, 256, 0xffffffff, 0x100000000, Number.MAX_SAFE_INTEGER];
+
+    for (const value of values) {
+      const expected = new Uint8Array(8);
+      writeU64BEAt(expected, 0, BigInt(value));
+
+      const actual = new Uint8Array(8);
+      expect(writeU64BENumberAt(actual, 0, value)).toBe(8);
+      expect(actual).toEqual(expected);
+
+      const writer = new BufferWriter(8);
+      writer.writeU64BENumber(value);
+      expect(writer.getBuffer()).toEqual(expected);
+    }
+  });
+
+  it("rejects invalid number values for the u64 fast path", () => {
+    const invalidValues = [-1, 1.5, Number.MAX_SAFE_INTEGER + 1, Infinity, Number.NaN];
+
+    for (const value of invalidValues) {
+      expect(() => writeU64BENumberAt(new Uint8Array(8), 0, value)).toThrow(RangeError);
+    }
   });
 
   it("rejects truncated primitive reads", () => {

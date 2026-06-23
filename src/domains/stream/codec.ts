@@ -3,7 +3,16 @@
  * Per CLIENT_SPEC.md and fitz-go/internal/domains/stream/protocol.go
  */
 
-import { BufferWriter, BufferReader, utf8Decoder } from "../../core/buffer";
+import {
+  BufferWriter,
+  BufferReader,
+  getRouteEncoding,
+  utf8Decoder,
+  utf8Encoder,
+  writeU32BEAt,
+  writeU64BEAt,
+  writeU64BENumberAt,
+} from "../../core/buffer";
 import {
   StreamCommitMode,
   StreamCommitPayload,
@@ -59,27 +68,41 @@ export const StreamCodec = {
     metadata?: Uint8Array,
     discriminator?: StreamDiscriminator,
   ): Uint8Array {
-    const writer = new BufferWriter(512);
-    writer.writeU64BE(sessionId);
-    writer.writeU64BE(expectedOffset);
-    writer.writeU32BE(body.length);
-    writer.writeBytes(body);
-    if (metadata && metadata.length > 0) {
-      writer.writeU8(1);
-      writer.writeU32BE(metadata.length);
-      writer.writeBytes(metadata);
-    } else {
-      writer.writeU8(0);
+    const hasMetadata = metadata !== undefined && metadata.length > 0;
+    const hasDiscriminator = discriminator !== undefined && discriminator.length > 0;
+    const discriminatorBytes = hasDiscriminator ? utf8Encoder.encode(discriminator) : undefined;
+    const buffer = new Uint8Array(
+      8 +
+        8 +
+        4 +
+        body.length +
+        1 +
+        (hasMetadata && metadata !== undefined ? 4 + metadata.length : 0) +
+        1 +
+        (discriminatorBytes ? 4 + discriminatorBytes.length : 0),
+    );
+    let offset = 0;
+
+    offset = writeU64BEAt(buffer, offset, sessionId);
+    offset = writeU64BEAt(buffer, offset, expectedOffset);
+    offset = writeU32BEAt(buffer, offset, body.length);
+    buffer.set(body, offset);
+    offset += body.length;
+
+    buffer[offset++] = hasMetadata ? 1 : 0;
+    if (hasMetadata && metadata !== undefined) {
+      offset = writeU32BEAt(buffer, offset, metadata.length);
+      buffer.set(metadata, offset);
+      offset += metadata.length;
     }
 
-    if (discriminator !== undefined && discriminator.length > 0) {
-      writer.writeU8(1);
-      writer.writeString(discriminator);
-    } else {
-      writer.writeU8(0);
+    buffer[offset++] = hasDiscriminator ? 1 : 0;
+    if (discriminatorBytes) {
+      offset = writeU32BEAt(buffer, offset, discriminatorBytes.length);
+      buffer.set(discriminatorBytes, offset);
     }
 
-    return writer.getBufferView();
+    return buffer;
   },
 
   /**
@@ -150,29 +173,44 @@ export const StreamCodec = {
     limit: number,
     options?: StreamReadOptions,
   ): Uint8Array {
-    const writer = new BufferWriter(256);
-    writer.writeRoute(route);
-    writer.writeU64BE(startOffset);
-    writer.writeU64BE(BigInt(limit));
-    if (options?.maxBytes !== undefined) {
-      writer.writeU8(1);
-      writer.writeU64BE(options.maxBytes);
-    } else {
-      writer.writeU8(0);
-    }
-
+    const routeBytes = getRouteEncoding(route);
+    const hasMaxBytes = options?.maxBytes !== undefined;
     const filter = options?.filter;
-    if (filter && filter.clauses.length > 0) {
-      writer.writeU8(1);
+    const hasFilter = filter !== undefined && filter.clauses.length > 0;
+    let filterBytes: Uint8Array | undefined;
+
+    if (hasFilter) {
       const filterWriter = new BufferWriter(64);
       encodeStreamFilterSet(filter, filterWriter);
-      const filterBytes = filterWriter.getBufferView();
-      writer.writeU32BE(filterBytes.length);
-      writer.writeBytes(filterBytes);
-    } else {
-      writer.writeU8(0);
+      filterBytes = filterWriter.getBufferView();
     }
-    return writer.getBufferView();
+
+    const buffer = new Uint8Array(
+      routeBytes.length +
+        8 +
+        8 +
+        1 +
+        (hasMaxBytes ? 8 : 0) +
+        1 +
+        (filterBytes ? 4 + filterBytes.length : 0),
+    );
+    let offset = 0;
+
+    buffer.set(routeBytes, offset);
+    offset += routeBytes.length;
+    offset = writeU64BEAt(buffer, offset, startOffset);
+    offset = writeU64BENumberAt(buffer, offset, limit);
+    buffer[offset++] = hasMaxBytes ? 1 : 0;
+    if (options?.maxBytes !== undefined) {
+      offset = writeU64BEAt(buffer, offset, options.maxBytes);
+    }
+
+    buffer[offset++] = hasFilter ? 1 : 0;
+    if (filterBytes) {
+      offset = writeU32BEAt(buffer, offset, filterBytes.length);
+      buffer.set(filterBytes, offset);
+    }
+    return buffer;
   },
 
   /**

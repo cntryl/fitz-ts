@@ -2,7 +2,15 @@
  * Queue domain codec for encoding and decoding protocol messages.
  */
 
-import { BufferWriter, BufferReader, utf8Decoder } from "../../core/buffer";
+import {
+  BufferWriter,
+  BufferReader,
+  getRouteEncoding,
+  utf8Decoder,
+  writeU32BEAt,
+  writeU64BEAt,
+  writeU64BENumberAt,
+} from "../../core/buffer";
 import {
   QueueEnqueueResponse,
   QueueReserveResponse,
@@ -19,19 +27,23 @@ export const QueueCodec = {
    * Payload: [route: string][body_len: u32][body: bytes][has_delay: u8][delay_seconds: u64 if has_delay]
    */
   encodeEnqueue(route: string, body: Uint8Array, options?: EnqueueOptions): Uint8Array {
-    const writer = new BufferWriter(512);
-    writer.writeRoute(route);
-    writer.writeU32BE(body.length);
-    writer.writeBytes(body);
-
+    const routeBytes = getRouteEncoding(route);
     const delaySeconds = options?.delayMs ? Math.floor(options.delayMs / 1000) : 0;
     const hasDelay = delaySeconds > 0 ? 1 : 0;
-    writer.writeU8(hasDelay);
+
+    const buffer = new Uint8Array(routeBytes.length + 4 + body.length + 1 + (hasDelay ? 8 : 0));
+    let offset = 0;
+    buffer.set(routeBytes, offset);
+    offset += routeBytes.length;
+    offset = writeU32BEAt(buffer, offset, body.length);
+    buffer.set(body, offset);
+    offset += body.length;
+    buffer[offset++] = hasDelay;
     if (hasDelay) {
-      writer.writeU64BE(BigInt(delaySeconds));
+      writeU64BENumberAt(buffer, offset, delaySeconds);
     }
 
-    return writer.getBufferView();
+    return buffer;
   },
 
   /**
@@ -59,17 +71,20 @@ export const QueueCodec = {
    * Long polling is handled client-side by QueueClient.reserve().
    */
   encodeReserve(route: string, leaseSeconds: number, batchSize?: number): Uint8Array {
-    const writer = new BufferWriter(256);
-    writer.writeRoute(route);
-    writer.writeU64BE(BigInt(leaseSeconds));
-
+    const routeBytes = getRouteEncoding(route);
     const hasBatchSize = batchSize !== undefined && batchSize > 0 ? 1 : 0;
-    writer.writeU8(hasBatchSize);
+    const buffer = new Uint8Array(routeBytes.length + 8 + 1 + (hasBatchSize ? 4 : 0));
+    let offset = 0;
+
+    buffer.set(routeBytes, offset);
+    offset += routeBytes.length;
+    offset = writeU64BENumberAt(buffer, offset, leaseSeconds);
+    buffer[offset++] = hasBatchSize;
     if (hasBatchSize && batchSize !== undefined) {
-      writer.writeU32BE(batchSize);
+      writeU32BEAt(buffer, offset, batchSize);
     }
 
-    return writer.getBufferView();
+    return buffer;
   },
 
   /**
@@ -108,11 +123,15 @@ export const QueueCodec = {
    * Payload: [route: string][message_id: u64][lease_token: u64]
    */
   encodeComplete(route: string, messageId: bigint, leaseToken: bigint): Uint8Array {
-    const writer = new BufferWriter(128);
-    writer.writeRoute(route);
-    writer.writeU64BE(messageId);
-    writer.writeU64BE(leaseToken);
-    return writer.getBufferView();
+    const routeBytes = getRouteEncoding(route);
+    const buffer = new Uint8Array(routeBytes.length + 16);
+    let offset = 0;
+
+    buffer.set(routeBytes, offset);
+    offset += routeBytes.length;
+    offset = writeU64BEAt(buffer, offset, messageId);
+    writeU64BEAt(buffer, offset, leaseToken);
+    return buffer;
   },
 
   /**
@@ -139,12 +158,16 @@ export const QueueCodec = {
     leaseToken: bigint,
     leaseSeconds: number,
   ): Uint8Array {
-    const writer = new BufferWriter(128);
-    writer.writeRoute(route);
-    writer.writeU64BE(messageId);
-    writer.writeU64BE(leaseToken);
-    writer.writeU64BE(BigInt(leaseSeconds));
-    return writer.getBufferView();
+    const routeBytes = getRouteEncoding(route);
+    const buffer = new Uint8Array(routeBytes.length + 24);
+    let offset = 0;
+
+    buffer.set(routeBytes, offset);
+    offset += routeBytes.length;
+    offset = writeU64BEAt(buffer, offset, messageId);
+    offset = writeU64BEAt(buffer, offset, leaseToken);
+    writeU64BENumberAt(buffer, offset, leaseSeconds);
+    return buffer;
   },
 
   /**
