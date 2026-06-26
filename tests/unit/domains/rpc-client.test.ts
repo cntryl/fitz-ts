@@ -2,8 +2,13 @@ import { describe, expect, it, vi } from "vite-plus/test";
 
 import { ConnectionState } from "../../../src/core/types";
 import { ConnectionError, ErrCodeRpcWorkerNotFound, RpcError } from "../../../src/core/errors";
-import { BufferWriter } from "../../../src/core/buffer";
-import { MSG_RPC_REQUEST, MSG_RPC_RESPONSE } from "../../../src/frame/types";
+import { BufferWriter, utf8Decoder, utf8Encoder } from "../../../src/core/buffer";
+import {
+  MSG_RPC_REQUEST,
+  MSG_RPC_RESPONSE,
+  MSG_RPC_SUBSCRIBE_WORKER,
+  MSG_RPC_UNSUBSCRIBE_WORKER,
+} from "../../../src/frame/types";
 import { RpcClient } from "../../../src/domains/rpc/client";
 import { RpcCodec } from "../../../src/domains/rpc/codec";
 import type { Connection } from "../../../src/client/connection";
@@ -11,10 +16,12 @@ import type { Connection } from "../../../src/client/connection";
 class FakeRpcConnection {
   public readonly notificationHandlers = new Map<number, (payload: Uint8Array) => void>();
   public lastRequest: { messageType: number; payload: Uint8Array } | undefined;
+  public requestCalls: Array<{ messageType: number; payload: Uint8Array }> = [];
   public sendCalls: Array<{ messageType: number; payload: Uint8Array }> = [];
   public lastSignal: AbortSignal | undefined;
   private state = ConnectionState.Authenticated;
   private readonly disconnectListeners = new Set<() => void>();
+  private readonly reconnectListeners = new Set<() => void | Promise<void>>();
 
   async request(
     messageType: number,
@@ -22,6 +29,7 @@ class FakeRpcConnection {
     signal?: AbortSignal,
   ): Promise<Uint8Array> {
     this.lastRequest = { messageType, payload };
+    this.requestCalls.push({ messageType, payload });
     this.lastSignal = signal;
     if (signal?.aborted) {
       const error = new Error("The operation was aborted");
@@ -50,8 +58,11 @@ class FakeRpcConnection {
     this.notificationHandlers.delete(messageType);
   }
 
-  onReconnect(): () => void {
-    return () => undefined;
+  onReconnect(listener: () => void | Promise<void>): () => void {
+    this.reconnectListeners.add(listener);
+    return () => {
+      this.reconnectListeners.delete(listener);
+    };
   }
 
   onDisconnect(listener: () => void): () => void {
@@ -77,6 +88,16 @@ class FakeRpcConnection {
     for (const listener of this.disconnectListeners) {
       listener();
     }
+  }
+
+  async reconnect(): Promise<void> {
+    for (const listener of this.reconnectListeners) {
+      await listener();
+    }
+  }
+
+  countRequests(messageType: number): number {
+    return this.requestCalls.filter((call) => call.messageType === messageType).length;
   }
 }
 
@@ -140,6 +161,58 @@ describe("RpcClient", () => {
     await Promise.resolve();
 
     expect(connection.sendCalls).toHaveLength(0);
+  });
+
+  it("re-subscribes workers on reconnect and handles requests with the restored handler", async () => {
+    const connection = new FakeRpcConnection();
+    const client = new RpcClient(connection as unknown as Connection);
+    const route = "rpc://realm/area/method";
+    const handledBodies: string[] = [];
+
+    await client.registerWorker(route, async (req, writer) => {
+      handledBodies.push(utf8Decoder.decode(req.body));
+      await writer.send(new Uint8Array([5]), true);
+    });
+    expect(connection.countRequests(MSG_RPC_SUBSCRIBE_WORKER)).toBe(1);
+
+    await connection.reconnect();
+    expect(connection.countRequests(MSG_RPC_SUBSCRIBE_WORKER)).toBe(2);
+
+    const handler = connection.notificationHandlers.get(MSG_RPC_REQUEST);
+    expect(handler).toBeTypeOf("function");
+
+    if (!handler) {
+      throw new Error("Expected RPC request handler to be registered");
+    }
+
+    handler(RpcCodec.encodeRequest(new Uint8Array(16), route, "", utf8Encoder.encode("after")));
+
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(handledBodies).toEqual(["after"]);
+    expect(connection.sendCalls).toHaveLength(1);
+    expect(connection.sendCalls[0].messageType).toBe(MSG_RPC_RESPONSE);
+    expect(RpcCodec.decodeResponseKey(connection.sendCalls[0].payload)).toMatchObject({
+      body: new Uint8Array([5]),
+      streamEnd: true,
+    });
+  });
+
+  it("does not re-subscribe workers after they unsubscribe", async () => {
+    const connection = new FakeRpcConnection();
+    const client = new RpcClient(connection as unknown as Connection);
+    const subscription = await client.registerWorker(
+      "rpc://realm/area/method",
+      async () => undefined,
+    );
+    expect(connection.countRequests(MSG_RPC_SUBSCRIBE_WORKER)).toBe(1);
+
+    await subscription.unsubscribe();
+    expect(connection.countRequests(MSG_RPC_UNSUBSCRIBE_WORKER)).toBe(1);
+
+    await connection.reconnect();
+    expect(connection.countRequests(MSG_RPC_SUBSCRIBE_WORKER)).toBe(1);
   });
 
   it("forwards request cancellation to the connection layer", async () => {

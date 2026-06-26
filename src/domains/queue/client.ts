@@ -166,6 +166,9 @@ export function createQueueClient(connection: Connection) {
     const subscription = await subscribe(route, () => {
       wakeGate.wake();
     });
+    const unsubscribeReconnectWake = connection.onReconnect(() => {
+      wakeGate.wake();
+    });
 
     try {
       while (true) {
@@ -185,6 +188,7 @@ export function createQueueClient(connection: Connection) {
         await wakeGate.waitAfter(observed, { signal: options.signal });
       }
     } finally {
+      unsubscribeReconnectWake();
       await subscription.unsubscribe().catch(() => undefined);
     }
   };

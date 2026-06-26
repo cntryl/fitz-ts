@@ -15,6 +15,7 @@ type Handler = (payload: Uint8Array) => void;
 class FakeQueueConnection {
   readonly requests: Array<{ messageType: number; payload: Uint8Array }> = [];
   readonly handlers = new Map<number, Handler>();
+  readonly reconnectListeners = new Set<() => void | Promise<void>>();
   reserveResponses: Uint8Array[] = [];
   unsubscribeCount = 0;
   onReserve: (() => void) | null = null;
@@ -43,8 +44,11 @@ class FakeQueueConnection {
     void Promise.resolve().then(task);
   }
 
-  onReconnect(): () => void {
-    return () => undefined;
+  onReconnect(listener: () => void | Promise<void>): () => void {
+    this.reconnectListeners.add(listener);
+    return () => {
+      this.reconnectListeners.delete(listener);
+    };
   }
 
   onDisconnect(): () => void {
@@ -53,6 +57,12 @@ class FakeQueueConnection {
 
   notify(route: string = "queue://realm/area/resource/ready"): void {
     this.handlers.get(MSG_QUEUE_NOTIFY)?.(encodeQueueNotification(7n, route));
+  }
+
+  async reconnect(): Promise<void> {
+    for (const listener of this.reconnectListeners) {
+      await listener();
+    }
   }
 }
 
@@ -114,6 +124,38 @@ describe("QueueClient reserveWhenAvailable", () => {
     expect(
       connection.requests.filter((call) => call.messageType === MSG_QUEUE_RESERVE),
     ).toHaveLength(2);
+  });
+
+  it("reserves again after reconnect even without a queue notification", async () => {
+    const connection = new FakeQueueConnection();
+    connection.reserveResponses.push(
+      encodeQueueReserveResponse([]),
+      encodeQueueReserveResponse([{ id: 1n, token: 2n, body: new Uint8Array([5]) }]),
+    );
+    const client = new QueueClient(connection as unknown as Connection);
+    const iterator = client
+      .reserveWhenAvailable("queue://realm/area/resource", { leaseSeconds: 30, batchSize: 10 })
+      [Symbol.asyncIterator]();
+
+    const pending = iterator.next();
+    await vi.waitFor(() => {
+      expect(
+        connection.requests.filter((call) => call.messageType === MSG_QUEUE_RESERVE),
+      ).toHaveLength(1);
+    });
+
+    await connection.reconnect();
+
+    const result = await pending;
+    expect(result.done).toBe(false);
+    expect(result.value).toHaveLength(1);
+    expect(result.value?.[0].body).toEqual(new Uint8Array([5]));
+    expect(
+      connection.requests.filter((call) => call.messageType === MSG_QUEUE_RESERVE),
+    ).toHaveLength(2);
+
+    await iterator.return?.();
+    expect(connection.unsubscribeCount).toBe(1);
   });
 
   it("unsubscribes when the iterator is aborted", async () => {

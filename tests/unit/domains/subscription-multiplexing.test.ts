@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import type { Connection } from "../../../src/client/connection";
-import { BufferWriter } from "../../../src/core/buffer";
+import { BufferWriter, utf8Decoder, utf8Encoder } from "../../../src/core/buffer";
 import { LeaseClient } from "../../../src/domains/lease/client";
 import { NoticeClient } from "../../../src/domains/notice/client";
 import { QueueClient } from "../../../src/domains/queue/client";
@@ -26,7 +26,7 @@ import {
 } from "../../../src/frame/types";
 
 class FakeSubscriptionConnection {
-  private readonly responses = new Map<number, Uint8Array>();
+  private readonly responses = new Map<number, Uint8Array[]>();
   private readonly notificationHandlers = new Map<number, (payload: Uint8Array) => void>();
   private readonly reconnectListeners = new Set<() => void | Promise<void>>();
   private readonly pendingHandlers: Promise<void>[] = [];
@@ -34,17 +34,23 @@ class FakeSubscriptionConnection {
 
   constructor(responses: Array<[number, Uint8Array]>) {
     for (const [messageType, payload] of responses) {
-      this.responses.set(messageType, payload);
+      const existing = this.responses.get(messageType);
+      if (existing) {
+        existing.push(payload);
+      } else {
+        this.responses.set(messageType, [payload]);
+      }
     }
   }
 
   async request(messageType: number): Promise<Uint8Array> {
     this.requestCalls.push(messageType);
-    const response = this.responses.get(messageType);
-    if (!response) {
+    const responses = this.responses.get(messageType);
+    if (!responses || responses.length === 0) {
       throw new Error(`No response configured for message type ${messageType}`);
     }
 
+    const response = responses.length > 1 ? responses.shift()! : responses[0];
     return response.slice();
   }
 
@@ -160,6 +166,7 @@ describe("Subscription Multiplexing", () => {
   it("notice client multiplexes duplicate subscriptions locally and on reconnect", async () => {
     const connection = new FakeSubscriptionConnection([
       [MSG_NOTICE_SUBSCRIBE, encodeOptionalSubIdResponse(11n)],
+      [MSG_NOTICE_SUBSCRIBE, encodeOptionalSubIdResponse(12n)],
       [MSG_NOTICE_UNSUBSCRIBE, encodeStatusOnlyResponse()],
     ]);
     const client = new NoticeClient(connection as unknown as Connection);
@@ -180,7 +187,7 @@ describe("Subscription Multiplexing", () => {
 
     connection.emitNotification(
       MSG_NOTICE_NOTIFY,
-      encodeNoticeNotification(11n, pattern, Buffer.from("first")),
+      encodeNoticeNotification(11n, pattern, utf8Encoder.encode("first")),
     );
     await connection.flushHandlers();
     expect(firstRoutes).toEqual([pattern]);
@@ -191,7 +198,7 @@ describe("Subscription Multiplexing", () => {
 
     connection.emitNotification(
       MSG_NOTICE_NOTIFY,
-      encodeNoticeNotification(11n, pattern, Buffer.from("second")),
+      encodeNoticeNotification(11n, pattern, utf8Encoder.encode("second")),
     );
     await connection.flushHandlers();
     expect(firstRoutes).toEqual([pattern]);
@@ -200,6 +207,22 @@ describe("Subscription Multiplexing", () => {
     await connection.reconnect();
     expect(connection.countRequests(MSG_NOTICE_SUBSCRIBE)).toBe(2);
 
+    connection.emitNotification(
+      MSG_NOTICE_NOTIFY,
+      encodeNoticeNotification(11n, pattern, utf8Encoder.encode("stale")),
+    );
+    await connection.flushHandlers();
+    expect(firstRoutes).toEqual([pattern]);
+    expect(secondRoutes).toEqual([pattern, pattern]);
+
+    connection.emitNotification(
+      MSG_NOTICE_NOTIFY,
+      encodeNoticeNotification(12n, pattern, utf8Encoder.encode("after")),
+    );
+    await connection.flushHandlers();
+    expect(firstRoutes).toEqual([pattern]);
+    expect(secondRoutes).toEqual([pattern, pattern, pattern]);
+
     await second.unsubscribe();
     expect(connection.countRequests(MSG_NOTICE_UNSUBSCRIBE)).toBe(1);
   });
@@ -207,6 +230,7 @@ describe("Subscription Multiplexing", () => {
   it("queue client keeps one wire subscription per pattern", async () => {
     const connection = new FakeSubscriptionConnection([
       [MSG_QUEUE_SUBSCRIBE, encodeQueueSubIdResponse(21n)],
+      [MSG_QUEUE_SUBSCRIBE, encodeQueueSubIdResponse(22n)],
       [MSG_QUEUE_UNSUBSCRIBE, encodeStatusOnlyResponse()],
     ]);
     const client = new QueueClient(connection as unknown as Connection);
@@ -238,6 +262,19 @@ describe("Subscription Multiplexing", () => {
     expect(firstRoutes).toEqual([pattern]);
     expect(secondRoutes).toEqual([pattern, pattern]);
 
+    await connection.reconnect();
+    expect(connection.countRequests(MSG_QUEUE_SUBSCRIBE)).toBe(2);
+
+    connection.emitNotification(MSG_QUEUE_NOTIFY, encodeQueueNotification(21n, `${pattern}/ready`));
+    await connection.flushHandlers();
+    expect(firstRoutes).toEqual([pattern]);
+    expect(secondRoutes).toEqual([pattern, pattern]);
+
+    connection.emitNotification(MSG_QUEUE_NOTIFY, encodeQueueNotification(22n, `${pattern}/ready`));
+    await connection.flushHandlers();
+    expect(firstRoutes).toEqual([pattern]);
+    expect(secondRoutes).toEqual([pattern, pattern, pattern]);
+
     await second.unsubscribe();
     expect(connection.countRequests(MSG_QUEUE_UNSUBSCRIBE)).toBe(1);
   });
@@ -245,6 +282,7 @@ describe("Subscription Multiplexing", () => {
   it("lease client keeps one wire subscription per pattern", async () => {
     const connection = new FakeSubscriptionConnection([
       [MSG_LEASE_SUBSCRIBE, encodeLeaseSubscribeResponse(31n)],
+      [MSG_LEASE_SUBSCRIBE, encodeLeaseSubscribeResponse(32n)],
       [MSG_LEASE_UNSUBSCRIBE, encodeStatusOnlyResponse()],
     ]);
     const client = new LeaseClient(connection as unknown as Connection);
@@ -276,6 +314,14 @@ describe("Subscription Multiplexing", () => {
     expect(firstRoutes).toEqual([pattern]);
     expect(secondRoutes).toEqual([pattern, pattern]);
 
+    await connection.reconnect();
+    expect(connection.countRequests(MSG_LEASE_SUBSCRIBE)).toBe(2);
+
+    connection.emitNotification(MSG_LEASE_NOTIFY, encodeLeaseNotification(32n, pattern));
+    await connection.flushHandlers();
+    expect(firstRoutes).toEqual([pattern]);
+    expect(secondRoutes).toEqual([pattern, pattern, pattern]);
+
     await second.unsubscribe();
     expect(connection.countRequests(MSG_LEASE_UNSUBSCRIBE)).toBe(1);
   });
@@ -283,6 +329,7 @@ describe("Subscription Multiplexing", () => {
   it("schedule client keeps one wire subscription per pattern", async () => {
     const connection = new FakeSubscriptionConnection([
       [MSG_SCHEDULE_SUBSCRIBE, encodeOptionalSubIdResponse(41n)],
+      [MSG_SCHEDULE_SUBSCRIBE, encodeOptionalSubIdResponse(42n)],
       [MSG_SCHEDULE_UNSUBSCRIBE, encodeStatusOnlyResponse()],
     ]);
     const client = new ScheduleClient(connection as unknown as Connection);
@@ -291,10 +338,10 @@ describe("Subscription Multiplexing", () => {
     const pattern = "schedule://realm/area/resource/run";
 
     const first = await client.subscribe(pattern, async (notification) => {
-      firstPayloads.push(Buffer.from(notification.payload).toString());
+      firstPayloads.push(utf8Decoder.decode(notification.payload));
     });
     const second = await client.subscribe(pattern, async (notification) => {
-      secondPayloads.push(Buffer.from(notification.payload).toString());
+      secondPayloads.push(utf8Decoder.decode(notification.payload));
     });
 
     expect(first.subId).toBe(41n);
@@ -303,7 +350,7 @@ describe("Subscription Multiplexing", () => {
 
     connection.emitNotification(
       MSG_SCHEDULE_NOTIFY,
-      encodeScheduleNotification(41n, Buffer.from("first")),
+      encodeScheduleNotification(41n, utf8Encoder.encode("first")),
     );
     await connection.flushHandlers();
     expect(firstPayloads).toEqual(["first"]);
@@ -314,11 +361,30 @@ describe("Subscription Multiplexing", () => {
 
     connection.emitNotification(
       MSG_SCHEDULE_NOTIFY,
-      encodeScheduleNotification(41n, Buffer.from("second")),
+      encodeScheduleNotification(41n, utf8Encoder.encode("second")),
     );
     await connection.flushHandlers();
     expect(firstPayloads).toEqual(["first"]);
     expect(secondPayloads).toEqual(["first", "second"]);
+
+    await connection.reconnect();
+    expect(connection.countRequests(MSG_SCHEDULE_SUBSCRIBE)).toBe(2);
+
+    connection.emitNotification(
+      MSG_SCHEDULE_NOTIFY,
+      encodeScheduleNotification(41n, utf8Encoder.encode("stale")),
+    );
+    await connection.flushHandlers();
+    expect(firstPayloads).toEqual(["first"]);
+    expect(secondPayloads).toEqual(["first", "second"]);
+
+    connection.emitNotification(
+      MSG_SCHEDULE_NOTIFY,
+      encodeScheduleNotification(42n, utf8Encoder.encode("after")),
+    );
+    await connection.flushHandlers();
+    expect(firstPayloads).toEqual(["first"]);
+    expect(secondPayloads).toEqual(["first", "second", "after"]);
 
     await second.unsubscribe();
     expect(connection.countRequests(MSG_SCHEDULE_UNSUBSCRIBE)).toBe(1);
@@ -327,6 +393,7 @@ describe("Subscription Multiplexing", () => {
   it("stream client keeps one wire subscription per pattern", async () => {
     const connection = new FakeSubscriptionConnection([
       [MSG_STREAM_SUBSCRIBE, encodeOptionalSubIdResponse(51n)],
+      [MSG_STREAM_SUBSCRIBE, encodeOptionalSubIdResponse(52n)],
       [MSG_STREAM_UNSUBSCRIBE, encodeStatusOnlyResponse()],
     ]);
     const client = new StreamClient(connection as unknown as Connection);
@@ -364,7 +431,7 @@ describe("Subscription Multiplexing", () => {
       encodeStreamNotification(
         51n,
         pattern,
-        Buffer.from(
+        utf8Encoder.encode(
           JSON.stringify({
             event: "committed",
             first_resource_offset: 0,
@@ -396,11 +463,30 @@ describe("Subscription Multiplexing", () => {
 
     connection.emitNotification(
       MSG_STREAM_NOTIFY,
-      encodeStreamNotification(51n, pattern, Buffer.from("{}")),
+      encodeStreamNotification(51n, pattern, utf8Encoder.encode("{}")),
     );
     await connection.flushHandlers();
     expect(firstNotifications).toHaveLength(1);
     expect(secondRoutes).toEqual([pattern, pattern]);
+
+    await connection.reconnect();
+    expect(connection.countRequests(MSG_STREAM_SUBSCRIBE)).toBe(2);
+
+    connection.emitNotification(
+      MSG_STREAM_NOTIFY,
+      encodeStreamNotification(51n, pattern, utf8Encoder.encode("{}")),
+    );
+    await connection.flushHandlers();
+    expect(firstNotifications).toHaveLength(1);
+    expect(secondRoutes).toEqual([pattern, pattern]);
+
+    connection.emitNotification(
+      MSG_STREAM_NOTIFY,
+      encodeStreamNotification(52n, pattern, utf8Encoder.encode("{}")),
+    );
+    await connection.flushHandlers();
+    expect(firstNotifications).toHaveLength(1);
+    expect(secondRoutes).toEqual([pattern, pattern, pattern]);
 
     await second.unsubscribe();
     expect(connection.countRequests(MSG_STREAM_UNSUBSCRIBE)).toBe(1);

@@ -15,6 +15,7 @@ type Handler = (payload: Uint8Array) => void;
 class FakeStreamConsumerConnection {
   readonly requests: Array<{ messageType: number; payload: Uint8Array }> = [];
   readonly handlers = new Map<number, Handler>();
+  readonly reconnectListeners = new Set<() => void | Promise<void>>();
   readResponses: Uint8Array[] = [];
   unsubscribeCount = 0;
 
@@ -41,8 +42,11 @@ class FakeStreamConsumerConnection {
     void Promise.resolve().then(task);
   }
 
-  onReconnect(): () => void {
-    return () => undefined;
+  onReconnect(listener: () => void | Promise<void>): () => void {
+    this.reconnectListeners.add(listener);
+    return () => {
+      this.reconnectListeners.delete(listener);
+    };
   }
 
   onDisconnect(): () => void {
@@ -53,6 +57,12 @@ class FakeStreamConsumerConnection {
     this.handlers.get(MSG_STREAM_NOTIFY)?.(
       encodeStreamNotification(9n, "stream://realm/area/resource"),
     );
+  }
+
+  async reconnect(): Promise<void> {
+    for (const listener of this.reconnectListeners) {
+      await listener();
+    }
   }
 }
 
@@ -116,6 +126,33 @@ describe("StreamClient readWhenCommitted", () => {
     expect(result.done).toBe(false);
     expect(result.value?.map((record: { offset: bigint }) => record.offset)).toEqual([6n]);
     expect(readOffsets(connection)).toEqual([4n, 6n]);
+  });
+
+  it("reads again after reconnect even without a stream notification", async () => {
+    const connection = new FakeStreamConsumerConnection();
+    connection.readResponses.push(
+      encodeWrappedReadResponse([], 3n, false),
+      encodeWrappedReadResponse([encodeReadEvent(4n, new Uint8Array([4]))], 4n, false),
+    );
+    const client = new StreamClient(connection as unknown as Connection);
+    const iterator = client
+      .readWhenCommitted("stream://realm/area/resource", { offset: 4n, batchSize: 10 })
+      [Symbol.asyncIterator]();
+
+    const pending = iterator.next();
+    await vi.waitFor(() => {
+      expect(readOffsets(connection)).toEqual([4n]);
+    });
+
+    await connection.reconnect();
+
+    const result = await pending;
+    expect(result.done).toBe(false);
+    expect(result.value?.map((record: { offset: bigint }) => record.offset)).toEqual([4n]);
+    expect(readOffsets(connection)).toEqual([4n, 4n]);
+
+    await iterator.return?.();
+    expect(connection.unsubscribeCount).toBe(1);
   });
 });
 

@@ -148,6 +148,9 @@ export function createStreamClient(connection: Connection) {
     const subscription = await subscribe(route, () => {
       wakeGate.wake();
     });
+    const unsubscribeReconnectWake = connection.onReconnect(() => {
+      wakeGate.wake();
+    });
 
     try {
       let offset = options.offset;
@@ -175,6 +178,7 @@ export function createStreamClient(connection: Connection) {
         await wakeGate.waitAfter(observed, { signal: options.signal });
       }
     } finally {
+      unsubscribeReconnectWake();
       await subscription.unsubscribe().catch(() => undefined);
     }
   };
