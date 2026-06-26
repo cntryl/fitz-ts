@@ -1,6 +1,6 @@
 {
   "name": "@cntryl/fitz",
-  "version": "0.0.5",
+  "version": "0.0.6",
   "description": "TypeScript client library for Fitz distributed system",
   "keywords": [
     "distributed-systems",
@@ -58,7 +58,7 @@
     "prepare": "vp config"
   },
   "devDependencies": {
-    "@types/node": "^26.0.0",
+    "@types/node": "^26.0.1",
     "@types/ws": "^8.18.1",
     "cross-env": "^10.1.0",
     "typescript": "^6.0.3",
