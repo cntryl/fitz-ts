@@ -2,7 +2,13 @@
  * KV domain codec.
  */
 
-import { BufferWriter, BufferReader } from "../../core/buffer";
+import {
+  BufferWriter,
+  BufferReader,
+  getRouteEncoding,
+  writeU32BEAt,
+  writeU64BEAt,
+} from "../../core/buffer";
 import { CodecError } from "../../core/errors";
 import {
   KvBeginResponse,
@@ -16,11 +22,15 @@ import {
 
 export const KvCodec = {
   encodeBegin(route: string, mode: TxMode, durability: DurabilityMode): Uint8Array {
-    const writer = new BufferWriter(256);
-    writer.writeRoute(route);
-    writer.writeU8(mode === "ReadWrite" ? 1 : 0);
-    writer.writeU8(this.encodeDurability(durability));
-    return writer.getBufferView();
+    const routeBytes = getRouteEncoding(route);
+    const buffer = new Uint8Array(routeBytes.length + 2);
+    let offset = 0;
+
+    buffer.set(routeBytes, offset);
+    offset += routeBytes.length;
+    buffer[offset++] = mode === "ReadWrite" ? 1 : 0;
+    buffer[offset] = this.encodeDurability(durability);
+    return buffer;
   },
 
   decodeBeginResponse(payload: Uint8Array): KvBeginResponse {
@@ -31,14 +41,19 @@ export const KvCodec = {
   },
 
   encodePut(txId: bigint, route: string, key: Uint8Array, value: Uint8Array): Uint8Array {
-    const writer = new BufferWriter(512);
-    writer.writeU64BE(txId);
-    writer.writeRoute(route);
-    writer.writeU32BE(key.length);
-    writer.writeBytes(key);
-    writer.writeU32BE(value.length);
-    writer.writeBytes(value);
-    return writer.getBufferView();
+    const routeBytes = getRouteEncoding(route);
+    const buffer = new Uint8Array(8 + routeBytes.length + 4 + key.length + 4 + value.length);
+    let offset = 0;
+
+    offset = writeU64BEAt(buffer, offset, txId);
+    buffer.set(routeBytes, offset);
+    offset += routeBytes.length;
+    offset = writeU32BEAt(buffer, offset, key.length);
+    buffer.set(key, offset);
+    offset += key.length;
+    offset = writeU32BEAt(buffer, offset, value.length);
+    buffer.set(value, offset);
+    return buffer;
   },
 
   encodeInsert(txId: bigint, route: string, key: Uint8Array, value: Uint8Array): Uint8Array {
@@ -55,12 +70,16 @@ export const KvCodec = {
   },
 
   encodeGet(txId: bigint, route: string, key: Uint8Array): Uint8Array {
-    const writer = new BufferWriter(256);
-    writer.writeU64BE(txId);
-    writer.writeRoute(route);
-    writer.writeU32BE(key.length);
-    writer.writeBytes(key);
-    return writer.getBufferView();
+    const routeBytes = getRouteEncoding(route);
+    const buffer = new Uint8Array(8 + routeBytes.length + 4 + key.length);
+    let offset = 0;
+
+    offset = writeU64BEAt(buffer, offset, txId);
+    buffer.set(routeBytes, offset);
+    offset += routeBytes.length;
+    offset = writeU32BEAt(buffer, offset, key.length);
+    buffer.set(key, offset);
+    return buffer;
   },
 
   decodeGetResponse(payload: Uint8Array): KvGetResponse {
@@ -82,12 +101,7 @@ export const KvCodec = {
   },
 
   encodeDelete(txId: bigint, route: string, key: Uint8Array): Uint8Array {
-    const writer = new BufferWriter(256);
-    writer.writeU64BE(txId);
-    writer.writeRoute(route);
-    writer.writeU32BE(key.length);
-    writer.writeBytes(key);
-    return writer.getBufferView();
+    return this.encodeGet(txId, route, key);
   },
 
   encodeDeleteRange(
@@ -96,21 +110,29 @@ export const KvCodec = {
     startKey: Uint8Array,
     endKey: Uint8Array,
   ): Uint8Array {
-    const writer = new BufferWriter(256);
-    writer.writeU64BE(txId);
-    writer.writeRoute(route);
-    writer.writeU32BE(startKey.length);
-    writer.writeBytes(startKey);
-    writer.writeU32BE(endKey.length);
-    writer.writeBytes(endKey);
-    return writer.getBufferView();
+    const routeBytes = getRouteEncoding(route);
+    const buffer = new Uint8Array(8 + routeBytes.length + 4 + startKey.length + 4 + endKey.length);
+    let offset = 0;
+
+    offset = writeU64BEAt(buffer, offset, txId);
+    buffer.set(routeBytes, offset);
+    offset += routeBytes.length;
+    offset = writeU32BEAt(buffer, offset, startKey.length);
+    buffer.set(startKey, offset);
+    offset += startKey.length;
+    offset = writeU32BEAt(buffer, offset, endKey.length);
+    buffer.set(endKey, offset);
+    return buffer;
   },
 
   encodeCommit(txId: bigint, route: string): Uint8Array {
-    const writer = new BufferWriter(128);
-    writer.writeU64BE(txId);
-    writer.writeRoute(route);
-    return writer.getBufferView();
+    const routeBytes = getRouteEncoding(route);
+    const buffer = new Uint8Array(8 + routeBytes.length);
+    let offset = 0;
+
+    offset = writeU64BEAt(buffer, offset, txId);
+    buffer.set(routeBytes, offset);
+    return buffer;
   },
 
   encodeRollback(txId: bigint, route: string): Uint8Array {

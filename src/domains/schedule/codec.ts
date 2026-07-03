@@ -3,7 +3,13 @@
  * Per fitz-go/internal/domains/schedule
  */
 
-import { BufferWriter, BufferReader } from "../../core/buffer";
+import {
+  BufferReader,
+  getRouteEncoding,
+  utf8Encoder,
+  writeU32BEAt,
+  writeU64BEAt,
+} from "../../core/buffer";
 import {
   DecodedScheduleNotification,
   ScheduleEntry,
@@ -20,12 +26,19 @@ export const ScheduleCodec = {
    * Payload: [route: string][cron: string][payload: bytes]
    */
   encodeCreate(route: string, cronExpr: string, payload: Uint8Array): Uint8Array {
-    const writer = new BufferWriter(512);
-    writer.writeRoute(route);
-    writer.writeString(cronExpr);
-    writer.writeU32BE(payload.length);
-    writer.writeBytes(payload);
-    return writer.getBufferView();
+    const routeBytes = getRouteEncoding(route);
+    const cronBytes = utf8Encoder.encode(cronExpr);
+    const buffer = new Uint8Array(routeBytes.length + 4 + cronBytes.length + 4 + payload.length);
+    let offset = 0;
+
+    buffer.set(routeBytes, offset);
+    offset += routeBytes.length;
+    offset = writeU32BEAt(buffer, offset, cronBytes.length);
+    buffer.set(cronBytes, offset);
+    offset += cronBytes.length;
+    offset = writeU32BEAt(buffer, offset, payload.length);
+    buffer.set(payload, offset);
+    return buffer;
   },
 
   /**
@@ -47,9 +60,7 @@ export const ScheduleCodec = {
    * Payload: [route: string]
    */
   encodeCancel(route: string): Uint8Array {
-    const writer = new BufferWriter(256);
-    writer.writeRoute(route);
-    return writer.getBufferView();
+    return getRouteEncoding(route).slice();
   },
 
   /**
@@ -65,10 +76,14 @@ export const ScheduleCodec = {
    * Payload: [optional offset: u64][optional limit: u64]
    */
   encodeList(offset: bigint = 0n, limit: bigint = 0n): Uint8Array {
-    const writer = new BufferWriter(32);
-    writer.writeOptionalU64(offset);
-    writer.writeOptionalU64(limit);
-    return writer.getBufferView();
+    const buffer = new Uint8Array(18);
+    let bufferOffset = 0;
+
+    buffer[bufferOffset++] = 1;
+    bufferOffset = writeU64BEAt(buffer, bufferOffset, offset);
+    buffer[bufferOffset++] = 1;
+    writeU64BEAt(buffer, bufferOffset, limit);
+    return buffer;
   },
 
   /**
@@ -109,9 +124,7 @@ export const ScheduleCodec = {
    * Payload: [pattern: string]
    */
   encodeSubscribe(pattern: string): Uint8Array {
-    const writer = new BufferWriter(256);
-    writer.writeString(pattern);
-    return writer.getBufferView();
+    return getRouteEncoding(pattern).slice();
   },
 
   /**
@@ -140,9 +153,7 @@ export const ScheduleCodec = {
    * Payload: [pattern: string]
    */
   encodeUnsubscribe(pattern: string): Uint8Array {
-    const writer = new BufferWriter(256);
-    writer.writeString(pattern);
-    return writer.getBufferView();
+    return getRouteEncoding(pattern).slice();
   },
 
   /**

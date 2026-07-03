@@ -5,8 +5,9 @@ import { createServer, type IncomingHttpHeaders } from "node:http";
 import type { Duplex } from "node:stream";
 
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
+import { WebSocketServer } from "ws";
 
-import { createWebSocketTransport } from "../../../src/transport/websocket";
+import { createWebSocketTransport } from "../../../src/transport/websocket.node";
 
 const servers: Array<{ close: (callback?: (err?: Error) => void) => void }> = [];
 const sockets: Duplex[] = [];
@@ -56,6 +57,38 @@ async function captureUpgradeHeaders(
 
   void connect(`ws://127.0.0.1:${address.port}/ws`).catch(() => undefined);
   return headersPromise;
+}
+
+async function listenWithWebSocketServer(): Promise<{ close: () => Promise<void>; url: string }> {
+  const server = new WebSocketServer({
+    host: "127.0.0.1",
+    port: 0,
+  });
+  servers.push(server);
+
+  await new Promise<void>((resolve) => {
+    server.once("listening", resolve);
+  });
+
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("expected websocket server address");
+  }
+
+  return {
+    url: `ws://127.0.0.1:${address.port}/ws`,
+    close: () =>
+      new Promise<void>((resolve, reject) => {
+        server.close((error) => {
+          if (error) {
+            reject(error);
+            return;
+          }
+
+          resolve();
+        });
+      }),
+  };
 }
 
 afterEach(async () => {
@@ -126,10 +159,21 @@ describe("websocket transport", () => {
     expect(headers.accept).toBe("application/octet-stream");
   });
 
-  it("resolves browser sends without waiting for a Node callback", async () => {
-    vi.resetModules();
+  it("supports Node ping/pong heartbeats", async () => {
+    const { url } = await listenWithWebSocketServer();
+    const transport = createWebSocketTransport(url, { timeout: 100 });
 
-    const originalProcess = globalThis.process;
+    await transport.connect();
+
+    expect(transport.supportsHeartbeat?.()).toBe(true);
+    await expect(transport.sendHeartbeat?.({ timeoutMs: 100 })).resolves.toBeUndefined();
+
+    await transport.close();
+  });
+});
+
+describe("browser websocket transport", () => {
+  it("resolves browser sends without waiting for a Node callback", async () => {
     const originalWebSocket = globalThis.WebSocket;
 
     class BrowserWebSocket {
@@ -153,28 +197,24 @@ describe("websocket transport", () => {
       }
     }
 
-    vi.stubGlobal("process", undefined);
     vi.stubGlobal("WebSocket", BrowserWebSocket);
 
     try {
       const { createWebSocketTransport: createBrowserTransport } =
-        await import("../../../src/transport/websocket");
+        await import("../../../src/transport/websocket.browser");
       const transport = createBrowserTransport("ws://example.test/ws", { timeout: 20 });
 
       await transport.connect();
 
       await expect(transport.send(new Uint8Array([1, 2, 3]))).resolves.toBeUndefined();
     } finally {
-      vi.stubGlobal("process", originalProcess);
       vi.stubGlobal("WebSocket", originalWebSocket);
     }
   });
 
   it("stays disconnected when browser onopen fires after connect timeout", async () => {
     vi.useFakeTimers();
-    vi.resetModules();
 
-    const originalProcess = globalThis.process;
     const originalWebSocket = globalThis.WebSocket;
 
     class SlowWebSocket {
@@ -195,12 +235,11 @@ describe("websocket transport", () => {
       close(): void {}
     }
 
-    vi.stubGlobal("process", undefined);
     vi.stubGlobal("WebSocket", SlowWebSocket);
 
     try {
       const { createWebSocketTransport: createBrowserTransport } =
-        await import("../../../src/transport/websocket");
+        await import("../../../src/transport/websocket.browser");
       const transport = createBrowserTransport("ws://example.test/ws", { timeout: 10 });
       const connect = transport.connect();
       const connectResult = connect.catch((error: unknown) => error);
@@ -213,16 +252,12 @@ describe("websocket transport", () => {
 
       expect(transport.isConnected()).toBe(false);
     } finally {
-      vi.stubGlobal("process", originalProcess);
       vi.stubGlobal("WebSocket", originalWebSocket);
       vi.useRealTimers();
     }
   });
 
   it("stays disconnected when browser onopen fires after connect error", async () => {
-    vi.resetModules();
-
-    const originalProcess = globalThis.process;
     const originalWebSocket = globalThis.WebSocket;
 
     class ErrorWebSocket {
@@ -243,12 +278,11 @@ describe("websocket transport", () => {
       close(): void {}
     }
 
-    vi.stubGlobal("process", undefined);
     vi.stubGlobal("WebSocket", ErrorWebSocket);
 
     try {
       const { createWebSocketTransport: createBrowserTransport } =
-        await import("../../../src/transport/websocket");
+        await import("../../../src/transport/websocket.browser");
       const transport = createBrowserTransport("ws://example.test/ws", { timeout: 20 });
       const connect = transport.connect();
 
@@ -259,7 +293,68 @@ describe("websocket transport", () => {
 
       expect(transport.isConnected()).toBe(false);
     } finally {
-      vi.stubGlobal("process", originalProcess);
+      vi.stubGlobal("WebSocket", originalWebSocket);
+    }
+  });
+
+  it("receives browser ArrayBuffer, Uint8Array, and Blob messages in worker-like globals", async () => {
+    const originalWebSocket = globalThis.WebSocket;
+
+    class BrowserWebSocket {
+      static instances: BrowserWebSocket[] = [];
+
+      binaryType: BinaryType = "blob";
+      onopen: (() => void) | null = null;
+      onmessage: ((event: { data: ArrayBuffer | Uint8Array | Blob }) => void) | null = null;
+      onerror: ((event: { message?: string }) => void) | null = null;
+      onclose: (() => void) | null = null;
+      readonly url: string;
+
+      constructor(url: string) {
+        this.url = url;
+        BrowserWebSocket.instances.push(this);
+      }
+
+      send(_data: Uint8Array): void {}
+
+      close(): void {
+        this.onclose?.();
+      }
+    }
+
+    vi.stubGlobal("WebSocket", BrowserWebSocket);
+
+    try {
+      const { createWebSocketTransport: createBrowserTransport } =
+        await import("../../../src/transport/websocket.browser");
+      const transport = createBrowserTransport("https://example.test/ws", { timeout: 20 });
+      const connect = transport.connect();
+      const socket = BrowserWebSocket.instances[0];
+
+      socket.onopen?.();
+      await connect;
+
+      expect(socket.url).toBe("wss://example.test/ws");
+      expect(socket.binaryType).toBe("arraybuffer");
+      expect(transport.supportsHeartbeat?.()).toBe(false);
+      await expect(transport.sendHeartbeat?.({ timeoutMs: 1 })).rejects.toThrow(
+        "not supported in browsers",
+      );
+
+      const uint8Receive = transport.receive();
+      socket.onmessage?.({ data: new Uint8Array([1, 2, 3]) });
+      await expect(uint8Receive).resolves.toEqual(new Uint8Array([1, 2, 3]));
+
+      const arrayBufferReceive = transport.receive();
+      socket.onmessage?.({ data: new Uint8Array([4, 5]).buffer });
+      await expect(arrayBufferReceive).resolves.toEqual(new Uint8Array([4, 5]));
+
+      const blobReceive = transport.receive();
+      socket.onmessage?.({ data: new Blob([new Uint8Array([6, 7])]) });
+      await expect(blobReceive).resolves.toEqual(new Uint8Array([6, 7]));
+
+      await transport.close();
+    } finally {
       vi.stubGlobal("WebSocket", originalWebSocket);
     }
   });

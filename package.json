@@ -25,22 +25,47 @@
   ],
   "type": "module",
   "sideEffects": false,
-  "main": "./dist/index.cjs",
-  "module": "./dist/index.mjs",
+  "main": "./dist/node/index.node.cjs",
+  "module": "./dist/node/index.node.mjs",
+  "browser": "./dist/browser/index.browser.js",
   "types": "./dist/types/index.d.ts",
   "exports": {
     ".": {
       "types": "./dist/types/index.d.ts",
-      "import": "./dist/index.mjs",
-      "require": "./dist/index.cjs"
+      "browser": {
+        "import": "./dist/browser/index.browser.js",
+        "default": "./dist/browser/index.browser.js"
+      },
+      "node": {
+        "types": "./dist/types/index.node.d.ts",
+        "import": "./dist/node/index.node.mjs",
+        "require": "./dist/node/index.node.cjs"
+      },
+      "import": "./dist/node/index.node.mjs",
+      "require": "./dist/node/index.node.cjs",
+      "default": "./dist/node/index.node.mjs"
+    },
+    "./browser": {
+      "types": "./dist/types/index.browser.d.ts",
+      "import": "./dist/browser/index.browser.js",
+      "default": "./dist/browser/index.browser.js"
+    },
+    "./node": {
+      "types": "./dist/types/index.node.d.ts",
+      "import": "./dist/node/index.node.mjs",
+      "require": "./dist/node/index.node.cjs",
+      "default": "./dist/node/index.node.mjs"
     }
   },
   "publishConfig": {
     "access": "public"
   },
   "scripts": {
-    "build": "vp pack && tsc -p tsconfig.build.json",
-    "pack:smoke": "npm pack --pack-destination artifacts && mkdir -p artifacts/smoke && cd artifacts/smoke && npm init -y >/dev/null 2>&1 && npm install \"$(ls ../*.tgz | head -n 1)\" >/dev/null 2>&1",
+    "clean:dist": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
+    "build": "npm run clean:dist && npm run build:node && npm run build:browser && tsc -p tsconfig.build.json",
+    "build:node": "vp pack src/index.node.ts --format esm,cjs --platform node --out-dir dist/node --clean --sourcemap --deps.never-bundle ws",
+    "build:browser": "vp pack src/index.browser.ts --format esm --platform browser --out-dir dist/browser --no-clean --sourcemap",
+    "pack:smoke": "node scripts/pack-smoke.js",
     "test": "npm run test:unit && npm run test:integration && npm run test:conformance",
     "test:unit": "vp test run --project unit",
     "test:integration": "vp test run --project integration",
@@ -48,22 +73,30 @@
     "verify:fast": "npm run fmt:check && npm run lint && npm run build && npm run test:unit",
     "verify": "npm run verify:fast && npm run test:integration && npm run test:conformance",
     "bench": "npm run bench:tier1 && npm run bench:tier2 && npm run bench:tier3 && npm run bench:tier4",
-    "bench:tier1": "cross-env NODE_ENV=production vp exec vitest bench --run --project tier1 --reporter=default benches/tier1/*.bench.ts",
-    "bench:tier2": "cross-env NODE_ENV=production vp exec vitest bench --run --project tier2 --reporter=default benches/tier2/*.bench.ts",
-    "bench:tier3": "cross-env NODE_ENV=production vp exec vitest bench --run --project tier3 --reporter=default benches/tier3/*.bench.ts",
-    "bench:tier4": "cross-env NODE_ENV=production vp exec vitest bench --run --project tier4 --reporter=default benches/tier4/*.bench.ts",
+    "bench:tier1": "cross-env NODE_ENV=production vp exec vitest bench --run --project tier1 --reporter=default --no-file-parallelism --maxWorkers=1 benches/tier1/*.bench.ts",
+    "bench:tier2": "cross-env NODE_ENV=production vp exec vitest bench --run --project tier2 --reporter=default --no-file-parallelism --maxWorkers=1 benches/tier2/*.bench.ts",
+    "bench:tier3": "cross-env NODE_ENV=production vp exec vitest bench --run --project tier3 --reporter=default --no-file-parallelism --maxWorkers=1 benches/tier3/*.bench.ts",
+    "bench:tier4": "cross-env NODE_ENV=production vp exec vitest bench --run --project tier4 --reporter=default --no-file-parallelism --maxWorkers=1 benches/tier4/*.bench.ts",
+    "bench:stable": "cross-env NODE_ENV=production node scripts/bench-artifacts.js stable",
+    "bench:stable:tier1": "cross-env NODE_ENV=production node scripts/bench-artifacts.js stable --tiers tier1",
+    "bench:stable:tier2": "cross-env NODE_ENV=production node scripts/bench-artifacts.js stable --tiers tier2",
+    "bench:stable:tier3": "cross-env NODE_ENV=production node scripts/bench-artifacts.js stable --tiers tier3",
+    "bench:stable:tier4": "cross-env NODE_ENV=production node scripts/bench-artifacts.js stable --tiers tier4",
+    "bench:compare": "node scripts/bench-artifacts.js compare",
     "lint": "vp lint . --deny-warnings",
     "fmt": "vp fmt .",
     "fmt:check": "vp fmt --check",
     "prepare": "vp config"
+  },
+  "dependencies": {
+    "ws": "^8.21.0"
   },
   "devDependencies": {
     "@types/node": "^26.1.0",
     "@types/ws": "^8.18.1",
     "cross-env": "^10.1.0",
     "typescript": "^6.0.3",
-    "vite-plus": "latest",
-    "ws": "^8.21.0"
+    "vite-plus": "latest"
   },
   "engines": {
     "node": ">=20.19.0"

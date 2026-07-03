@@ -18,9 +18,10 @@ export default defineConfig({
     },
   },
   pack: {
-    entry: "src/index.ts",
+    entry: "src/index.node.ts",
     format: ["esm", "cjs"],
     platform: "node",
+    outDir: "dist/node",
     deps: {
       neverBundle: ["ws"],
     },

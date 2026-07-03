@@ -3,7 +3,6 @@
  */
 
 import {
-  BufferWriter,
   BufferReader,
   getRouteEncoding,
   utf8Decoder,
@@ -189,9 +188,7 @@ export const QueueCodec = {
    * Payload: [pattern: string]
    */
   encodeSubscribe(pattern: string): Uint8Array {
-    const writer = new BufferWriter(128);
-    writer.writeRoute(pattern);
-    return writer.getBufferView();
+    return getRouteEncoding(pattern).slice();
   },
 
   /**
@@ -228,9 +225,7 @@ export const QueueCodec = {
    * Payload: [pattern: string]
    */
   encodeUnsubscribe(pattern: string): Uint8Array {
-    const writer = new BufferWriter(128);
-    writer.writeRoute(pattern);
-    return writer.getBufferView();
+    return getRouteEncoding(pattern).slice();
   },
 
   /**

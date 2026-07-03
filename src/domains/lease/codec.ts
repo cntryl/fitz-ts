@@ -3,7 +3,12 @@
  * Per fitz-go/internal/domains/lease/protocol.go
  */
 
-import { BufferWriter, BufferReader } from "../../core/buffer";
+import {
+  BufferReader,
+  getRouteEncoding,
+  writeU64BEAt,
+  writeU64BENumberAt,
+} from "../../core/buffer";
 import { ProtocolError } from "../../core/errors";
 import { AcquireResponse, QueryResponse, SubscribeResponse, UnsubscribeResponse } from "./types";
 
@@ -13,11 +18,17 @@ export const LeaseCodec = {
    * Payload: [string route][string client_id (empty)][u64 ttl_seconds]
    */
   encodeAcquire(route: string, ttlSecs: number): Uint8Array {
-    const writer = new BufferWriter(128);
-    writer.writeRoute(route);
-    writer.writeRoute(""); // client_id (empty = server assigns)
-    writer.writeU64BE(BigInt(ttlSecs));
-    return writer.getBufferView();
+    const routeBytes = getRouteEncoding(route);
+    const emptyClientIdBytes = getRouteEncoding("");
+    const buffer = new Uint8Array(routeBytes.length + emptyClientIdBytes.length + 8);
+    let offset = 0;
+
+    buffer.set(routeBytes, offset);
+    offset += routeBytes.length;
+    buffer.set(emptyClientIdBytes, offset);
+    offset += emptyClientIdBytes.length;
+    writeU64BENumberAt(buffer, offset, ttlSecs);
+    return buffer;
   },
 
   /**
@@ -55,12 +66,18 @@ export const LeaseCodec = {
    * Payload: [string route][string client_id (empty)][u64 fencing_token][u64 ttl_seconds]
    */
   encodeExtend(route: string, token: bigint, ttlSecs: number): Uint8Array {
-    const writer = new BufferWriter(128);
-    writer.writeRoute(route);
-    writer.writeRoute(""); // client_id (empty = use existing)
-    writer.writeU64BE(token);
-    writer.writeU64BE(BigInt(ttlSecs));
-    return writer.getBufferView();
+    const routeBytes = getRouteEncoding(route);
+    const emptyClientIdBytes = getRouteEncoding("");
+    const buffer = new Uint8Array(routeBytes.length + emptyClientIdBytes.length + 16);
+    let offset = 0;
+
+    buffer.set(routeBytes, offset);
+    offset += routeBytes.length;
+    buffer.set(emptyClientIdBytes, offset);
+    offset += emptyClientIdBytes.length;
+    offset = writeU64BEAt(buffer, offset, token);
+    writeU64BENumberAt(buffer, offset, ttlSecs);
+    return buffer;
   },
 
   encodeRenew(route: string, token: bigint, ttlSecs: number): Uint8Array {
@@ -72,11 +89,17 @@ export const LeaseCodec = {
    * Payload: [string route][string client_id (empty)][u64 fencing_token]
    */
   encodeRelease(route: string, token: bigint): Uint8Array {
-    const writer = new BufferWriter(128);
-    writer.writeRoute(route);
-    writer.writeRoute(""); // client_id (empty = use existing)
-    writer.writeU64BE(token);
-    return writer.getBufferView();
+    const routeBytes = getRouteEncoding(route);
+    const emptyClientIdBytes = getRouteEncoding("");
+    const buffer = new Uint8Array(routeBytes.length + emptyClientIdBytes.length + 8);
+    let offset = 0;
+
+    buffer.set(routeBytes, offset);
+    offset += routeBytes.length;
+    buffer.set(emptyClientIdBytes, offset);
+    offset += emptyClientIdBytes.length;
+    writeU64BEAt(buffer, offset, token);
+    return buffer;
   },
 
   /**
@@ -84,9 +107,7 @@ export const LeaseCodec = {
    * Payload: [string route]
    */
   encodeQuery(route: string): Uint8Array {
-    const writer = new BufferWriter(64);
-    writer.writeRoute(route);
-    return writer.getBufferView();
+    return getRouteEncoding(route).slice();
   },
 
   /**
@@ -128,9 +149,7 @@ export const LeaseCodec = {
    * Payload: [string pattern]
    */
   encodeSubscribe(pattern: string): Uint8Array {
-    const writer = new BufferWriter(64);
-    writer.writeRoute(pattern);
-    return writer.getBufferView();
+    return getRouteEncoding(pattern).slice();
   },
 
   /**
@@ -161,9 +180,7 @@ export const LeaseCodec = {
    * Payload: [string pattern]
    */
   encodeUnsubscribe(pattern: string): Uint8Array {
-    const writer = new BufferWriter(64);
-    writer.writeRoute(pattern);
-    return writer.getBufferView();
+    return getRouteEncoding(pattern).slice();
   },
 
   /**
