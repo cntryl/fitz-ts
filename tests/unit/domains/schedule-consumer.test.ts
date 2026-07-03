@@ -90,6 +90,26 @@ describe("ScheduleClient waitForNotifications", () => {
       value: { payload: new Uint8Array([3]) },
     });
   });
+
+  it("unsubscribes when waitForNotifications is aborted while waiting", async () => {
+    const connection = new FakeScheduleConsumerConnection();
+    const client = new ScheduleClient(connection);
+    const controller = new AbortController();
+    const iterator = client
+      .waitForNotifications("schedule://realm/area/resource/run", {
+        signal: controller.signal,
+      })
+      [Symbol.asyncIterator]();
+
+    const pending = iterator.next();
+    await vi.waitFor(() => {
+      expect(connection.handlers.has(MSG_SCHEDULE_NOTIFY)).toBe(true);
+    });
+    controller.abort();
+
+    await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+    expect(connection.unsubscribeCount).toBe(1);
+  });
 });
 
 function encodeScheduleNotification(subId: bigint, payload: Uint8Array): Uint8Array {

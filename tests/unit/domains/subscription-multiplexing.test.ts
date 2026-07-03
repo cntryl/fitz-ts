@@ -30,6 +30,8 @@ class FakeSubscriptionConnection {
   private readonly reconnectListeners = new Set<() => void | Promise<void>>();
   private readonly pendingHandlers: Promise<void>[] = [];
   readonly requestCalls: number[] = [];
+  asyncDispatchAccepted = true;
+  asyncDispatchAttempts = 0;
 
   constructor(responses: Array<[number, Uint8Array]>) {
     for (const [messageType, payload] of responses) {
@@ -76,8 +78,13 @@ class FakeSubscriptionConnection {
     return () => undefined;
   }
 
-  dispatchAsyncHandler(task: () => void | Promise<void>): void {
+  dispatchAsyncHandler(task: () => void | Promise<void>): boolean {
+    this.asyncDispatchAttempts += 1;
+    if (!this.asyncDispatchAccepted) {
+      return false;
+    }
     this.pendingHandlers.push(Promise.resolve().then(task));
+    return true;
   }
 
   emitNotification(messageType: number, payload: Uint8Array): void {
@@ -236,6 +243,30 @@ describe("Subscription Multiplexing", () => {
 
     await second.unsubscribe();
     expect(connection.countRequests(MSG_NOTICE_UNSUBSCRIBE)).toBe(1);
+  });
+
+  it("drops best-effort notice fanout when async dispatch is saturated", async () => {
+    const connection = new FakeSubscriptionConnection([
+      [MSG_NOTICE_SUBSCRIBE, encodeOptionalSubIdResponse(11n)],
+      [MSG_NOTICE_UNSUBSCRIBE, encodeStatusOnlyResponse()],
+    ]);
+    const client = new NoticeClient(connection);
+    const deliveredRoutes: string[] = [];
+    const pattern = "notice://realm/area/resource";
+
+    await client.subscribe(pattern, async (msg) => {
+      deliveredRoutes.push(msg.route);
+    });
+    connection.asyncDispatchAccepted = false;
+
+    connection.emitNotification(
+      MSG_NOTICE_NOTIFY,
+      encodeNoticeNotification(11n, pattern, utf8Encoder.encode("dropped")),
+    );
+    await connection.flushHandlers();
+
+    expect(connection.asyncDispatchAttempts).toBe(1);
+    expect(deliveredRoutes).toEqual([]);
   });
 
   it("queue client keeps one wire subscription per pattern", async () => {

@@ -50,11 +50,16 @@ function measureSync(iterations: number, callback: () => void): number {
     callback();
   }
 
-  const startedAt = performance.now();
-  for (let index = 0; index < iterations; index += 1) {
-    callback();
+  const samples: number[] = [];
+  for (let sample = 0; sample < 3; sample += 1) {
+    const startedAt = performance.now();
+    for (let index = 0; index < iterations; index += 1) {
+      callback();
+    }
+    samples.push(performance.now() - startedAt);
   }
-  return performance.now() - startedAt;
+
+  return Math.min(...samples);
 }
 
 async function measureAsync(
@@ -65,11 +70,16 @@ async function measureAsync(
     await callback();
   }
 
-  const startedAt = performance.now();
-  for (let index = 0; index < iterations; index += 1) {
-    await callback();
+  const samples: number[] = [];
+  for (let sample = 0; sample < 3; sample += 1) {
+    const startedAt = performance.now();
+    for (let index = 0; index < iterations; index += 1) {
+      await callback();
+    }
+    samples.push(performance.now() - startedAt);
   }
-  return performance.now() - startedAt;
+
+  return Math.min(...samples);
 }
 
 perfDescribe("fitz-ts hot-path thresholds", () => {

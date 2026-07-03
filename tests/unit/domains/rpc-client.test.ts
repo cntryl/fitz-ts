@@ -1,7 +1,12 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 
 import { ConnectionState } from "../../../src/core/types";
-import { ConnectionError, ErrCodeRpcWorkerNotFound, RpcError } from "../../../src/core/errors";
+import {
+  ConnectionError,
+  ErrCodeRpcBackpressure,
+  ErrCodeRpcWorkerNotFound,
+  RpcError,
+} from "../../../src/core/errors";
 import { BufferWriter, utf8Decoder, utf8Encoder } from "../../../src/core/buffer";
 import {
   MSG_RPC_REQUEST,
@@ -18,6 +23,7 @@ class FakeRpcConnection {
   public requestCalls: Array<{ messageType: number; payload: Uint8Array }> = [];
   public sendCalls: Array<{ messageType: number; payload: Uint8Array }> = [];
   public lastSignal: AbortSignal | undefined;
+  public asyncDispatchAccepted = true;
   private state = ConnectionState.Authenticated;
   private readonly disconnectListeners = new Set<() => void>();
   private readonly reconnectListeners = new Set<() => void | Promise<void>>();
@@ -71,8 +77,16 @@ class FakeRpcConnection {
     };
   }
 
-  dispatchAsyncHandler(task: () => void | Promise<void>): void {
+  dispatchAsyncHandler(task: () => void | Promise<void>): boolean {
+    if (!this.asyncDispatchAccepted) {
+      return false;
+    }
     void Promise.resolve().then(task);
+    return true;
+  }
+
+  tryDispatchAsyncHandler(task: () => void | Promise<void>): boolean {
+    return this.dispatchAsyncHandler(task);
   }
 
   getState(): ConnectionState {
@@ -195,6 +209,43 @@ describe("RpcClient", () => {
     expect(RpcCodec.decodeResponseKey(connection.sendCalls[0].payload)).toMatchObject({
       body: new Uint8Array([5]),
       streamEnd: true,
+    });
+  });
+
+  it("returns a terminal backpressure response when local worker dispatch is saturated", async () => {
+    const connection = new FakeRpcConnection();
+    const client = new RpcClient(connection);
+    const route = "rpc://realm/area/method";
+    const worker = vi.fn(async () => undefined);
+    connection.asyncDispatchAccepted = false;
+
+    await client.registerWorker(route, worker);
+
+    const handler = connection.notificationHandlers.get(MSG_RPC_REQUEST);
+    expect(handler).toBeTypeOf("function");
+
+    if (!handler) {
+      throw new Error("Expected RPC request handler to be registered");
+    }
+
+    const correlationId = new Uint8Array(16);
+    correlationId[15] = 9;
+    handler(RpcCodec.encodeRequest(correlationId, route, "", new Uint8Array([9])));
+
+    await vi.waitFor(() => {
+      expect(connection.sendCalls).toHaveLength(1);
+    });
+
+    expect(worker).not.toHaveBeenCalled();
+    expect(connection.sendCalls[0].messageType).toBe(MSG_RPC_RESPONSE);
+
+    const response = RpcCodec.decodeResponseKey(connection.sendCalls[0].payload);
+    expect(response.sequence).toBe(0n);
+    expect(response.streamEnd).toBe(true);
+    expect(response.correlationKey).toBe(9n);
+    expect(RpcCodec.decodeErrorBody(response.body)).toEqual({
+      code: ErrCodeRpcBackpressure,
+      message: "Local RPC worker is overloaded",
     });
   });
 

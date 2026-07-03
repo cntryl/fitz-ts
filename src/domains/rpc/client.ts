@@ -33,12 +33,13 @@ import {
 } from "../../frame/types";
 import {
   ConnectionError,
+  ErrCodeRpcBackpressure,
   ErrCodeRpcWorkerNotFound,
   RpcError,
   TransportError,
 } from "../../core/errors";
 import { ConnectionState } from "../../core/types";
-import { readU128BEAt, utf8Encoder } from "../../core/buffer";
+import { BufferWriter, readU128BEAt, utf8Encoder } from "../../core/buffer";
 import { isConcreteRouteShape } from "../_routes";
 
 type RpcConnectionPort = RequestPort &
@@ -513,7 +514,7 @@ export function createRpcClient(connection: RpcConnectionPort) {
 
     const writer = createRpcResponseWriter(connection, req.correlationId);
 
-    connection.dispatchAsyncHandler(async () => {
+    const accepted = tryDispatchRpcHandler(async () => {
       try {
         await handler(
           {
@@ -538,6 +539,32 @@ export function createRpcClient(connection: RpcConnectionPort) {
         writer.dispose();
       }
     });
+
+    if (!accepted) {
+      void sendBackpressureResponse(writer);
+    }
+  };
+
+  const tryDispatchRpcHandler = (task: () => void | Promise<void>): boolean => {
+    if (typeof connection.tryDispatchAsyncHandler === "function") {
+      return connection.tryDispatchAsyncHandler(task);
+    }
+
+    connection.dispatchAsyncHandler(task);
+    return true;
+  };
+
+  const sendBackpressureResponse = async (writer: ManagedResponseWriter): Promise<void> => {
+    try {
+      await writer.send(
+        encodeRpcErrorBody(ErrCodeRpcBackpressure, "Local RPC worker is overloaded"),
+        true,
+      );
+    } catch {
+      // Best-effort overload response.
+    } finally {
+      writer.dispose();
+    }
   };
 
   const correlationIdToKey = (correlationId: Uint8Array): bigint => {
@@ -551,6 +578,14 @@ export function createRpcClient(connection: RpcConnectionPort) {
 }
 
 export * from "./types";
+
+function encodeRpcErrorBody(code: number, message: string): Uint8Array {
+  const writer = new BufferWriter(64);
+  writer.writeU8(1);
+  writer.writeU32BE(code);
+  writer.writeString(message);
+  return writer.getBuffer();
+}
 
 function assertRpcRoute(route: string): void {
   if (!isConcreteRouteShape(route, "rpc")) {

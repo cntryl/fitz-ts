@@ -63,6 +63,7 @@ export interface DisconnectListenerPort {
 
 export interface AsyncDispatchPort {
   dispatchAsyncHandler(task: AsyncHandlerTask): void;
+  tryDispatchAsyncHandler?(task: AsyncHandlerTask): boolean;
 }
 
 export interface RetryExecutionPort {

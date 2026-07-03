@@ -105,6 +105,106 @@ describe("connection internals", () => {
     }
   });
 
+  it("bounds queued async handlers and reports saturation without freeing active slots", async () => {
+    vi.useFakeTimers();
+    try {
+      const errors: unknown[] = [];
+      const saturated: Array<{ activeCount: number; queuedCount: number }> = [];
+      const dispatcher = createAsyncHandlerDispatcher(
+        1,
+        25,
+        (error) => {
+          errors.push(error);
+        },
+        {
+          queueCapacity: 1,
+          onSaturated: (metrics) => {
+            saturated.push({
+              activeCount: metrics.activeCount,
+              queuedCount: metrics.queuedCount,
+            });
+          },
+        },
+      );
+      const events: string[] = [];
+      let releaseFirst: () => void = () => undefined;
+
+      expect(
+        dispatcher.dispatch(async () => {
+          events.push("first:start");
+          await new Promise<void>((resolve) => {
+            releaseFirst = resolve;
+          });
+          events.push("first:end");
+        }),
+      ).toBe(true);
+      expect(
+        dispatcher.dispatch(() => {
+          events.push("second");
+        }),
+      ).toBe(true);
+      expect(
+        dispatcher.dispatch(() => {
+          events.push("dropped");
+        }),
+      ).toBe(false);
+
+      expect(dispatcher.getMetrics()).toMatchObject({
+        activeCount: 1,
+        queuedCount: 1,
+        saturationCount: 1,
+      });
+      expect(saturated).toEqual([{ activeCount: 1, queuedCount: 1 }]);
+
+      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(25);
+
+      expect(errors).toHaveLength(1);
+      expect(events).toEqual(["first:start"]);
+
+      releaseFirst();
+      await dispatcher.drain();
+
+      expect(events).toEqual(["first:start", "first:end", "second"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("drops queued async handlers on close but drains active handlers", async () => {
+    const dispatcher = createAsyncHandlerDispatcher(1, 1_000, () => undefined, {
+      queueCapacity: 1,
+    });
+    const events: string[] = [];
+    let releaseFirst: () => void = () => undefined;
+
+    expect(
+      dispatcher.dispatch(async () => {
+        events.push("first:start");
+        await new Promise<void>((resolve) => {
+          releaseFirst = resolve;
+        });
+        events.push("first:end");
+      }),
+    ).toBe(true);
+    expect(
+      dispatcher.dispatch(() => {
+        events.push("queued");
+      }),
+    ).toBe(true);
+
+    await Promise.resolve();
+    dispatcher.close();
+    releaseFirst();
+    await dispatcher.drain();
+
+    expect(events).toEqual(["first:start", "first:end"]);
+    expect(dispatcher.getMetrics()).toMatchObject({
+      activeCount: 0,
+      queuedCount: 0,
+    });
+  });
+
   it("bounds readiness waiters and resolves waiters on notification", async () => {
     let state = ConnectionState.Disconnected;
     const waiter = createReadinessWaiter({

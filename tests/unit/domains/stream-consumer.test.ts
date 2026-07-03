@@ -153,6 +153,28 @@ describe("StreamClient readWhenCommitted", () => {
     await iterator.return?.();
     expect(connection.unsubscribeCount).toBe(1);
   });
+
+  it("unsubscribes when readWhenCommitted is aborted while waiting", async () => {
+    const connection = new FakeStreamConsumerConnection();
+    connection.readResponses.push(encodeWrappedReadResponse([], 3n, false));
+    const client = new StreamClient(connection);
+    const controller = new AbortController();
+    const iterator = client
+      .readWhenCommitted("stream://realm/area/resource", {
+        offset: 4n,
+        signal: controller.signal,
+      })
+      [Symbol.asyncIterator]();
+
+    const pending = iterator.next();
+    await vi.waitFor(() => {
+      expect(readOffsets(connection)).toEqual([4n]);
+    });
+    controller.abort();
+
+    await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+    expect(connection.unsubscribeCount).toBe(1);
+  });
 });
 
 function readOffsets(connection: FakeStreamConsumerConnection): bigint[] {

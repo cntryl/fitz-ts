@@ -20,7 +20,12 @@ import { createScope, Scope } from "../core/lifecycle";
 import { utf8Encoder } from "../core/buffer";
 import { FrameCodec, FrameParser } from "../frame/codec";
 import { MSG_CONNECT } from "../frame/types";
-import { AuthenticationError, ConnectionError, TransportError } from "../core/errors";
+import {
+  AuthenticationError,
+  ConnectionError,
+  RequestQueueFullError,
+  TransportError,
+} from "../core/errors";
 import { Multiplexer } from "./multiplexer";
 import {
   attachResilienceMeta,
@@ -152,6 +157,16 @@ export function createConnection(
     tracer: observability?.tracer,
   });
 
+  const asyncHandlerQueueCapacity = Math.min(maxRequestQueueSize, 1024);
+
+  const recordAsyncHandlerMetrics = (metrics: {
+    activeCount: number;
+    queuedCount: number;
+  }): void => {
+    observability?.meter?.gauge?.("fitz.async_handlers.active", metrics.activeCount);
+    observability?.meter?.gauge?.("fitz.async_handlers.queued", metrics.queuedCount);
+  };
+
   const asyncHandlerDispatcher = createAsyncHandlerDispatcher(
     options.asyncHandlers?.maxConcurrency ?? Infinity,
     options.asyncHandlers?.timeoutMs ?? timeout,
@@ -159,6 +174,18 @@ export function createConnection(
       log("warn", "fitz.connection.handler_failed", {
         error: describeError(error),
       });
+    },
+    {
+      queueCapacity: asyncHandlerQueueCapacity,
+      onSaturated: (metrics) => {
+        log("warn", "fitz.connection.handler_saturated", {
+          activeCount: metrics.activeCount,
+          queuedCount: metrics.queuedCount,
+          saturationCount: metrics.saturationCount,
+        });
+        observability?.meter?.counter("fitz.async_handlers.saturated", 1);
+      },
+      onMetricsChange: recordAsyncHandlerMetrics,
     },
   );
 
@@ -272,7 +299,7 @@ export function createConnection(
   ): Promise<Uint8Array> => {
     let sendStarted = false;
     await waitForRequestReady(signal, allowReconnectRestore);
-    const releaseRequestSlot = await requestGate.acquire(signal);
+    const releaseRequestSlot = await acquireRequestSlot(messageType, signal);
     const startedAt = Date.now();
 
     try {
@@ -339,7 +366,7 @@ export function createConnection(
       releaseReadyWaitSlot?.();
     }
     ensureAuthenticated();
-    const releaseRequestSlot = await requestGate.acquire(signal);
+    const releaseRequestSlot = await acquireRequestSlot(messageType, signal);
     const startedAt = Date.now();
 
     try {
@@ -417,8 +444,34 @@ export function createConnection(
 
   const getScope = (): Scope => connectionScope;
 
-  const dispatchAsyncHandler = (task: () => void | Promise<void>): void => {
-    asyncHandlerDispatcher.dispatch(task);
+  const tryDispatchAsyncHandler = (task: () => void | Promise<void>): boolean => {
+    return asyncHandlerDispatcher.dispatch(task);
+  };
+
+  const dispatchAsyncHandler = (task: () => void | Promise<void>): boolean => {
+    return tryDispatchAsyncHandler(task);
+  };
+
+  const acquireRequestSlot = async (
+    messageType: number,
+    signal?: AbortSignal,
+  ): Promise<() => void> => {
+    try {
+      return await requestGate.acquire(signal);
+    } catch (error) {
+      if (error instanceof RequestQueueFullError) {
+        log("warn", "fitz.request_gate.full", {
+          messageType,
+          maxInFlightRequests,
+          maxRequestQueueSize,
+        });
+        observability?.meter?.counter("fitz.request_gate.full", 1, {
+          messageType,
+        });
+      }
+
+      throw error;
+    }
   };
 
   const getState = (): ConnectionState => state;
@@ -882,6 +935,7 @@ export function createConnection(
     onDisconnect,
     getMultiplexer,
     dispatchAsyncHandler,
+    tryDispatchAsyncHandler,
     executeWithRetry,
     waitUntilReady,
     shouldWaitForReconnect,
