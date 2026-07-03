@@ -4,8 +4,12 @@
 
 import { ConnectionState } from "../core/types";
 import type {
+  AsyncHandlerOptions,
   ClientConfig,
   ClientConnectOptions,
+  HeartbeatOptions,
+  ReconnectOptions,
+  RetryOptions,
   TokenProvider,
   TransportType,
 } from "../core/types";
@@ -21,7 +25,40 @@ import { StreamClient } from "../domains/stream/client";
 import { ScheduleClient } from "../domains/schedule/client";
 import { throwIfAborted, waitForSharedPromise } from "./internal/async";
 
-export type Client = ReturnType<typeof createClientWithTransport>;
+type DefaultedClientConfigKeys =
+  | "asyncHandlers"
+  | "heartbeat"
+  | "reconnect"
+  | "retry"
+  | "tokenProvider";
+
+type DefinedConfigShape<TConfig extends ClientConfig> = {
+  [K in Exclude<keyof TConfig, DefaultedClientConfigKeys>]-?: Exclude<TConfig[K], undefined>;
+};
+
+export type ResolvedClientConfig<TConfig extends ClientConfig> = DefinedConfigShape<TConfig> & {
+  asyncHandlers: AsyncHandlerOptions;
+  heartbeat: HeartbeatOptions;
+  reconnect: ReconnectOptions;
+  retry: RetryOptions;
+  tokenProvider?: TConfig["tokenProvider"];
+};
+
+export type Client<TConfig extends ClientConfig = ClientConfig> = {
+  config: ResolvedClientConfig<TConfig>;
+  connect: (options?: ClientConnectOptions) => Promise<void>;
+  close: () => Promise<void>;
+  isConnected: () => boolean;
+  kv: () => KvClient;
+  queue: () => QueueClient;
+  rpc: () => RpcClient;
+  lease: () => LeaseClient;
+  notice: () => NoticeClient;
+  stream: () => StreamClient;
+  schedule: () => ScheduleClient;
+  getUrl: () => string;
+  getState: () => ConnectionState;
+};
 
 export type ClientTransportFactory = (
   url: string,
@@ -46,15 +83,12 @@ type DomainClients = {
 
 type DomainKey = keyof DomainClients;
 
-export function createClientWithTransport(
-  config: ClientConfig,
+export function createClientWithTransport<TConfig extends ClientConfig>(
+  config: TConfig,
   transportFactory: ClientTransportFactory,
-) {
+): Client<TConfig> {
   const observability = config.observability;
-  const resolvedConfig: Required<
-    Omit<ClientConfig, "tokenProvider" | "reconnect" | "asyncHandlers" | "retry" | "heartbeat">
-  > &
-    Pick<ClientConfig, "tokenProvider" | "reconnect" | "asyncHandlers" | "retry" | "heartbeat"> = {
+  const resolvedConfig = {
     timeout: 30000,
     transport: "auto",
     webSocket: {},
@@ -89,7 +123,7 @@ export function createClientWithTransport(
       ...config.asyncHandlers,
     },
     ...config,
-  };
+  } as unknown as ResolvedClientConfig<TConfig>;
 
   if (!resolvedConfig.url) {
     throw new Error("URL is required");
@@ -320,18 +354,22 @@ export function createClientWithTransport(
     schedule,
     getUrl,
     getState,
-  };
+  } satisfies Client<TConfig>;
 }
 
-export type ClientConstructor<TConfig extends ClientConfig = ClientConfig> = {
-  new (config: TConfig): Client;
-  (config: TConfig): Client;
+export type ClientConstructor<
+  TConfig extends ClientConfig = ClientConfig,
+  TClient extends Client<TConfig> = Client<TConfig>,
+> = {
+  new (config: TConfig): TClient;
+  (config: TConfig): TClient;
 };
 
-export function createClientConstructor<TConfig extends ClientConfig>(
-  createClient: (config: TConfig) => Client,
-): ClientConstructor<TConfig> {
+export function createClientConstructor<
+  TConfig extends ClientConfig,
+  TClient extends Client<TConfig> = Client<TConfig>,
+>(createClient: (config: TConfig) => TClient): ClientConstructor<TConfig, TClient> {
   return function (config: TConfig) {
     return createClient(config);
-  } as unknown as ClientConstructor<TConfig>;
+  } as unknown as ClientConstructor<TConfig, TClient>;
 }

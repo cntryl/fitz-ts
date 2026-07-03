@@ -21,7 +21,19 @@ export interface BrowserClientConfig extends Omit<ClientConfig, "transport" | "w
   webSocket?: BrowserWebSocketOptions;
 }
 
-export type BrowserClient = CoreClient;
+type ValidateBrowserClient<T extends CoreClient<BrowserClientConfig>> = [
+  T["config"]["transport"],
+] extends [BrowserTransportType]
+  ? [BrowserTransportType] extends [T["config"]["transport"]]
+    ? [T["config"]["webSocket"]] extends [BrowserWebSocketOptions]
+      ? [BrowserWebSocketOptions] extends [T["config"]["webSocket"]]
+        ? T
+        : never
+      : never
+    : never
+  : never;
+
+export type BrowserClient = ValidateBrowserClient<CoreClient<BrowserClientConfig>>;
 
 export function createClient(config: BrowserClientConfig): BrowserClient {
   return createClientWithTransport(config, createBrowserTransport);

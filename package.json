@@ -28,11 +28,11 @@
   "main": "./dist/node/index.node.cjs",
   "module": "./dist/node/index.node.mjs",
   "browser": "./dist/browser/index.browser.js",
-  "types": "./dist/types/index.d.ts",
+  "types": "./dist/types/index.node.d.ts",
   "exports": {
     ".": {
-      "types": "./dist/types/index.d.ts",
       "browser": {
+        "types": "./dist/types/index.browser.d.ts",
         "import": "./dist/browser/index.browser.js",
         "default": "./dist/browser/index.browser.js"
       },

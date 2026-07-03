@@ -22,6 +22,12 @@ const viteBin = path.join(
   ".bin",
   process.platform === "win32" ? "vite.cmd" : "vite",
 );
+const tscBin = path.join(
+  repoRoot,
+  "node_modules",
+  ".bin",
+  process.platform === "win32" ? "tsc.cmd" : "tsc",
+);
 
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, {
@@ -94,6 +100,83 @@ writeSmokeFile(
 );
 
 writeSmokeFile(
+  "typecheck-root-browser.ts",
+  `
+    import { createClient } from "@cntryl/fitz";
+
+    const client = createClient({ url: "ws://example.test/ws", transport: "ws" });
+
+    client.config.transport satisfies "ws" | "auto";
+
+    // @ts-expect-error Browser-resolved root import must reject TCP transport.
+    createClient({ url: "tcp://example.test:4090", transport: "tcp" });
+
+    createClient({
+      url: "ws://example.test/ws",
+      transport: "ws",
+      // @ts-expect-error Browser-resolved root import must reject WebSocket headers.
+      webSocket: { headers: { Authorization: "x" } },
+    });
+  `,
+);
+
+writeSmokeFile(
+  "typecheck-browser-subpath.ts",
+  `
+    import { createClient } from "@cntryl/fitz/browser";
+
+    const client = createClient({ url: "ws://example.test/ws", transport: "ws" });
+
+    client.config.transport satisfies "ws" | "auto";
+
+    // @ts-expect-error Browser subpath must reject TCP transport.
+    createClient({ url: "tcp://example.test:4090", transport: "tcp" });
+
+    createClient({
+      url: "ws://example.test/ws",
+      transport: "ws",
+      // @ts-expect-error Browser subpath must reject WebSocket headers.
+      webSocket: { headers: { Authorization: "x" } },
+    });
+  `,
+);
+
+writeSmokeFile(
+  "tsconfig.typecheck-root-browser.json",
+  `
+    {
+      "compilerOptions": {
+        "module": "esnext",
+        "moduleResolution": "bundler",
+        "customConditions": ["browser"],
+        "target": "es2022",
+        "strict": true,
+        "noEmit": true,
+        "lib": ["es2022", "dom"]
+      },
+      "include": ["typecheck-root-browser.ts"]
+    }
+  `,
+);
+
+writeSmokeFile(
+  "tsconfig.typecheck-browser-subpath.json",
+  `
+    {
+      "compilerOptions": {
+        "module": "esnext",
+        "moduleResolution": "bundler",
+        "target": "es2022",
+        "strict": true,
+        "noEmit": true,
+        "lib": ["es2022", "dom"]
+      },
+      "include": ["typecheck-browser-subpath.ts"]
+    }
+  `,
+);
+
+writeSmokeFile(
   "worker-entry.ts",
   `
     import { createClient } from "@cntryl/fitz/browser";
@@ -146,6 +229,8 @@ writeSmokeFile(
 
 run(viteBin, ["build", "--config", "vite.browser.config.mjs"], { cwd: smokeDir });
 run(viteBin, ["build", "--config", "vite.worker.config.mjs"], { cwd: smokeDir });
+run(tscBin, ["--project", "tsconfig.typecheck-root-browser.json"], { cwd: smokeDir });
+run(tscBin, ["--project", "tsconfig.typecheck-browser-subpath.json"], { cwd: smokeDir });
 run(
   vpBin,
   ["pack", "worker-entry.ts", "--platform", "browser", "--out-dir", "vp-worker", "--clean"],

@@ -7,7 +7,7 @@ import { createNodeTransport } from "../transport/factory.node";
 import type { Client as CoreClient } from "./client-core";
 import { createClientConstructor, createClientWithTransport } from "./client-core";
 
-export type Client = CoreClient;
+export type Client = CoreClient<ClientConfig>;
 
 export function createClient(config: ClientConfig): Client {
   return createClientWithTransport(config, createNodeTransport);
