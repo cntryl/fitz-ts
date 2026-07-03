@@ -3,17 +3,19 @@
  */
 
 import { createDomainClient } from "../base";
+import type { DisconnectListenerPort, RequestPort, RetryExecutionPort } from "../base";
 import { KvCodec } from "./codec";
 import { createKvTransaction, KvTransaction } from "./transaction";
 import { KvBeginOptions, KvStatus } from "./types";
 import { MSG_KV_BEGIN } from "../../frame/types";
 import { KvError } from "../../core/errors";
 import { isRouteShape } from "../_routes";
-import type { Connection } from "../../client/connection";
+
+type KvConnectionPort = RequestPort & DisconnectListenerPort & RetryExecutionPort;
 
 export type KvClient = ReturnType<typeof createKvClient>;
 
-export function createKvClient(connection: Connection) {
+export function createKvClient(connection: KvConnectionPort) {
   const { requestFrame } = createDomainClient(connection);
 
   const begin = async (route: string, options: KvBeginOptions): Promise<KvTransaction> => {
@@ -44,11 +46,11 @@ export function createKvClient(connection: Connection) {
 }
 
 type KvClientConstructor = {
-  new (connection: Connection): KvClient;
-  (connection: Connection): KvClient;
+  new (connection: KvConnectionPort): KvClient;
+  (connection: KvConnectionPort): KvClient;
 };
 
-export const KvClient: KvClientConstructor = function (connection: Connection) {
+export const KvClient: KvClientConstructor = function (connection: KvConnectionPort) {
   return createKvClient(connection);
 } as unknown as KvClientConstructor;
 

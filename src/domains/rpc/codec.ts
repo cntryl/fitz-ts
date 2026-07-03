@@ -51,6 +51,73 @@ const readCorrelationKey = (payload: Uint8Array, offset: number): bigint => {
   return readU128BEAt(payload, offset);
 };
 
+const readU32BE = (payload: Uint8Array, offset: number): number | undefined => {
+  if (offset + 4 > payload.length) {
+    return undefined;
+  }
+
+  return (
+    ((payload[offset] << 24) |
+      (payload[offset + 1] << 16) |
+      (payload[offset + 2] << 8) |
+      payload[offset + 3]) >>>
+    0
+  );
+};
+
+const readLengthPrefixedEnd = (payload: Uint8Array, offset: number): number | undefined => {
+  const length = readU32BE(payload, offset);
+  if (length === undefined) {
+    return undefined;
+  }
+
+  const end = offset + 4 + length;
+  return end > payload.length ? undefined : end;
+};
+
+const looksLikeInboundRequestPayload = (payload: Uint8Array): boolean => {
+  let offset = 0;
+  const correlationLength = readU32BE(payload, offset);
+  if (correlationLength !== CORRELATION_ID_LENGTH) {
+    return false;
+  }
+  offset += 4 + correlationLength;
+
+  const routeEnd = readLengthPrefixedEnd(payload, offset);
+  if (routeEnd === undefined) {
+    return false;
+  }
+  offset = routeEnd;
+
+  const replyRouteEnd = readLengthPrefixedEnd(payload, offset);
+  if (replyRouteEnd === undefined) {
+    return false;
+  }
+  offset = replyRouteEnd;
+
+  const bodyEnd = readLengthPrefixedEnd(payload, offset);
+  return bodyEnd === payload.length;
+};
+
+const looksLikeStreamResponsePayload = (payload: Uint8Array): boolean => {
+  let offset = 0;
+  const correlationLength = readU32BE(payload, offset);
+  if (correlationLength !== CORRELATION_ID_LENGTH) {
+    return false;
+  }
+  offset += 4 + correlationLength + 8;
+
+  const bodyEnd = readLengthPrefixedEnd(payload, offset);
+  if (bodyEnd === undefined || bodyEnd >= payload.length) {
+    return false;
+  }
+  offset = bodyEnd;
+
+  const streamEnd = payload[offset];
+  offset += 1;
+  return offset === payload.length && (streamEnd === 0 || streamEnd === 1);
+};
+
 const readStringFromPayload = (
   payload: Uint8Array,
   offset: number,
@@ -79,6 +146,14 @@ const readStringFromPayload = (
 };
 
 export const RpcCodec = {
+  isInboundRequestPayload(payload: Uint8Array): boolean {
+    return looksLikeInboundRequestPayload(payload);
+  },
+
+  isStreamResponsePayload(payload: Uint8Array): boolean {
+    return looksLikeStreamResponsePayload(payload);
+  },
+
   /**
    * Generate a random 16-byte correlation ID
    * Per fitz-go rpc.go: crypto/rand.Read(correlationID[:])

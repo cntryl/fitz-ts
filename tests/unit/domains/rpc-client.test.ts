@@ -11,7 +11,6 @@ import {
 } from "../../../src/frame/types";
 import { RpcClient } from "../../../src/domains/rpc/client";
 import { RpcCodec } from "../../../src/domains/rpc/codec";
-import type { Connection } from "../../../src/client/connection";
 
 class FakeRpcConnection {
   public readonly notificationHandlers = new Map<number, (payload: Uint8Array) => void>();
@@ -104,7 +103,7 @@ class FakeRpcConnection {
 describe("RpcClient", () => {
   it("swallows worker response sends after the connection closes", async () => {
     const connection = new FakeRpcConnection();
-    const client = new RpcClient(connection as unknown as Connection);
+    const client = new RpcClient(connection);
     const route = "rpc://realm/area/method";
 
     await client.registerWorker(route, async (_req, writer) => {
@@ -131,7 +130,7 @@ describe("RpcClient", () => {
 
   it("does not send a stale worker response after disconnect and reconnect", async () => {
     const connection = new FakeRpcConnection();
-    const client = new RpcClient(connection as unknown as Connection);
+    const client = new RpcClient(connection);
     const route = "rpc://realm/area/method";
     let releaseHandler: () => void = () => undefined;
     const handlerGate = new Promise<void>((resolve) => {
@@ -165,7 +164,7 @@ describe("RpcClient", () => {
 
   it("re-subscribes workers on reconnect and handles requests with the restored handler", async () => {
     const connection = new FakeRpcConnection();
-    const client = new RpcClient(connection as unknown as Connection);
+    const client = new RpcClient(connection);
     const route = "rpc://realm/area/method";
     const handledBodies: string[] = [];
 
@@ -201,7 +200,7 @@ describe("RpcClient", () => {
 
   it("does not re-subscribe workers after they unsubscribe", async () => {
     const connection = new FakeRpcConnection();
-    const client = new RpcClient(connection as unknown as Connection);
+    const client = new RpcClient(connection);
     const subscription = await client.registerWorker(
       "rpc://realm/area/method",
       async () => undefined,
@@ -219,7 +218,7 @@ describe("RpcClient", () => {
     const controller = new AbortController();
     controller.abort();
     const connection = new FakeRpcConnection();
-    const client = new RpcClient(connection as unknown as Connection);
+    const client = new RpcClient(connection);
 
     await expect(
       client.call("rpc://realm/area/method", new Uint8Array([1]), {
@@ -231,7 +230,7 @@ describe("RpcClient", () => {
 
   it("delivers a terminal RPC response frame that also carries a body", async () => {
     const connection = new FakeRpcConnection();
-    const client = new RpcClient(connection as unknown as Connection);
+    const client = new RpcClient(connection);
 
     const iterator = await client.call("rpc://realm/area/method", new Uint8Array([1]));
 
@@ -261,7 +260,7 @@ describe("RpcClient", () => {
 
   it("fails a pending iterator when the connection disconnects", async () => {
     const connection = new FakeRpcConnection();
-    const client = new RpcClient(connection as unknown as Connection);
+    const client = new RpcClient(connection);
 
     const iterator = await client.call("rpc://realm/area/method", new Uint8Array([1]));
 
@@ -275,7 +274,7 @@ describe("RpcClient", () => {
 
   it("fails immediately when an RPC stream reports worker not found", async () => {
     const connection = new FakeRpcConnection();
-    const client = new RpcClient(connection as unknown as Connection);
+    const client = new RpcClient(connection);
 
     const iterator = await client.call("rpc://realm/area/method", new Uint8Array([1]));
 
@@ -307,7 +306,7 @@ describe("RpcClient", () => {
     vi.useFakeTimers();
     try {
       const connection = new FakeRpcConnection();
-      const client = new RpcClient(connection as unknown as Connection);
+      const client = new RpcClient(connection);
 
       const iterator = await client.call("rpc://realm/area/method", new Uint8Array([1]), {
         timeoutMs: 10000,
@@ -347,7 +346,7 @@ describe("RpcClient", () => {
     vi.useFakeTimers();
     try {
       const connection = new FakeRpcConnection();
-      const client = new RpcClient(connection as unknown as Connection);
+      const client = new RpcClient(connection);
 
       const iterator = await client.call("rpc://realm/area/method", new Uint8Array([1]), {
         timeoutMs: 10000,

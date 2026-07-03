@@ -14,6 +14,7 @@ import { LeaseClient } from "../domains/lease/client";
 import { NoticeClient } from "../domains/notice/client";
 import { StreamClient } from "../domains/stream/client";
 import { ScheduleClient } from "../domains/schedule/client";
+import { throwIfAborted, waitForSharedPromise } from "./internal/async";
 
 export type Client = ReturnType<typeof createClient>;
 
@@ -22,60 +23,17 @@ type ManagedConnection = Connection & {
   shouldWaitForReconnect?: () => boolean;
 };
 
-const abortError = (): Error => {
-  const error = new Error("The operation was aborted");
-  error.name = "AbortError";
-  return error;
+type DomainClients = {
+  kv: KvClient;
+  queue: QueueClient;
+  rpc: RpcClient;
+  lease: LeaseClient;
+  notice: NoticeClient;
+  stream: StreamClient;
+  schedule: ScheduleClient;
 };
 
-const throwIfAborted = (signal?: AbortSignal): void => {
-  if (signal?.aborted) {
-    throw abortError();
-  }
-};
-
-const waitForSharedPromise = async <T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> => {
-  if (!signal) {
-    return promise;
-  }
-
-  if (signal.aborted) {
-    throw abortError();
-  }
-
-  return await new Promise<T>((resolve, reject) => {
-    let settled = false;
-
-    const cleanup = () => {
-      signal.removeEventListener("abort", onAbort);
-    };
-
-    const settle = (callback: () => void) => {
-      if (settled) {
-        return;
-      }
-
-      settled = true;
-      cleanup();
-      callback();
-    };
-
-    const onAbort = () => {
-      settle(() => reject(abortError()));
-    };
-
-    signal.addEventListener("abort", onAbort, { once: true });
-
-    void promise.then(
-      (value) => {
-        settle(() => resolve(value));
-      },
-      (error) => {
-        settle(() => reject(error));
-      },
-    );
-  });
-};
+type DomainKey = keyof DomainClients;
 
 export function createClient(config: ClientConfig) {
   const observability = config.observability;
@@ -124,15 +82,21 @@ export function createClient(config: ClientConfig) {
   }
 
   let connection: Connection | null = null;
-  let kvClient: KvClient | null = null;
-  let queueClient: QueueClient | null = null;
-  let rpcClient: RpcClient | null = null;
-  let leaseClient: LeaseClient | null = null;
-  let noticeClient: NoticeClient | null = null;
-  let streamClient: StreamClient | null = null;
-  let scheduleClient: ScheduleClient | null = null;
+  const domainCache = new Map<DomainKey, DomainClients[DomainKey]>();
   let clientClosed = false;
   let pendingConnectPromise: Promise<void> | null = null;
+
+  const domainFactories: {
+    [K in DomainKey]: (connection: Connection) => DomainClients[K];
+  } = {
+    kv: (activeConnection) => new KvClient(activeConnection),
+    queue: (activeConnection) => new QueueClient(activeConnection),
+    rpc: (activeConnection) => new RpcClient(activeConnection),
+    lease: (activeConnection) => new LeaseClient(activeConnection),
+    notice: (activeConnection) => new NoticeClient(activeConnection),
+    stream: (activeConnection) => new StreamClient(activeConnection),
+    schedule: (activeConnection) => new ScheduleClient(activeConnection),
+  };
 
   const resolveTokenProvider = (): TokenProvider => {
     if (resolvedConfig.tokenProvider) {
@@ -247,13 +211,7 @@ export function createClient(config: ClientConfig) {
 
   const close = async (): Promise<void> => {
     if (clientClosed && !connection) {
-      kvClient = null;
-      queueClient = null;
-      rpcClient = null;
-      leaseClient = null;
-      noticeClient = null;
-      streamClient = null;
-      scheduleClient = null;
+      domainCache.clear();
       return;
     }
 
@@ -270,73 +228,51 @@ export function createClient(config: ClientConfig) {
         }
       }
     }
-    kvClient = null;
-    queueClient = null;
-    rpcClient = null;
-    leaseClient = null;
-    noticeClient = null;
-    streamClient = null;
-    scheduleClient = null;
+    domainCache.clear();
   };
 
   const isConnected = (): boolean => {
     return !clientClosed && (connection?.isConnected() ?? false);
   };
 
-  const kv = (): KvClient => {
+  const getDomain = <K extends DomainKey>(key: K): DomainClients[K] => {
     const activeConnection = ensureConnection();
-    if (!kvClient) {
-      kvClient = new KvClient(activeConnection);
+    const cached = domainCache.get(key) as DomainClients[K] | undefined;
+    if (cached) {
+      return cached;
     }
-    return kvClient;
+
+    const created = domainFactories[key](activeConnection);
+    domainCache.set(key, created);
+    return created;
+  };
+
+  const kv = (): KvClient => {
+    return getDomain("kv");
   };
 
   const queue = (): QueueClient => {
-    const activeConnection = ensureConnection();
-    if (!queueClient) {
-      queueClient = new QueueClient(activeConnection);
-    }
-    return queueClient;
+    return getDomain("queue");
   };
 
   const rpc = (): RpcClient => {
-    const activeConnection = ensureConnection();
-    if (!rpcClient) {
-      rpcClient = new RpcClient(activeConnection);
-    }
-    return rpcClient;
+    return getDomain("rpc");
   };
 
   const lease = (): LeaseClient => {
-    const activeConnection = ensureConnection();
-    if (!leaseClient) {
-      leaseClient = new LeaseClient(activeConnection);
-    }
-    return leaseClient;
+    return getDomain("lease");
   };
 
   const notice = (): NoticeClient => {
-    const activeConnection = ensureConnection();
-    if (!noticeClient) {
-      noticeClient = new NoticeClient(activeConnection);
-    }
-    return noticeClient;
+    return getDomain("notice");
   };
 
   const stream = (): StreamClient => {
-    const activeConnection = ensureConnection();
-    if (!streamClient) {
-      streamClient = new StreamClient(activeConnection);
-    }
-    return streamClient;
+    return getDomain("stream");
   };
 
   const schedule = (): ScheduleClient => {
-    const activeConnection = ensureConnection();
-    if (!scheduleClient) {
-      scheduleClient = new ScheduleClient(activeConnection);
-    }
-    return scheduleClient;
+    return getDomain("schedule");
   };
 
   const getUrl = (): string => {

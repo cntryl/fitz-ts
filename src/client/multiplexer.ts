@@ -10,7 +10,6 @@
 
 import { Deferred, ConnectionState, FitzMeter, FitzTracer } from "../core/types";
 import { ConnectionError, TimeoutError } from "../core/errors";
-import { MSG_RPC_REQUEST, MSG_RPC_RESPONSE } from "../frame/types";
 
 export interface MultiplexerObservability {
   meter?: FitzMeter;
@@ -30,12 +29,13 @@ export interface PendingRequest {
 /**
  * Handler for server-pushed frames.
  *
- * Most pushed traffic uses dedicated `*_NOTIFY` message types. RPC is the
- * protocol exception: inbound worker requests and streaming responses arrive on
- * `MSG_RPC_REQUEST` and `MSG_RPC_RESPONSE`, so those frames are only treated as
- * pushes when there is no matching FIFO request waiting on the same type.
+ * Most pushed traffic uses dedicated `*_NOTIFY` message types. Domains that
+ * share request/response message types with pushed traffic can register a
+ * classifier to route only domain-owned push frames ahead of FIFO matching.
  */
 export type NotificationHandler = (payload: Uint8Array) => void;
+export type PushFrameClassifier = (payload: Uint8Array) => boolean;
+export type PushFrameClassifierRegistration = () => void;
 
 /**
  * RPC correlation handler for streamed responses
@@ -56,6 +56,7 @@ export function createMultiplexer(observability: MultiplexerObservability = {}) 
 
   const pending: Record<number, PendingQueue | undefined> = {};
   const notificationHandlers: Map<number, NotificationHandler> = new Map();
+  const pushClassifiers: Map<number, PushFrameClassifier> = new Map();
   const optionalResponses: Map<number, number> = new Map();
   let state: ConnectionState = ConnectionState.Disconnected;
 
@@ -255,6 +256,18 @@ export function createMultiplexer(observability: MultiplexerObservability = {}) 
 
   const unregisterNotificationHandler = (messageType: number): void => {
     notificationHandlers.delete(messageType);
+  };
+
+  const registerPushFrameClassifier = (
+    messageType: number,
+    classifier: PushFrameClassifier,
+  ): PushFrameClassifierRegistration => {
+    pushClassifiers.set(messageType, classifier);
+    return () => {
+      if (pushClassifiers.get(messageType) === classifier) {
+        pushClassifiers.delete(messageType);
+      }
+    };
   };
 
   const expectOptionalResponse = (messageType: number): (() => void) => {
@@ -481,7 +494,8 @@ export function createMultiplexer(observability: MultiplexerObservability = {}) 
 
   const dispatch = (messageType: number, payload: Uint8Array): void => {
     const handler = notificationHandlers.get(messageType);
-    if (handler && isRpcPushFrame(messageType, payload)) {
+    const pushClassifier = pushClassifiers.get(messageType);
+    if (handler && pushClassifier?.(payload)) {
       try {
         handler(payload);
       } catch {
@@ -607,6 +621,7 @@ export function createMultiplexer(observability: MultiplexerObservability = {}) 
     setDisconnected,
     registerNotificationHandler,
     unregisterNotificationHandler,
+    registerPushFrameClassifier,
     expectOptionalResponse,
     request,
     dispatch,
@@ -632,82 +647,4 @@ function abortError(): Error {
   const error = new Error("The operation was aborted");
   error.name = "AbortError";
   return error;
-}
-
-function isRpcPushFrame(messageType: number, payload: Uint8Array): boolean {
-  if (messageType === MSG_RPC_REQUEST) {
-    return looksLikeRpcInboundRequest(payload);
-  }
-
-  if (messageType === MSG_RPC_RESPONSE) {
-    return looksLikeRpcStreamResponse(payload);
-  }
-
-  return false;
-}
-
-function looksLikeRpcInboundRequest(payload: Uint8Array): boolean {
-  let offset = 0;
-  const correlationLength = readU32BE(payload, offset);
-  if (correlationLength !== 16) {
-    return false;
-  }
-  offset += 4 + correlationLength;
-
-  const routeLength = readU32BE(payload, offset);
-  if (routeLength === undefined) {
-    return false;
-  }
-  offset += 4 + routeLength;
-
-  const replyRouteLength = readU32BE(payload, offset);
-  if (replyRouteLength === undefined) {
-    return false;
-  }
-  offset += 4 + replyRouteLength;
-
-  const bodyLength = readU32BE(payload, offset);
-  if (bodyLength === undefined) {
-    return false;
-  }
-  offset += 4 + bodyLength;
-
-  return offset === payload.length;
-}
-
-function looksLikeRpcStreamResponse(payload: Uint8Array): boolean {
-  let offset = 0;
-  const correlationLength = readU32BE(payload, offset);
-  if (correlationLength !== 16) {
-    return false;
-  }
-  offset += 4 + correlationLength + 8;
-
-  const bodyLength = readU32BE(payload, offset);
-  if (bodyLength === undefined) {
-    return false;
-  }
-  offset += 4 + bodyLength;
-
-  if (offset >= payload.length) {
-    return false;
-  }
-
-  const streamEnd = payload[offset];
-  offset += 1;
-  return offset === payload.length && (streamEnd === 0 || streamEnd === 1);
-}
-
-function readU32BE(payload: Uint8Array, offset: number): number | undefined {
-  if (offset + 4 > payload.length) {
-    return undefined;
-  }
-
-  return (
-    ((payload[offset] << 24) |
-      (payload[offset + 1] << 16) |
-      (payload[offset + 2] << 8) |
-      payload[offset + 3]) >>>
-    0
-  );
 }

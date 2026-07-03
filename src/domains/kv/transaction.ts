@@ -2,7 +2,7 @@
  * KV transaction wrapper.
  */
 
-import { Connection } from "../../client/connection";
+import type { DisconnectListenerPort, RequestPort, RetryExecutionPort } from "../base";
 import type { RetryOperation } from "../../client/resilience";
 import { KvCodec } from "./codec";
 import { KvGetResult, KvScanOptions, KvStatus } from "./types";
@@ -21,11 +21,14 @@ import { createSliceIterator, createAsyncIterableIterator } from "../../core/ite
 
 export type KvTransaction = ReturnType<typeof createKvTransaction>;
 
-export function createKvTransaction(connection: Connection, route: string, txId: bigint) {
+type KvTransactionConnectionPort = RequestPort & DisconnectListenerPort & RetryExecutionPort;
+
+export function createKvTransaction(
+  connection: KvTransactionConnectionPort,
+  route: string,
+  txId: bigint,
+) {
   let closed = false;
-  const resilientConnection = connection as Connection & {
-    executeWithRetry?: <T>(operation: RetryOperation, task: () => Promise<T>) => Promise<T>;
-  };
   let unsubscribeDisconnect: () => void = () => undefined;
   unsubscribeDisconnect = connection.onDisconnect(() => {
     closed = true;
@@ -59,8 +62,8 @@ export function createKvTransaction(connection: Connection, route: string, txId:
   };
 
   const runWithRetry = async <T>(operation: RetryOperation, task: () => Promise<T>): Promise<T> => {
-    if (typeof resilientConnection.executeWithRetry === "function") {
-      return resilientConnection.executeWithRetry(operation, task);
+    if (typeof connection.executeWithRetry === "function") {
+      return connection.executeWithRetry(operation, task);
     }
 
     return task();

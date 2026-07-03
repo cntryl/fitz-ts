@@ -3,6 +3,17 @@
  */
 
 import { createDomainClient } from "../base";
+import type {
+  AsyncDispatchPort,
+  DisconnectListenerPort,
+  NotificationPort,
+  PushClassifierPort,
+  ReconnectListenerPort,
+  ReconnectRestoreRequestPort,
+  RequestPort,
+  SendPort,
+  StateReadPort,
+} from "../base";
 import { RpcCodec, acquirePooledCorrelationId, releasePooledCorrelationId } from "./codec";
 import {
   RequestOptions,
@@ -29,7 +40,16 @@ import {
 import { ConnectionState } from "../../core/types";
 import { readU128BEAt, utf8Encoder } from "../../core/buffer";
 import { isConcreteRouteShape } from "../_routes";
-import type { Connection } from "../../client/connection";
+
+type RpcConnectionPort = RequestPort &
+  SendPort &
+  NotificationPort &
+  ReconnectListenerPort &
+  DisconnectListenerPort &
+  AsyncDispatchPort &
+  StateReadPort &
+  PushClassifierPort &
+  Partial<ReconnectRestoreRequestPort>;
 
 type DecodedInboundRequest = {
   correlationId: Uint8Array;
@@ -43,7 +63,7 @@ type ManagedResponseWriter = ResponseWriter & {
 };
 
 function createRpcResponseWriter(
-  connection: Connection,
+  connection: SendPort & DisconnectListenerPort & StateReadPort,
   correlationId: Uint8Array,
 ): ManagedResponseWriter {
   let sequence = 0n;
@@ -91,7 +111,7 @@ function createRpcResponseWriter(
   };
 }
 
-function isBenignShutdownError(error: unknown, connection: Connection): boolean {
+function isBenignShutdownError(error: unknown, connection: StateReadPort): boolean {
   if (connection.getState() !== ConnectionState.Authenticated) {
     return true;
   }
@@ -276,15 +296,15 @@ function createRpcIterator(
 export type RpcClient = ReturnType<typeof createRpcClient>;
 
 type RpcClientConstructor = {
-  new (connection: Connection): RpcClient;
-  (connection: Connection): RpcClient;
+  new (connection: RpcConnectionPort): RpcClient;
+  (connection: RpcConnectionPort): RpcClient;
 };
 
-export const RpcClient: RpcClientConstructor = function (connection: Connection) {
+export const RpcClient: RpcClientConstructor = function (connection: RpcConnectionPort) {
   return createRpcClient(connection);
 } as unknown as RpcClientConstructor;
 
-export function createRpcClient(connection: Connection) {
+export function createRpcClient(connection: RpcConnectionPort) {
   const { requestFrame, requestReconnectFrame } = createDomainClient(connection);
   type PendingRpcEntry = { iterator: RpcIterator; correlationId: Uint8Array };
   const pendingRpcs = new Map<bigint, PendingRpcEntry>();
@@ -416,6 +436,13 @@ export function createRpcClient(connection: Connection) {
       return;
     }
     initialized = true;
+
+    connection.registerPushFrameClassifier?.(MSG_RPC_RESPONSE, (payload) =>
+      RpcCodec.isStreamResponsePayload(payload),
+    );
+    connection.registerPushFrameClassifier?.(MSG_RPC_REQUEST, (payload) =>
+      RpcCodec.isInboundRequestPayload(payload),
+    );
 
     connection.registerNotificationHandler(MSG_RPC_RESPONSE, (payload: Uint8Array) => {
       try {

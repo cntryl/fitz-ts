@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import type { Connection } from "../../../src/client/connection";
 import { createLease } from "../../../src/domains/lease/types";
 import { createQueueItem } from "../../../src/domains/queue/types";
 
@@ -33,7 +32,7 @@ describe("stale handles", () => {
       2n,
       new Uint8Array([1]),
       "queue://realm/area/resource",
-      connection as unknown as Connection,
+      connection,
     );
 
     connection.emitDisconnect();
@@ -48,12 +47,7 @@ describe("stale handles", () => {
 
   it("fails lease operations after disconnect", async () => {
     const connection = new DisconnectableConnection();
-    const lease = createLease(
-      1n,
-      2n,
-      "lease://realm/area/resource",
-      connection as unknown as Connection,
-    );
+    const lease = createLease(1n, 2n, "lease://realm/area/resource", connection);
 
     connection.emitDisconnect();
 

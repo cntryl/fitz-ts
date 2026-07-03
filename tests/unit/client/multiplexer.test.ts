@@ -281,6 +281,9 @@ describe("Multiplexer", () => {
 
     multiplexer.setConnected();
     multiplexer.registerNotificationHandler(MSG_RPC_REQUEST, handler);
+    multiplexer.registerPushFrameClassifier(MSG_RPC_REQUEST, (payload) =>
+      RpcCodec.isInboundRequestPayload(payload),
+    );
 
     const pending = multiplexer.request(
       MSG_RPC_REQUEST,
@@ -317,6 +320,9 @@ describe("Multiplexer", () => {
 
     multiplexer.setConnected();
     multiplexer.registerNotificationHandler(MSG_RPC_RESPONSE, handler);
+    multiplexer.registerPushFrameClassifier(MSG_RPC_RESPONSE, (payload) =>
+      RpcCodec.isStreamResponsePayload(payload),
+    );
 
     const pending = multiplexer.request(
       MSG_RPC_RESPONSE,
@@ -335,5 +341,22 @@ describe("Multiplexer", () => {
     multiplexer.dispatch(MSG_RPC_RESPONSE, new Uint8Array([0]));
 
     await expect(pending).resolves.toEqual(new Uint8Array([0]));
+  });
+
+  it("preserves FIFO request matching when a registered classifier returns false", async () => {
+    const multiplexer = new Multiplexer();
+    const handler = vi.fn();
+    const response = new Uint8Array([7]);
+
+    multiplexer.setConnected();
+    multiplexer.registerNotificationHandler(901, handler);
+    multiplexer.registerPushFrameClassifier(901, () => false);
+
+    const pending = multiplexer.request(901, new Uint8Array([1]), async () => undefined, 1000);
+
+    multiplexer.dispatch(901, response);
+
+    await expect(pending).resolves.toEqual(response);
+    expect(handler).not.toHaveBeenCalled();
   });
 });

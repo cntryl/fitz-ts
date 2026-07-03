@@ -58,7 +58,7 @@
     "prepare": "vp config"
   },
   "devDependencies": {
-    "@types/node": "^26.0.1",
+    "@types/node": "^26.1.0",
     "@types/ws": "^8.18.1",
     "cross-env": "^10.1.0",
     "typescript": "^6.0.3",
@@ -68,7 +68,7 @@
   "engines": {
     "node": ">=20.19.0"
   },
-  "packageManager": "npm@11.17.0",
+  "packageManager": "npm@11.18.0",
   "allowScripts": {
     "fsevents@2.3.3": true
   }

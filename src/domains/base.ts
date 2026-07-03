@@ -2,19 +2,78 @@
  * Shared utilities for domain clients
  */
 
-import { Connection } from "../client/connection";
 import type { RetryOperation } from "../client/resilience";
+import type {
+  NotificationHandler,
+  PushFrameClassifier,
+  PushFrameClassifierRegistration,
+} from "../client/multiplexer";
+import type { ConnectionState } from "../core/types";
 
-type ResilientConnection = Connection & {
-  executeWithRetry?: <T>(operation: RetryOperation, task: () => Promise<T>) => Promise<T>;
-  requestDuringReconnectRestore?: (
+export type ReconnectListener = () => void | Promise<void>;
+export type DisconnectListener = () => void;
+export type AsyncHandlerTask = () => void | Promise<void>;
+
+export interface RequestPort {
+  request(messageType: number, payload: Uint8Array, signal?: AbortSignal): Promise<Uint8Array>;
+}
+
+export interface ReconnectRestoreRequestPort {
+  requestDuringReconnectRestore(
     messageType: number,
     payload: Uint8Array,
     signal?: AbortSignal,
-  ) => Promise<Uint8Array>;
-};
+  ): Promise<Uint8Array>;
+}
 
-export function createDomainClient(connection: Connection) {
+export interface SendPort {
+  send(messageType: number, payload: Uint8Array, signal?: AbortSignal): Promise<void>;
+}
+
+export interface FireAndForgetPort {
+  sendFireAndForget(messageType: number, payload: Uint8Array, signal?: AbortSignal): Promise<void>;
+}
+
+export interface OptionalResponsePort {
+  expectOptionalResponse?(messageType: number): () => void;
+  getMultiplexer?(): {
+    expectOptionalResponse(messageType: number): () => void;
+  };
+}
+
+export interface NotificationPort {
+  registerNotificationHandler(messageType: number, handler: NotificationHandler): void;
+  unregisterNotificationHandler?(messageType: number): void;
+}
+
+export interface PushClassifierPort {
+  registerPushFrameClassifier?(
+    messageType: number,
+    classifier: PushFrameClassifier,
+  ): PushFrameClassifierRegistration;
+}
+
+export interface ReconnectListenerPort {
+  onReconnect(listener: ReconnectListener): () => void;
+}
+
+export interface DisconnectListenerPort {
+  onDisconnect(listener: DisconnectListener): () => void;
+}
+
+export interface AsyncDispatchPort {
+  dispatchAsyncHandler(task: AsyncHandlerTask): void;
+}
+
+export interface RetryExecutionPort {
+  executeWithRetry?: <T>(operation: RetryOperation, task: () => Promise<T>) => Promise<T>;
+}
+
+export interface StateReadPort {
+  getState(): ConnectionState;
+}
+
+export function createDomainClient(connection: RequestPort & Partial<ReconnectRestoreRequestPort>) {
   const requestFrame = async (
     messageType: number,
     payload: Uint8Array,
@@ -26,31 +85,41 @@ export function createDomainClient(connection: Connection) {
     payload: Uint8Array,
     signal?: AbortSignal,
   ): Promise<Uint8Array> => {
-    const resilientConnection = connection as ResilientConnection;
-    if (typeof resilientConnection.requestDuringReconnectRestore === "function") {
-      return await resilientConnection.requestDuringReconnectRestore(messageType, payload, signal);
+    if (typeof connection.requestDuringReconnectRestore === "function") {
+      return await connection.requestDuringReconnectRestore(messageType, payload, signal);
     }
 
     return await connection.request(messageType, payload, signal);
   };
 
-  const sendFrame = async (messageType: number, payload: Uint8Array): Promise<void> =>
-    connection.send(messageType, payload);
-
   const runWithRetry = async <T>(operation: RetryOperation, task: () => Promise<T>): Promise<T> => {
-    const resilientConnection = connection as ResilientConnection;
-    if (typeof resilientConnection.executeWithRetry === "function") {
-      return resilientConnection.executeWithRetry(operation, task);
+    const retryConnection = connection as RequestPort & RetryExecutionPort;
+    if (typeof retryConnection.executeWithRetry === "function") {
+      return retryConnection.executeWithRetry(operation, task);
     }
 
     return task();
+  };
+
+  const expectOptionalResponse = (messageType: number): (() => void) => {
+    const optionalConnection = connection as RequestPort & OptionalResponsePort;
+    if (typeof optionalConnection.expectOptionalResponse === "function") {
+      return optionalConnection.expectOptionalResponse(messageType);
+    }
+
+    const multiplexer = optionalConnection.getMultiplexer?.();
+    if (multiplexer) {
+      return multiplexer.expectOptionalResponse(messageType);
+    }
+
+    return () => undefined;
   };
 
   return {
     connection,
     requestFrame,
     requestReconnectFrame,
-    sendFrame,
     runWithRetry,
+    expectOptionalResponse,
   };
 }

@@ -3,7 +3,7 @@
  * Per fitz-go/internal/domains/lease/lease.go
  */
 
-import type { Connection } from "../../client/connection";
+import type { DisconnectListenerPort, RequestPort } from "../base";
 import { LeaseError } from "../../core/errors";
 
 /**
@@ -49,7 +49,7 @@ export function createLease(
   token: bigint,
   expiresAt: bigint,
   route: string,
-  connection: Connection,
+  connection: RequestPort & DisconnectListenerPort,
 ) {
   let currentToken = token;
   let currentExpiry = expiresAt;

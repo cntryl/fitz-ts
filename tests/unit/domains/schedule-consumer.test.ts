@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 
-import type { Connection } from "../../../src/client/connection";
 import { BufferWriter } from "../../../src/core/buffer";
 import { ScheduleClient } from "../../../src/domains/schedule/client";
 import {
@@ -46,7 +45,7 @@ class FakeScheduleConsumerConnection {
 describe("ScheduleClient waitForNotifications", () => {
   it("yields notifications in order", async () => {
     const connection = new FakeScheduleConsumerConnection();
-    const client = new ScheduleClient(connection as unknown as Connection);
+    const client = new ScheduleClient(connection);
     const iterator = client
       .waitForNotifications("schedule://realm/area/resource/run")
       [Symbol.asyncIterator]();
@@ -74,7 +73,7 @@ describe("ScheduleClient waitForNotifications", () => {
 
   it("does not lose notifications that arrive before the iterator waits", async () => {
     const connection = new FakeScheduleConsumerConnection();
-    const client = new ScheduleClient(connection as unknown as Connection);
+    const client = new ScheduleClient(connection);
     const iterator = client
       .waitForNotifications("schedule://realm/area/resource/run")
       [Symbol.asyncIterator]();

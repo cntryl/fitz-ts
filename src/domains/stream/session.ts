@@ -3,14 +3,14 @@
  * Per fitz-go/internal/domains/stream/stream.go
  */
 
-import { Connection } from "../../client/connection";
+import type { DisconnectListenerPort, RequestPort } from "../base";
 import { StreamCodec } from "./codec";
 import { StreamAppendOptions, StreamCommitMode, StreamSession, StreamStatus } from "./types";
 import { StreamError } from "../../core/errors";
 import { MSG_STREAM_APPEND, MSG_STREAM_COMMIT, MSG_STREAM_ROLLBACK } from "../../frame/types";
 
 export function createStreamSession(
-  connection: Connection,
+  connection: RequestPort & DisconnectListenerPort,
   _route: string,
   sessionId: bigint,
 ): StreamSession {

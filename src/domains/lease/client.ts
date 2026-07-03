@@ -3,7 +3,15 @@
  */
 
 import { createDomainClient } from "../base";
-import type { Connection } from "../../client/connection";
+import type {
+  AsyncDispatchPort,
+  DisconnectListenerPort,
+  NotificationPort,
+  ReconnectListenerPort,
+  ReconnectRestoreRequestPort,
+  RequestPort,
+  RetryExecutionPort,
+} from "../base";
 import { LeaseError } from "../../core/errors";
 import {
   MSG_LEASE_ACQUIRE,
@@ -29,9 +37,17 @@ type LeaseSubscriptionState = {
   handlers: Map<number, ChangeHandler>;
 };
 
+type LeaseConnectionPort = RequestPort &
+  ReconnectListenerPort &
+  DisconnectListenerPort &
+  NotificationPort &
+  AsyncDispatchPort &
+  RetryExecutionPort &
+  Partial<ReconnectRestoreRequestPort>;
+
 export type LeaseClient = ReturnType<typeof createLeaseClient>;
 
-export function createLeaseClient(connection: Connection) {
+export function createLeaseClient(connection: LeaseConnectionPort) {
   const { requestFrame, requestReconnectFrame, runWithRetry } = createDomainClient(connection);
   const subscriptionsByPattern = new Map<string, LeaseSubscriptionState>();
   let initialized = false;
@@ -189,11 +205,11 @@ export function createLeaseClient(connection: Connection) {
 }
 
 type LeaseClientConstructor = {
-  new (connection: Connection): LeaseClient;
-  (connection: Connection): LeaseClient;
+  new (connection: LeaseConnectionPort): LeaseClient;
+  (connection: LeaseConnectionPort): LeaseClient;
 };
 
-export const LeaseClient: LeaseClientConstructor = function (connection: Connection) {
+export const LeaseClient: LeaseClientConstructor = function (connection: LeaseConnectionPort) {
   return createLeaseClient(connection);
 } as unknown as LeaseClientConstructor;
 

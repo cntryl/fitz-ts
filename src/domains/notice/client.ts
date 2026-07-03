@@ -3,6 +3,15 @@
  */
 
 import { createDomainClient } from "../base";
+import type {
+  AsyncDispatchPort,
+  FireAndForgetPort,
+  NotificationPort,
+  OptionalResponsePort,
+  ReconnectListenerPort,
+  ReconnectRestoreRequestPort,
+  RequestPort,
+} from "../base";
 import { NoticeError } from "../../core/errors";
 import {
   MSG_NOTICE_NOTIFY,
@@ -13,17 +22,25 @@ import {
 import { isRouteShape, isSelectorRouteShape } from "../_routes";
 import { NoticeCodec } from "./codec";
 import { createNoticeSubscription, NoticeHandler, NoticeMsg, NoticeSubscription } from "./types";
-import type { Connection as ConnectionType } from "../../client/connection";
 
 type NoticeSubscriptionState = {
   subId: bigint;
   handlers: Map<number, NoticeHandler>;
 };
 
+type NoticeConnectionPort = RequestPort &
+  ReconnectListenerPort &
+  NotificationPort &
+  AsyncDispatchPort &
+  FireAndForgetPort &
+  OptionalResponsePort &
+  Partial<ReconnectRestoreRequestPort>;
+
 export type NoticeClient = ReturnType<typeof createNoticeClient>;
 
-export function createNoticeClient(connection: ConnectionType) {
-  const { requestFrame, requestReconnectFrame } = createDomainClient(connection);
+export function createNoticeClient(connection: NoticeConnectionPort) {
+  const { requestFrame, requestReconnectFrame, expectOptionalResponse } =
+    createDomainClient(connection);
   const subscriptionsByPattern = new Map<string, NoticeSubscriptionState>();
   const patternsBySubId = new Map<bigint, string>();
   let initialized = false;
@@ -54,9 +71,7 @@ export function createNoticeClient(connection: ConnectionType) {
   const publish = async (route: string, body: Uint8Array): Promise<void> => {
     assertNoticeRoute(route);
     const payload = NoticeCodec.encodePublish(route, body);
-    const cancelOptionalResponse = connection
-      .getMultiplexer()
-      .expectOptionalResponse(MSG_NOTICE_PUBLISH);
+    const cancelOptionalResponse = expectOptionalResponse(MSG_NOTICE_PUBLISH);
     try {
       await connection.sendFireAndForget(MSG_NOTICE_PUBLISH, payload);
     } catch (error) {
@@ -166,11 +181,11 @@ export function createNoticeClient(connection: ConnectionType) {
 }
 
 type NoticeClientConstructor = {
-  new (connection: ConnectionType): NoticeClient;
-  (connection: ConnectionType): NoticeClient;
+  new (connection: NoticeConnectionPort): NoticeClient;
+  (connection: NoticeConnectionPort): NoticeClient;
 };
 
-export const NoticeClient: NoticeClientConstructor = function (connection: ConnectionType) {
+export const NoticeClient: NoticeClientConstructor = function (connection: NoticeConnectionPort) {
   return createNoticeClient(connection);
 } as unknown as NoticeClientConstructor;
 

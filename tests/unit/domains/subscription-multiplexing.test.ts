@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import type { Connection } from "../../../src/client/connection";
 import { BufferWriter, utf8Decoder, utf8Encoder } from "../../../src/core/buffer";
 import { LeaseClient } from "../../../src/domains/lease/client";
 import { NoticeClient } from "../../../src/domains/notice/client";
@@ -54,6 +53,14 @@ class FakeSubscriptionConnection {
     return response.slice();
   }
 
+  async sendFireAndForget(messageType: number): Promise<void> {
+    this.requestCalls.push(messageType);
+  }
+
+  expectOptionalResponse(): () => void {
+    return () => undefined;
+  }
+
   registerNotificationHandler(messageType: number, handler: (payload: Uint8Array) => void): void {
     this.notificationHandlers.set(messageType, handler);
   }
@@ -63,6 +70,10 @@ class FakeSubscriptionConnection {
     return () => {
       this.reconnectListeners.delete(listener);
     };
+  }
+
+  onDisconnect(): () => void {
+    return () => undefined;
   }
 
   dispatchAsyncHandler(task: () => void | Promise<void>): void {
@@ -169,7 +180,7 @@ describe("Subscription Multiplexing", () => {
       [MSG_NOTICE_SUBSCRIBE, encodeOptionalSubIdResponse(12n)],
       [MSG_NOTICE_UNSUBSCRIBE, encodeStatusOnlyResponse()],
     ]);
-    const client = new NoticeClient(connection as unknown as Connection);
+    const client = new NoticeClient(connection);
     const firstRoutes: string[] = [];
     const secondRoutes: string[] = [];
     const pattern = "notice://realm/area/resource";
@@ -233,7 +244,7 @@ describe("Subscription Multiplexing", () => {
       [MSG_QUEUE_SUBSCRIBE, encodeQueueSubIdResponse(22n)],
       [MSG_QUEUE_UNSUBSCRIBE, encodeStatusOnlyResponse()],
     ]);
-    const client = new QueueClient(connection as unknown as Connection);
+    const client = new QueueClient(connection);
     const firstRoutes: string[] = [];
     const secondRoutes: string[] = [];
     const pattern = "queue://realm/area/resource";
@@ -285,7 +296,7 @@ describe("Subscription Multiplexing", () => {
       [MSG_LEASE_SUBSCRIBE, encodeLeaseSubscribeResponse(32n)],
       [MSG_LEASE_UNSUBSCRIBE, encodeStatusOnlyResponse()],
     ]);
-    const client = new LeaseClient(connection as unknown as Connection);
+    const client = new LeaseClient(connection);
     const firstRoutes: string[] = [];
     const secondRoutes: string[] = [];
     const pattern = "lease://realm/area/resource";
@@ -332,7 +343,7 @@ describe("Subscription Multiplexing", () => {
       [MSG_SCHEDULE_SUBSCRIBE, encodeOptionalSubIdResponse(42n)],
       [MSG_SCHEDULE_UNSUBSCRIBE, encodeStatusOnlyResponse()],
     ]);
-    const client = new ScheduleClient(connection as unknown as Connection);
+    const client = new ScheduleClient(connection);
     const firstPayloads: string[] = [];
     const secondPayloads: string[] = [];
     const pattern = "schedule://realm/area/resource/run";
@@ -396,7 +407,7 @@ describe("Subscription Multiplexing", () => {
       [MSG_STREAM_SUBSCRIBE, encodeOptionalSubIdResponse(52n)],
       [MSG_STREAM_UNSUBSCRIBE, encodeStatusOnlyResponse()],
     ]);
-    const client = new StreamClient(connection as unknown as Connection);
+    const client = new StreamClient(connection);
     const firstNotifications: Array<{
       route: string;
       event?: string;

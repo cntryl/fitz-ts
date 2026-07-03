@@ -8,6 +8,15 @@
  */
 
 import { createDomainClient } from "../base";
+import type {
+  AsyncDispatchPort,
+  DisconnectListenerPort,
+  NotificationPort,
+  ReconnectListenerPort,
+  ReconnectRestoreRequestPort,
+  RequestPort,
+  RetryExecutionPort,
+} from "../base";
 import { StreamCodec } from "./codec";
 import {
   StreamSession,
@@ -35,16 +44,23 @@ import {
   MSG_STREAM_NOTIFY,
 } from "../../frame/types";
 import { isRouteShape, isSelectorRouteShape } from "../_routes";
-import type { Connection } from "../../client/connection";
 
 type StreamSubscriptionState = {
   subId: bigint;
   handlers: Map<number, StreamCommitHandler>;
 };
 
+type StreamConnectionPort = RequestPort &
+  ReconnectListenerPort &
+  DisconnectListenerPort &
+  NotificationPort &
+  AsyncDispatchPort &
+  RetryExecutionPort &
+  Partial<ReconnectRestoreRequestPort>;
+
 export type StreamClient = ReturnType<typeof createStreamClient>;
 
-export function createStreamClient(connection: Connection) {
+export function createStreamClient(connection: StreamConnectionPort) {
   const { requestFrame, requestReconnectFrame, runWithRetry } = createDomainClient(connection);
   const subscriptionsByPattern = new Map<string, StreamSubscriptionState>();
   const patternsBySubId = new Map<bigint, string>();
@@ -400,11 +416,11 @@ export function createStreamClient(connection: Connection) {
 }
 
 type StreamClientConstructor = {
-  new (connection: Connection): StreamClient;
-  (connection: Connection): StreamClient;
+  new (connection: StreamConnectionPort): StreamClient;
+  (connection: StreamConnectionPort): StreamClient;
 };
 
-export const StreamClient: StreamClientConstructor = function (connection: Connection) {
+export const StreamClient: StreamClientConstructor = function (connection: StreamConnectionPort) {
   return createStreamClient(connection);
 } as unknown as StreamClientConstructor;
 
