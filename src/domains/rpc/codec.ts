@@ -14,6 +14,8 @@ import { ProtocolError } from "../../core/errors";
 import { SubscribeResponse, UnsubscribeResponse } from "./types";
 
 const CORRELATION_ID_LENGTH = 16;
+const RPC_RESPONSE_FLAG_STREAM_END = 0x01;
+const RPC_RESPONSE_FLAGS_SUPPORTED = RPC_RESPONSE_FLAG_STREAM_END;
 const getCryptoProvider = (): Crypto | undefined => globalThis.crypto as Crypto | undefined;
 const correlationIdPool: Uint8Array[] = [];
 const maxCorrelationIdPoolSize = 64;
@@ -76,12 +78,10 @@ const readLengthPrefixedEnd = (payload: Uint8Array, offset: number): number | un
 };
 
 const looksLikeInboundRequestPayload = (payload: Uint8Array): boolean => {
-  let offset = 0;
-  const correlationLength = readU32BE(payload, offset);
-  if (correlationLength !== CORRELATION_ID_LENGTH) {
+  let offset = CORRELATION_ID_LENGTH;
+  if (payload.length < offset) {
     return false;
   }
-  offset += 4 + correlationLength;
 
   const routeEnd = readLengthPrefixedEnd(payload, offset);
   if (routeEnd === undefined) {
@@ -89,33 +89,24 @@ const looksLikeInboundRequestPayload = (payload: Uint8Array): boolean => {
   }
   offset = routeEnd;
 
-  const replyRouteEnd = readLengthPrefixedEnd(payload, offset);
-  if (replyRouteEnd === undefined) {
-    return false;
-  }
-  offset = replyRouteEnd;
-
   const bodyEnd = readLengthPrefixedEnd(payload, offset);
   return bodyEnd === payload.length;
 };
 
 const looksLikeStreamResponsePayload = (payload: Uint8Array): boolean => {
-  let offset = 0;
-  const correlationLength = readU32BE(payload, offset);
-  if (correlationLength !== CORRELATION_ID_LENGTH) {
+  let offset = CORRELATION_ID_LENGTH + 8;
+  if (payload.length < offset + 1) {
     return false;
   }
-  offset += 4 + correlationLength + 8;
+
+  const flags = payload[offset];
+  if (flags & ~RPC_RESPONSE_FLAGS_SUPPORTED) {
+    return false;
+  }
+  offset += 1;
 
   const bodyEnd = readLengthPrefixedEnd(payload, offset);
-  if (bodyEnd === undefined || bodyEnd >= payload.length) {
-    return false;
-  }
-  offset = bodyEnd;
-
-  const streamEnd = payload[offset];
-  offset += 1;
-  return offset === payload.length && (streamEnd === 0 || streamEnd === 1);
+  return bodyEnd === payload.length;
 };
 
 const readStringFromPayload = (
@@ -145,6 +136,19 @@ const readStringFromPayload = (
   return { value, nextOffset: offset + length };
 };
 
+const assertCorrelationIdLength = (correlationId: Uint8Array): void => {
+  if (correlationId.length !== CORRELATION_ID_LENGTH) {
+    throw new ProtocolError(
+      `Invalid correlation ID length: ${correlationId.length}, expected 16`,
+      undefined,
+      {
+        correlationLength: correlationId.length,
+        expectedLength: CORRELATION_ID_LENGTH,
+      },
+    );
+  }
+};
+
 export const RpcCodec = {
   isInboundRequestPayload(payload: Uint8Array): boolean {
     return looksLikeInboundRequestPayload(payload);
@@ -166,33 +170,20 @@ export const RpcCodec = {
 
   /**
    * Encode RPC_REQUEST (302)
-   * Payload: [bytes correlation_id][string route][string reply_route][bytes body]
-   * Where bytes/string = [u32 BE len][data]
+   * Payload: [uuid16 correlation_id][string route][bytes body]
    */
-  encodeRequest(
-    correlationId: Uint8Array,
-    route: string,
-    replyRoute: string,
-    body: Uint8Array,
-  ): Uint8Array {
+  encodeRequest(correlationId: Uint8Array, route: string, body: Uint8Array): Uint8Array {
+    assertCorrelationIdLength(correlationId);
     const routeBytes = getRouteEncoding(route);
-    const replyRouteBytes = getRouteEncoding(replyRoute);
-    const payloadLength =
-      4 + CORRELATION_ID_LENGTH + routeBytes.length + replyRouteBytes.length + 4 + body.length;
+    const payloadLength = CORRELATION_ID_LENGTH + routeBytes.length + 4 + body.length;
 
     const buffer = new Uint8Array(payloadLength);
     let offset = 0;
 
-    buffer[offset++] = 0;
-    buffer[offset++] = 0;
-    buffer[offset++] = 0;
-    buffer[offset++] = CORRELATION_ID_LENGTH;
     buffer.set(correlationId, offset);
     offset += CORRELATION_ID_LENGTH;
     buffer.set(routeBytes, offset);
     offset += routeBytes.length;
-    buffer.set(replyRouteBytes, offset);
-    offset += replyRouteBytes.length;
     buffer[offset++] = (body.length >> 24) & 0xff;
     buffer[offset++] = (body.length >> 16) & 0xff;
     buffer[offset++] = (body.length >> 8) & 0xff;
@@ -203,31 +194,7 @@ export const RpcCodec = {
   },
 
   encodeCallRequest(correlationId: Uint8Array, route: string, body: Uint8Array): Uint8Array {
-    const routeBytes = getRouteEncoding(route);
-    const payloadLength = 4 + CORRELATION_ID_LENGTH + routeBytes.length + 4 + 4 + body.length;
-
-    const buffer = new Uint8Array(payloadLength);
-    let offset = 0;
-
-    buffer[offset++] = 0;
-    buffer[offset++] = 0;
-    buffer[offset++] = 0;
-    buffer[offset++] = CORRELATION_ID_LENGTH;
-    buffer.set(correlationId, offset);
-    offset += CORRELATION_ID_LENGTH;
-    buffer.set(routeBytes, offset);
-    offset += routeBytes.length;
-    buffer[offset++] = 0;
-    buffer[offset++] = 0;
-    buffer[offset++] = 0;
-    buffer[offset++] = 0;
-    buffer[offset++] = (body.length >> 24) & 0xff;
-    buffer[offset++] = (body.length >> 16) & 0xff;
-    buffer[offset++] = (body.length >> 8) & 0xff;
-    buffer[offset++] = body.length & 0xff;
-    buffer.set(body, offset);
-
-    return buffer;
+    return this.encodeRequest(correlationId, route, body);
   },
 
   /**
@@ -247,7 +214,7 @@ export const RpcCodec = {
 
   /**
    * Encode RPC_RESPONSE (303)
-   * Payload: [bytes correlation_id][u64 sequence][bytes body][u8 stream_end]
+   * Payload: [uuid16 correlation_id][u64 sequence][u8 flags][bytes body]
    */
   encodeResponse(
     correlationId: Uint8Array,
@@ -255,14 +222,11 @@ export const RpcCodec = {
     body: Uint8Array,
     streamEnd: boolean,
   ): Uint8Array {
-    const payloadLength = 4 + CORRELATION_ID_LENGTH + 8 + 4 + body.length + 1;
+    assertCorrelationIdLength(correlationId);
+    const payloadLength = CORRELATION_ID_LENGTH + 8 + 1 + 4 + body.length;
     const buffer = new Uint8Array(payloadLength);
     let offset = 0;
 
-    buffer[offset++] = 0;
-    buffer[offset++] = 0;
-    buffer[offset++] = 0;
-    buffer[offset++] = CORRELATION_ID_LENGTH;
     buffer.set(correlationId, offset);
     offset += CORRELATION_ID_LENGTH;
     buffer[offset++] = Number((sequence >> 56n) & 0xffn);
@@ -273,13 +237,12 @@ export const RpcCodec = {
     buffer[offset++] = Number((sequence >> 16n) & 0xffn);
     buffer[offset++] = Number((sequence >> 8n) & 0xffn);
     buffer[offset++] = Number(sequence & 0xffn);
+    buffer[offset++] = streamEnd ? RPC_RESPONSE_FLAG_STREAM_END : 0;
     buffer[offset++] = (body.length >> 24) & 0xff;
     buffer[offset++] = (body.length >> 16) & 0xff;
     buffer[offset++] = (body.length >> 8) & 0xff;
     buffer[offset++] = body.length & 0xff;
     buffer.set(body, offset);
-    offset += body.length;
-    buffer[offset] = streamEnd ? 1 : 0;
 
     return buffer;
   },
@@ -290,26 +253,31 @@ export const RpcCodec = {
     body: Uint8Array;
     streamEnd: boolean;
   } {
-    if (payload.length < 4 + CORRELATION_ID_LENGTH + 8 + 4) {
+    if (payload.length < CORRELATION_ID_LENGTH + 8 + 1 + 4) {
       throw new ProtocolError("Invalid RPC response payload length", undefined, {
         operation: "RPC_DECODE_RESPONSE",
       });
     }
 
-    const corrLen = readU32BEAt(payload, 0);
-    if (corrLen !== CORRELATION_ID_LENGTH) {
-      throw new ProtocolError(`Invalid correlation ID length: ${corrLen}, expected 16`, undefined, {
-        correlationLength: corrLen,
-        expectedLength: CORRELATION_ID_LENGTH,
-      });
-    }
-
-    const correlationId = payload.subarray(4, 4 + corrLen);
-    let offset = 4 + corrLen;
+    const correlationId = payload.subarray(0, CORRELATION_ID_LENGTH);
+    let offset = CORRELATION_ID_LENGTH;
 
     const sequence =
       (BigInt(readU32BEAt(payload, offset)) << 32n) | BigInt(readU32BEAt(payload, offset + 4));
     offset += 8;
+
+    const flags = payload[offset];
+    offset += 1;
+    if (flags & ~RPC_RESPONSE_FLAGS_SUPPORTED) {
+      throw new ProtocolError(
+        `Unsupported RPC response flags: 0x${flags.toString(16)}`,
+        undefined,
+        {
+          operation: "RPC_DECODE_RESPONSE",
+          flags,
+        },
+      );
+    }
 
     const bodyLen = readU32BEAt(payload, offset);
     offset += 4;
@@ -322,11 +290,7 @@ export const RpcCodec = {
     const body = payload.subarray(offset, offset + bodyLen);
     offset += bodyLen;
 
-    let streamEnd = false;
-    if (offset < payload.length) {
-      streamEnd = payload[offset] === 1;
-      offset += 1;
-    }
+    const streamEnd = (flags & RPC_RESPONSE_FLAG_STREAM_END) !== 0;
 
     if (offset !== payload.length) {
       throw new ProtocolError("Invalid RPC response payload structure", undefined, {
@@ -343,27 +307,32 @@ export const RpcCodec = {
     body: Uint8Array;
     streamEnd: boolean;
   } {
-    if (payload.length < 4 + CORRELATION_ID_LENGTH + 8 + 4) {
+    if (payload.length < CORRELATION_ID_LENGTH + 8 + 1 + 4) {
       throw new ProtocolError("Invalid RPC response payload length", undefined, {
         operation: "RPC_DECODE_RESPONSE_KEY",
       });
     }
 
-    const corrLen = readU32BEAt(payload, 0);
-    if (corrLen !== CORRELATION_ID_LENGTH) {
-      throw new ProtocolError(`Invalid correlation ID length: ${corrLen}, expected 16`, undefined, {
-        correlationLength: corrLen,
-        expectedLength: CORRELATION_ID_LENGTH,
-      });
-    }
-
-    const correlationIdOffset = 4;
+    const correlationIdOffset = 0;
     const correlationKey = readCorrelationKey(payload, correlationIdOffset);
-    let offset = correlationIdOffset + corrLen;
+    let offset = correlationIdOffset + CORRELATION_ID_LENGTH;
 
     const sequence =
       (BigInt(readU32BEAt(payload, offset)) << 32n) | BigInt(readU32BEAt(payload, offset + 4));
     offset += 8;
+
+    const flags = payload[offset];
+    offset += 1;
+    if (flags & ~RPC_RESPONSE_FLAGS_SUPPORTED) {
+      throw new ProtocolError(
+        `Unsupported RPC response flags: 0x${flags.toString(16)}`,
+        undefined,
+        {
+          operation: "RPC_DECODE_RESPONSE_KEY",
+          flags,
+        },
+      );
+    }
 
     const bodyLen = readU32BEAt(payload, offset);
     offset += 4;
@@ -376,11 +345,7 @@ export const RpcCodec = {
     const body = payload.subarray(offset, offset + bodyLen);
     offset += bodyLen;
 
-    let streamEnd = false;
-    if (offset < payload.length) {
-      streamEnd = payload[offset] === 1;
-      offset += 1;
-    }
+    const streamEnd = (flags & RPC_RESPONSE_FLAG_STREAM_END) !== 0;
 
     if (offset !== payload.length) {
       throw new ProtocolError("Invalid RPC response payload structure", undefined, {
@@ -392,11 +357,19 @@ export const RpcCodec = {
   },
 
   /**
-   * Encode RPC_SUBSCRIBE_WORKER (304)
-   * Payload: [string worker_route]
+   * Encode RPC_SUBSCRIBE_WORKER (300)
+   * Payload: [string worker_route][u32 max_concurrent]
    */
-  encodeSubscribeWorker(route: string): Uint8Array {
-    return getRouteEncoding(route).slice();
+  encodeSubscribeWorker(route: string, maxConcurrent: number): Uint8Array {
+    const routeBytes = getRouteEncoding(route);
+    const buffer = new Uint8Array(routeBytes.length + 4);
+    buffer.set(routeBytes, 0);
+    let offset = routeBytes.length;
+    buffer[offset++] = (maxConcurrent >> 24) & 0xff;
+    buffer[offset++] = (maxConcurrent >> 16) & 0xff;
+    buffer[offset++] = (maxConcurrent >> 8) & 0xff;
+    buffer[offset] = maxConcurrent & 0xff;
+    return buffer;
   },
 
   /**
@@ -414,7 +387,7 @@ export const RpcCodec = {
   },
 
   /**
-   * Encode RPC_UNSUBSCRIBE_WORKER (305)
+   * Encode RPC_UNSUBSCRIBE_WORKER (301)
    * Payload: [string worker_route]
    */
   encodeUnsubscribeWorker(route: string): Uint8Array {
@@ -460,45 +433,32 @@ export const RpcCodec = {
 
   /**
    * Decode incoming RPC_REQUEST (302) for worker mode
-   * Payload: [u32 corrLen=16][16 bytes correlation_id][string route][string reply_route][bytes body]
+   * Payload: [uuid16 correlation_id][string route][bytes body]
    */
   decodeInboundRequest(payload: Uint8Array): {
     correlationId: Uint8Array;
     route: string;
-    replyRoute: string;
     body: Uint8Array;
   } {
     let offset = 0;
-    if (offset + 4 > payload.length) {
+    if (offset + CORRELATION_ID_LENGTH > payload.length) {
       throw new ProtocolError("Invalid RPC request payload length", undefined, {
         operation: "RPC_DECODE_INBOUND_REQUEST",
       });
     }
 
-    const corrLen = readU32BEAt(payload, offset);
-    offset += 4;
-    if (corrLen !== CORRELATION_ID_LENGTH) {
-      throw new ProtocolError(`Invalid correlation ID length: ${corrLen}, expected 16`, undefined, {
-        correlationLength: corrLen,
-        expectedLength: CORRELATION_ID_LENGTH,
-      });
-    }
-
-    if (offset + corrLen > payload.length) {
-      throw new ProtocolError("Invalid RPC request payload length", undefined, {
-        operation: "RPC_DECODE_INBOUND_REQUEST",
-      });
-    }
-    const correlationId = payload.subarray(offset, offset + corrLen);
-    offset += corrLen;
+    const correlationId = payload.subarray(offset, offset + CORRELATION_ID_LENGTH);
+    offset += CORRELATION_ID_LENGTH;
 
     const routeResult = readStringFromPayload(payload, offset);
     const route = routeResult.value;
     offset = routeResult.nextOffset;
 
-    const replyRouteResult = readStringFromPayload(payload, offset);
-    const replyRoute = replyRouteResult.value;
-    offset = replyRouteResult.nextOffset;
+    if (offset + 4 > payload.length) {
+      throw new ProtocolError("Invalid RPC request body length", undefined, {
+        operation: "RPC_DECODE_INBOUND_REQUEST",
+      });
+    }
 
     const bodyLen = readU32BEAt(payload, offset);
     offset += 4;
@@ -516,6 +476,6 @@ export const RpcCodec = {
       });
     }
 
-    return { correlationId, route, replyRoute, body };
+    return { correlationId, route, body };
   },
 };

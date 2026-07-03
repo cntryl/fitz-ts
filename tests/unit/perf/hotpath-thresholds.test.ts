@@ -14,7 +14,6 @@ const encoder = new TextEncoder();
 const route = "kv://bench/area/resource";
 const noticeRoute = "notice://bench/area/resource";
 const rpcRoute = "rpc://bench/area/resource";
-const replyRoute = "rpc://bench/area/reply";
 const body = encoder.encode("benchmark-payload");
 const key = encoder.encode("bench-key");
 const txId = 42n;
@@ -103,7 +102,7 @@ perfDescribe("fitz-ts hot-path thresholds", () => {
     );
     expect(
       measureSync(100_000, () =>
-        RpcCodec.encodeRequest(RpcCodec.generateCorrelationId(), rpcRoute, replyRoute, body),
+        RpcCodec.encodeRequest(RpcCodec.generateCorrelationId(), rpcRoute, body),
       ),
     ).toBeLessThan(adjustedThreshold(thresholdsMs.rpcCallEncode));
     expect(measureSync(100_000, () => RpcCodec.generateCorrelationId())).toBeLessThan(

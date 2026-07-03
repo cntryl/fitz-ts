@@ -30,7 +30,6 @@ const encoder = new TextEncoder();
 const route = "kv://bench/area/resource";
 const noticeRoute = "notice://bench/area/resource";
 const rpcRoute = "rpc://bench/area/resource";
-const replyRoute = "rpc://bench/area/reply";
 const queueRoute = "queue://bench/area/resource";
 const scheduleRoute = "schedule://bench/area/resource";
 const body = encoder.encode("benchmark-payload");
@@ -79,12 +78,7 @@ describe("fitz-ts hotpath benchmarks", () => {
   });
 
   benchBatch("rpc call encode", SYNC_CODEC_BATCH_SIZE, (index) => {
-    return RpcCodec.encodeRequest(
-      cycleFixture(rpcCorrelationIds, index),
-      rpcRoute,
-      replyRoute,
-      body,
-    );
+    return RpcCodec.encodeRequest(cycleFixture(rpcCorrelationIds, index), rpcRoute, body);
   });
 
   benchBatch("rpc correlation id generation", SYNC_CODEC_BATCH_SIZE, () => {

@@ -10,6 +10,7 @@ import { generateValidTestJwt } from "./fixture/jwt";
 import {
   EnvBrokerJWTAudience,
   EnvBrokerJWTHMACSecret,
+  EnvBrokerJWTTenant,
   TestFixture,
   brokerAddrFor,
 } from "./fixture/fixture";
@@ -19,11 +20,15 @@ import { sleep } from "./helpers";
 const b = (value: string) => Buffer.from(value);
 
 function testSecret(): string {
-  return process.env[EnvBrokerJWTHMACSecret] ?? "test-secret-key";
+  return process.env[EnvBrokerJWTHMACSecret] ?? "dev-test-secret";
 }
 
 function testAudience(): string {
   return process.env[EnvBrokerJWTAudience] ?? "fitz";
+}
+
+function testTenant(): string {
+  return process.env[EnvBrokerJWTTenant] ?? "dev";
 }
 
 function uniqueRoute(scheme: string): string {
@@ -345,7 +350,9 @@ describe("Connection hardening integration", () => {
 
       const worker = new TestFixture(transport, authMode);
       const caller = new TestFixture(transport, authMode);
-      const tokenProvider = vi.fn(async () => generateValidTestJwt(testSecret(), testAudience()));
+      const tokenProvider = vi.fn(async () =>
+        generateValidTestJwt(testSecret(), testAudience(), testTenant()),
+      );
 
       caller.setTokenProvider(tokenProvider);
 

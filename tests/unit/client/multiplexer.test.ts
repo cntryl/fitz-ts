@@ -264,7 +264,7 @@ describe("Multiplexer", () => {
     expect(result).toMatchObject({ name: "AbortError" });
   });
 
-  it("routes inbound RPC worker requests to handlers while RPC request acks are pending", async () => {
+  it("routes inbound RPC worker requests to handlers while same-type requests are pending", async () => {
     let releaseSend: () => void = () => undefined;
     const sendBlocked = new Promise<void>((resolve) => {
       releaseSend = resolve;
@@ -275,7 +275,6 @@ describe("Multiplexer", () => {
     const inboundRequest = RpcCodec.encodeRequest(
       correlationId,
       "rpc://realm/area/worker",
-      "",
       new Uint8Array([1, 2, 3]),
     );
 

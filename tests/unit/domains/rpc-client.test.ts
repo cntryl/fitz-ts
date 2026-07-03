@@ -4,10 +4,11 @@ import { ConnectionState } from "../../../src/core/types";
 import {
   ConnectionError,
   ErrCodeRpcBackpressure,
+  ErrCodeRpcRouteNotRegistered,
   ErrCodeRpcWorkerNotFound,
   RpcError,
 } from "../../../src/core/errors";
-import { BufferWriter, utf8Decoder, utf8Encoder } from "../../../src/core/buffer";
+import { BufferReader, BufferWriter, utf8Decoder, utf8Encoder } from "../../../src/core/buffer";
 import {
   MSG_RPC_REQUEST,
   MSG_RPC_RESPONSE,
@@ -42,14 +43,21 @@ class FakeRpcConnection {
       throw error;
     }
 
-    if (messageType === 300 || messageType === 301 || messageType === 302) {
+    if (messageType === 300 || messageType === 301) {
       return new Uint8Array([0]);
     }
     throw new Error(`Unexpected request message type ${messageType}`);
   }
 
-  async send(messageType: number, payload: Uint8Array): Promise<void> {
+  async send(messageType: number, payload: Uint8Array, signal?: AbortSignal): Promise<void> {
+    this.lastRequest = { messageType, payload };
     this.sendCalls.push({ messageType, payload });
+    this.lastSignal = signal;
+    if (signal?.aborted) {
+      const error = new Error("The operation was aborted");
+      error.name = "AbortError";
+      throw error;
+    }
     if (this.state !== ConnectionState.Authenticated) {
       throw new ConnectionError(`Cannot use connection while state is ${this.state}`);
     }
@@ -133,7 +141,7 @@ describe("RpcClient", () => {
       throw new Error("Expected RPC request handler to be registered");
     }
 
-    handler(RpcCodec.encodeRequest(new Uint8Array(16), route, "", new Uint8Array([9])));
+    handler(RpcCodec.encodeRequest(new Uint8Array(16), route, new Uint8Array([9])));
 
     await Promise.resolve();
     await Promise.resolve();
@@ -163,7 +171,7 @@ describe("RpcClient", () => {
       throw new Error("Expected RPC request handler to be registered");
     }
 
-    handler(RpcCodec.encodeRequest(new Uint8Array(16), route, "", new Uint8Array([9])));
+    handler(RpcCodec.encodeRequest(new Uint8Array(16), route, new Uint8Array([9])));
 
     await Promise.resolve();
     connection.emitDisconnect();
@@ -182,14 +190,21 @@ describe("RpcClient", () => {
     const route = "rpc://realm/area/method";
     const handledBodies: string[] = [];
 
-    await client.registerWorker(route, async (req, writer) => {
-      handledBodies.push(utf8Decoder.decode(req.body));
-      await writer.send(new Uint8Array([5]), true);
-    });
+    await client.registerWorker(
+      route,
+      async (req, writer) => {
+        expect("replyRoute" in req).toBe(false);
+        handledBodies.push(utf8Decoder.decode(req.body));
+        await writer.send(new Uint8Array([5]), true);
+      },
+      { maxConcurrency: 7 },
+    );
     expect(connection.countRequests(MSG_RPC_SUBSCRIBE_WORKER)).toBe(1);
+    expect(readSubscribeMaxConcurrency(connection.requestCalls[0].payload)).toBe(7);
 
     await connection.reconnect();
     expect(connection.countRequests(MSG_RPC_SUBSCRIBE_WORKER)).toBe(2);
+    expect(readSubscribeMaxConcurrency(connection.requestCalls[1].payload)).toBe(7);
 
     const handler = connection.notificationHandlers.get(MSG_RPC_REQUEST);
     expect(handler).toBeTypeOf("function");
@@ -198,7 +213,7 @@ describe("RpcClient", () => {
       throw new Error("Expected RPC request handler to be registered");
     }
 
-    handler(RpcCodec.encodeRequest(new Uint8Array(16), route, "", utf8Encoder.encode("after")));
+    handler(RpcCodec.encodeRequest(new Uint8Array(16), route, utf8Encoder.encode("after")));
 
     await Promise.resolve();
     await Promise.resolve();
@@ -230,7 +245,7 @@ describe("RpcClient", () => {
 
     const correlationId = new Uint8Array(16);
     correlationId[15] = 9;
-    handler(RpcCodec.encodeRequest(correlationId, route, "", new Uint8Array([9])));
+    handler(RpcCodec.encodeRequest(correlationId, route, new Uint8Array([9])));
 
     await vi.waitFor(() => {
       expect(connection.sendCalls).toHaveLength(1);
@@ -265,6 +280,41 @@ describe("RpcClient", () => {
     expect(connection.countRequests(MSG_RPC_SUBSCRIBE_WORKER)).toBe(1);
   });
 
+  it("encodes worker maxConcurrency and rejects invalid values", async () => {
+    const connection = new FakeRpcConnection();
+    const client = new RpcClient(connection);
+
+    await client.registerWorker("rpc://realm/area/method", async () => undefined, {
+      maxConcurrency: 32,
+    });
+
+    expect(readSubscribeMaxConcurrency(connection.requestCalls[0].payload)).toBe(32);
+    await expect(
+      client.registerWorker("rpc://realm/area/other", async () => undefined, {
+        maxConcurrency: 0,
+      }),
+    ).rejects.toMatchObject({ code: "RPC_INVALID_OPTIONS" });
+    await expect(
+      client.registerWorker("rpc://realm/area/other", async () => undefined, {
+        maxConcurrency: 1025,
+      }),
+    ).rejects.toMatchObject({ code: "RPC_INVALID_OPTIONS" });
+    await expect(
+      client.registerWorker("rpc://realm/area/other", async () => undefined, {
+        maxConcurrency: 1.5,
+      }),
+    ).rejects.toMatchObject({ code: "RPC_INVALID_OPTIONS" });
+  });
+
+  it("does not register an RPC ACK notification handler", async () => {
+    const connection = new FakeRpcConnection();
+    const client = new RpcClient(connection);
+
+    await client.registerWorker("rpc://realm/area/method", async () => undefined);
+
+    expect(connection.notificationHandlers.has(304)).toBe(false);
+  });
+
   it("forwards request cancellation to the connection layer", async () => {
     const controller = new AbortController();
     controller.abort();
@@ -277,6 +327,7 @@ describe("RpcClient", () => {
       }),
     ).rejects.toMatchObject({ name: "AbortError" });
     expect(connection.lastSignal).toBe(controller.signal);
+    expect(connection.countRequests(MSG_RPC_REQUEST)).toBe(0);
   });
 
   it("delivers a terminal RPC response frame that also carries a body", async () => {
@@ -353,6 +404,38 @@ describe("RpcClient", () => {
     });
   });
 
+  it("maps terminal RPC error frames by domain code", async () => {
+    const connection = new FakeRpcConnection();
+    const client = new RpcClient(connection);
+
+    const iterator = await client.call("rpc://realm/area/method", new Uint8Array([1]));
+    const request = connection.lastRequest;
+    if (!request) {
+      throw new Error("Expected RPC request payload to be recorded");
+    }
+
+    const decoded = RpcCodec.decodeInboundRequest(request.payload);
+    const responseHandler = connection.notificationHandlers.get(MSG_RPC_RESPONSE);
+    expect(responseHandler).toBeTypeOf("function");
+    if (!responseHandler) {
+      throw new Error("Expected RPC response handler to be registered");
+    }
+
+    responseHandler(
+      RpcCodec.encodeResponse(
+        decoded.correlationId,
+        0n,
+        encodeRpcErrorBody(ErrCodeRpcRouteNotRegistered, "No workers registered for route"),
+        true,
+      ),
+    );
+
+    await expect(iterator.next()).rejects.toMatchObject({
+      code: "RPC_ROUTE_NOT_REGISTERED",
+      domainCode: ErrCodeRpcRouteNotRegistered,
+    });
+  });
+
   it("clears the pending next timeout when a stream reports worker not found", async () => {
     vi.useFakeTimers();
     try {
@@ -422,9 +505,21 @@ describe("RpcClient", () => {
 });
 
 function encodeWorkerNotFoundBody(): Uint8Array {
+  return encodeRpcErrorBody(ErrCodeRpcWorkerNotFound, "worker missing");
+}
+
+function encodeRpcErrorBody(code: number, message: string): Uint8Array {
   const writer = new BufferWriter();
   writer.writeU8(1);
-  writer.writeU32BE(ErrCodeRpcWorkerNotFound);
-  writer.writeString("worker missing");
+  writer.writeU32BE(code);
+  writer.writeString(message);
   return writer.getBuffer();
+}
+
+function readSubscribeMaxConcurrency(payload: Uint8Array): number {
+  const reader = new BufferReader(payload);
+  reader.readString();
+  const maxConcurrency = reader.readU32BE();
+  expect(reader.isEOF()).toBe(true);
+  return maxConcurrency;
 }

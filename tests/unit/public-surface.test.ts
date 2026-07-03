@@ -149,6 +149,7 @@ describe("public surface", () => {
       "InboundRequest",
       "ResponseWriter",
       "RpcHandler",
+      "RegisterWorkerOptions",
       "RpcSubscription",
       "RpcStatus",
       "LeaseClient",

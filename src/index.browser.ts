@@ -127,6 +127,7 @@ export type {
   InboundRequest,
   ResponseWriter,
   RpcHandler,
+  RegisterWorkerOptions,
   RpcSubscription,
   RpcStatus,
 } from "./domains/rpc/types";

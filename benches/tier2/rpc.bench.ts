@@ -8,16 +8,11 @@ const correlationIds = buildCorrelationIds(SYNC_CODEC_BATCH_SIZE);
 const correlationId = correlationIds[0];
 
 const responseFrame = RpcCodec.encodeResponse(correlationId, 1n, body, true);
-const requestFrame = RpcCodec.encodeRequest(correlationId, routes.rpc, routes.reply, body);
+const requestFrame = RpcCodec.encodeRequest(correlationId, routes.rpc, body);
 
 describe("fitz-ts rpc benchmarks", () => {
   benchBatch("rpc encode request", SYNC_CODEC_BATCH_SIZE, (index) => {
-    return RpcCodec.encodeRequest(
-      cycleFixture(correlationIds, index),
-      routes.rpc,
-      routes.reply,
-      body,
-    );
+    return RpcCodec.encodeRequest(cycleFixture(correlationIds, index), routes.rpc, body);
   });
 
   benchBatch("rpc encode response", SYNC_CODEC_BATCH_SIZE, () => {
@@ -33,7 +28,7 @@ describe("fitz-ts rpc benchmarks", () => {
   });
 
   benchBatch("rpc subscribe worker encode", SYNC_CODEC_BATCH_SIZE, () => {
-    return RpcCodec.encodeSubscribeWorker(routes.rpc);
+    return RpcCodec.encodeSubscribeWorker(routes.rpc, 1);
   });
 
   benchBatch("rpc correlation id generation", SYNC_CODEC_BATCH_SIZE, () => {

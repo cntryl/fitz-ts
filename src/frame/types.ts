@@ -39,7 +39,6 @@ export const MSG_RPC_SUBSCRIBE_WORKER = 300;
 export const MSG_RPC_UNSUBSCRIBE_WORKER = 301;
 export const MSG_RPC_REQUEST = 302;
 export const MSG_RPC_RESPONSE = 303;
-export const MSG_RPC_ACK = 304;
 
 // Lease Domain (400-499)
 export const MSG_LEASE_ACQUIRE = 400;
