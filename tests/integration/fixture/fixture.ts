@@ -1,7 +1,7 @@
 import { expect, onTestFinished } from "vite-plus/test";
 
 import { createClient, type Client } from "../../../src/client/client";
-import type { ClientConfig } from "../../../src/core/types";
+import type { ClientConfig, ConnectWhenReadyOptions } from "../../../src/core/types";
 import {
   generateExpiredTestJwt,
   generateInvalidSignatureTestJwt,
@@ -133,6 +133,20 @@ export class TestFixture {
       ...overrides,
     });
     await this.clientInstance.connect(options);
+  }
+
+  async connectWhenReady(
+    overrides: Partial<ClientConfig> = {},
+    options: ConnectWhenReadyOptions = {},
+  ): Promise<void> {
+    this.clientInstance = createClient({
+      url: this.brokerAddr,
+      transport: this.transport,
+      tokenProvider: this.tokenProviderOverride ?? tokenProviderForMode(this.authMode),
+      timeout: 30000,
+      ...overrides,
+    });
+    await this.clientInstance.connectWhenReady(options);
   }
 
   async connectOrFail(

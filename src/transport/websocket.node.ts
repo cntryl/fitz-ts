@@ -332,6 +332,16 @@ export function createWebSocketTransport(url: string, options: TransportOptions 
   const close = async (): Promise<void> => {
     if (ws) {
       const activeWs = ws;
+      ws = null;
+      if (!connected) {
+        if (typeof activeWs.terminate === "function") {
+          activeWs.terminate();
+        } else {
+          activeWs.close(1000, "Normal closure");
+        }
+        return;
+      }
+
       return new Promise<void>((resolve) => {
         const timeoutId = setTimeout(() => {
           activeWs.terminate?.();

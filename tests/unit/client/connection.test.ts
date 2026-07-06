@@ -9,7 +9,11 @@ import type {
   FitzTracer,
 } from "../../../src/core/types";
 import { createBufferWriter } from "../../../src/core/buffer";
-import { AuthenticationError, RequestQueueFullError } from "../../../src/core/errors";
+import {
+  AuthenticationError,
+  RequestQueueFullError,
+  TransportError,
+} from "../../../src/core/errors";
 import { createNoticeClient } from "../../../src/domains/notice/client";
 import { FrameCodec } from "../../../src/frame/codec";
 import { MSG_CONNECT, MSG_NOTICE_NOTIFY, MSG_NOTICE_SUBSCRIBE } from "../../../src/frame/types";
@@ -24,6 +28,7 @@ class FakeTransport implements Transport {
   public concurrentSends = 0;
   public maxConcurrentSends = 0;
   public sendGate: Promise<void> | null = null;
+  public connectError: Error | null = null;
   public gateAfterSends = 0;
   public heartbeatMode: "resolve" | "timeout" = "resolve";
   private reads: Array<Uint8Array | Error> = [];
@@ -38,6 +43,9 @@ class FakeTransport implements Transport {
 
   async connect(): Promise<void> {
     this.connectStarted = true;
+    if (this.connectError) {
+      throw this.connectError;
+    }
     if (this.connectGate) {
       await this.connectGate;
     }
@@ -851,6 +859,35 @@ describe("Connection", () => {
     );
     expect(second.connected).toBe(false);
     expect(events.some((event) => event.event === "auth_rejected")).toBe(true);
+  });
+
+  it("returns to DISCONNECTED after a transport dial failure so callers can retry", async () => {
+    const first = new FakeTransport();
+    const second = new FakeTransport();
+    first.connectError = new TransportError("dial failed");
+    const events: FitzLifecycleEvent[] = [];
+    const factory = vi.fn<() => Transport>().mockReturnValueOnce(first).mockReturnValueOnce(second);
+    const connection = createConnection(factory, async () => "", {
+      authSettleDelayMs: 0,
+      observability: {
+        onLifecycleEvent: (event) => {
+          events.push(event);
+        },
+      },
+    });
+
+    await expect(connection.connect()).rejects.toBeInstanceOf(TransportError);
+    expect(connection.getState()).toBe("DISCONNECTED");
+
+    await expect(connection.connect()).resolves.toBeUndefined();
+
+    expect(factory).toHaveBeenCalledTimes(2);
+    expect(first.connected).toBe(false);
+    expect(second.connected).toBe(true);
+    expect(connection.isConnected()).toBe(true);
+    expect(events.filter((event) => event.event === "connect_failed")).toHaveLength(1);
+
+    await connection.close();
   });
 
   it("uses the normal reconnect path after a server frame confirms the session", async () => {

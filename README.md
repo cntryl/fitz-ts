@@ -33,6 +33,26 @@ await tx.commit();
 await client.close();
 ```
 
+## Startup Orchestration
+
+`connect()` is one-shot for the initial session. Services that start alongside
+Fitz can opt into startup waiting with `connectWhenReady()`:
+
+```typescript
+const controller = new AbortController();
+
+await client.connectWhenReady({
+  signal: controller.signal,
+  timeoutMs: 30_000,
+  backoffMs: 250,
+  maxBackoffMs: 2_000,
+});
+```
+
+The helper retries initial transport and connection-readiness failures until the
+first successful session, the timeout expires, or the signal aborts. Authentication
+failures are not retried.
+
 ## Observability
 
 `fitz-ts` now supports additive observability hooks through `ClientConfig.observability`.
@@ -60,7 +80,7 @@ See `docs/OPERATIONS.md` for lifecycle events, metric names, and production guid
 ## Resilience Defaults
 
 - After a client has connected successfully once, transport loss automatically triggers reconnect with bounded backoff unless `reconnect.enabled` is set to `false`.
-- The initial `connect()` call is still one-shot by default. If service startup should wait out broker availability, build that loop at the application boundary.
+- The initial `connect()` call is one-shot by default. Use `connectWhenReady()` when service startup should wait out broker availability.
 - Idle subscription clients stay connected by default: `heartbeat.enabled` defaults to `true`, `heartbeat.intervalMs` defaults to `10000`, and `heartbeat.timeoutMs` defaults to `30000`.
 - Heartbeats noop when the client was active within the current interval. Node WebSocket uses native ping/pong when available, TCP enables socket keepalive, and browser WebSocket relies on close/error plus receive-timeout suppression.
 - Safe automatic retries are enabled by default through `ClientConfig.retry`:

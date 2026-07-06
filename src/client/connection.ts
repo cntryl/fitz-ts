@@ -678,7 +678,9 @@ export function createConnection(
     frameParser.reset();
     clearPartialFrameTimeout();
     sessionConfirmed = false;
-    hasEstablishedSession = false;
+    if (!isReconnect) {
+      hasEstablishedSession = false;
+    }
     requestGate = createRequestGate(maxInFlightRequests, maxRequestQueueSize);
     const activeTransport = transportFactory();
     transport = activeTransport;
@@ -686,25 +688,20 @@ export function createConnection(
     setState(isReconnect ? ConnectionState.Reconnecting : ConnectionState.Connecting);
     emitLifecycleEvent(isReconnect ? "reconnect_start" : "connect_start");
 
-    await activeTransport.connect();
-    markRemoteActivity();
-    if (closeRequested) {
-      stopHeartbeat();
-      await activeTransport.close().catch(() => undefined);
-      if (transport === activeTransport) {
-        transport = null;
-      }
-      throw connectionClosedError();
-    }
-    throwIfAborted(signal);
-    receiveLoop = startReceiveLoop();
-
-    setState(ConnectionState.Connected);
-    setState(ConnectionState.Authenticating);
-    emitLifecycleEvent("auth_start");
-    authOutcome = createDeferred<void>();
-
     try {
+      await activeTransport.connect();
+      markRemoteActivity();
+      if (closeRequested) {
+        throw connectionClosedError();
+      }
+      throwIfAborted(signal);
+      receiveLoop = startReceiveLoop();
+
+      setState(ConnectionState.Connected);
+      setState(ConnectionState.Authenticating);
+      emitLifecycleEvent("auth_start");
+      authOutcome = createDeferred<void>();
+
       await sendConnect();
       if (closeRequested) {
         throw connectionClosedError();

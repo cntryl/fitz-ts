@@ -1,6 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
-import { ConnectionError } from "../../../src/core/errors";
+import {
+  AuthenticationError,
+  ConnectionError,
+  TimeoutError,
+  TransportError,
+} from "../../../src/core/errors";
 import { ConnectionState } from "../../../src/core/types";
 
 const { createConnectionMock } = vi.hoisted(() => ({
@@ -260,5 +265,119 @@ describe("Client lifecycle ownership", () => {
     expect(createConnectionMock).toHaveBeenCalledTimes(1);
     expect(connection.connectCalls).toBe(2);
     expect(client.isConnected()).toBe(true);
+  });
+
+  it("does not retry a failed one-shot connect call", async () => {
+    const connection = new FakeOwnedConnection();
+    connection.setConnectImpl(async () => {
+      throw new TransportError("dial failed");
+    });
+    createConnectionMock.mockReturnValue(connection);
+
+    const client = createClient({ url: "ws://example.test" });
+
+    await expect(client.connect()).rejects.toBeInstanceOf(TransportError);
+    expect(connection.connectCalls).toBe(1);
+    expect(client.isConnected()).toBe(false);
+  });
+
+  it("retries initial startup readiness failures until a later attempt connects", async () => {
+    const connection = new FakeOwnedConnection();
+    let connectAttempts = 0;
+    connection.setConnectImpl(async () => {
+      connectAttempts += 1;
+      if (connectAttempts < 3) {
+        throw new TransportError("dial failed");
+      }
+
+      connection.state = ConnectionState.Authenticated;
+    });
+    createConnectionMock.mockReturnValue(connection);
+
+    const client = createClient({ url: "ws://example.test" });
+
+    await expect(
+      client.connectWhenReady({
+        timeoutMs: 100,
+        backoffMs: 1,
+        maxBackoffMs: 1,
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(createConnectionMock).toHaveBeenCalledTimes(1);
+    expect(connection.connectCalls).toBe(3);
+    expect(client.isConnected()).toBe(true);
+  });
+
+  it("rejects connectWhenReady with TimeoutError when total startup wait expires", async () => {
+    const connection = new FakeOwnedConnection();
+    connection.setConnectImpl(async () => {
+      throw new TransportError("dial failed");
+    });
+    createConnectionMock.mockReturnValue(connection);
+
+    const client = createClient({ url: "ws://example.test" });
+
+    await expect(
+      client.connectWhenReady({
+        timeoutMs: 10,
+        backoffMs: 1,
+        maxBackoffMs: 1,
+      }),
+    ).rejects.toBeInstanceOf(TimeoutError);
+
+    expect(connection.connectCalls).toBeGreaterThan(1);
+    expect(client.isConnected()).toBe(false);
+  });
+
+  it("rejects connectWhenReady with AbortError when the caller aborts", async () => {
+    const connection = new FakeOwnedConnection();
+    connection.setConnectImpl(async () => {
+      throw new TransportError("dial failed");
+    });
+    createConnectionMock.mockReturnValue(connection);
+
+    const client = createClient({ url: "ws://example.test" });
+    const controller = new AbortController();
+    const abortTimer = setTimeout(() => {
+      controller.abort();
+    }, 10);
+
+    try {
+      await expect(
+        client.connectWhenReady({
+          signal: controller.signal,
+          timeoutMs: 1000,
+          backoffMs: 100,
+          maxBackoffMs: 100,
+        }),
+      ).rejects.toHaveProperty("name", "AbortError");
+    } finally {
+      clearTimeout(abortTimer);
+    }
+
+    expect(connection.connectCalls).toBe(1);
+    expect(client.isConnected()).toBe(false);
+  });
+
+  it("does not retry authentication failures in connectWhenReady", async () => {
+    const connection = new FakeOwnedConnection();
+    connection.setConnectImpl(async () => {
+      throw new AuthenticationError("authentication rejected");
+    });
+    createConnectionMock.mockReturnValue(connection);
+
+    const client = createClient({ url: "ws://example.test" });
+
+    await expect(
+      client.connectWhenReady({
+        timeoutMs: 100,
+        backoffMs: 1,
+        maxBackoffMs: 1,
+      }),
+    ).rejects.toBeInstanceOf(AuthenticationError);
+
+    expect(connection.connectCalls).toBe(1);
+    expect(client.isConnected()).toBe(false);
   });
 });

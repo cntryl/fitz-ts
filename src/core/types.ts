@@ -100,6 +100,13 @@ export interface ClientConnectOptions {
   signal?: AbortSignal;
 }
 
+export interface ConnectWhenReadyOptions {
+  signal?: AbortSignal;
+  timeoutMs?: number;
+  backoffMs?: number;
+  maxBackoffMs?: number;
+}
+
 export type TxMode = "ReadOnly" | "ReadWrite";
 export type DurabilityMode = "None" | "Async" | "Sync";
 

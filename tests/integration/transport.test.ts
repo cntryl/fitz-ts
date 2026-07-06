@@ -5,8 +5,27 @@ import { AuthenticationError, ConnectionError } from "../../src/core/errors";
 import { MSG_KV_BEGIN } from "../../src/frame/types";
 import { createTransport } from "../../src/transport/factory.node";
 import { sleep } from "./helpers";
-import { brokerAddrFor, TestFixture } from "./fixture/fixture";
+import {
+  EnvBrokerJWTAudience,
+  EnvBrokerJWTHMACSecret,
+  EnvBrokerJWTTenant,
+  brokerAddrFor,
+  TestFixture,
+} from "./fixture/fixture";
+import { generateInvalidSignatureTestJwt } from "./fixture/jwt";
 import { runWithTransportsOnly } from "./fixture/transport";
+
+function testSecret(): string {
+  return process.env[EnvBrokerJWTHMACSecret] ?? "dev-test-secret";
+}
+
+function testAudience(): string {
+  return process.env[EnvBrokerJWTAudience] ?? "fitz";
+}
+
+function testTenant(): string {
+  return process.env[EnvBrokerJWTTenant] ?? "dev";
+}
 
 describe("Transport integration", () => {
   runWithTransportsOnly(({ transport }) => {
@@ -75,6 +94,29 @@ describe("Transport integration", () => {
         }),
       ).rejects.toBeInstanceOf(AuthenticationError);
 
+      expect(f.client().getState()).toBe("DISCONNECTED");
+      expect(f.client().isConnected()).toBe(false);
+    });
+
+    it("should not retry invalid jwt authentication with connectWhenReady", async () => {
+      const f = new TestFixture(transport, "invalid_signature");
+      const tokenProvider = vi.fn(() =>
+        generateInvalidSignatureTestJwt(testSecret(), testAudience(), testTenant()),
+      );
+      f.setTokenProvider(tokenProvider);
+
+      await expect(
+        f.connectWhenReady(
+          { timeout: 1000 },
+          {
+            timeoutMs: 5000,
+            backoffMs: 10,
+            maxBackoffMs: 20,
+          },
+        ),
+      ).rejects.toBeInstanceOf(AuthenticationError);
+
+      expect(tokenProvider).toHaveBeenCalledTimes(1);
       expect(f.client().getState()).toBe("DISCONNECTED");
       expect(f.client().isConnected()).toBe(false);
     });

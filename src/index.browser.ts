@@ -19,6 +19,7 @@ export type {
 export type {
   AsyncHandlerOptions,
   ClientConnectOptions,
+  ConnectWhenReadyOptions,
   HeartbeatOptions,
   FitzLifecycleEvent,
   FitzLogger,
