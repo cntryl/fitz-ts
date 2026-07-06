@@ -11,6 +11,7 @@ import type {
 import { createBufferWriter } from "../../../src/core/buffer";
 import {
   AuthenticationError,
+  ConnectionError,
   RequestQueueFullError,
   TransportError,
 } from "../../../src/core/errors";
@@ -301,6 +302,40 @@ describe("Connection", () => {
     expect(connection.isConnected()).toBe(true);
 
     await connection.close();
+  });
+
+  it("does not emit connect_failed when close races an in-flight initial connect", async () => {
+    const transport = new FakeTransport();
+    let releaseConnect: () => void = () => undefined;
+    transport.connectGate = new Promise<void>((resolve) => {
+      releaseConnect = resolve;
+    });
+    const events: FitzLifecycleEvent[] = [];
+    const connection = createConnection(
+      () => transport,
+      async () => "jwt-token",
+      {
+        authSettleDelayMs: 0,
+        observability: {
+          onLifecycleEvent: (event) => {
+            events.push(event);
+          },
+        },
+      },
+    );
+
+    const connect = connection.connect();
+
+    await vi.waitFor(() => {
+      expect(transport.connectStarted).toBe(true);
+    });
+
+    await connection.close();
+    releaseConnect();
+
+    await expect(connect).rejects.toBeInstanceOf(ConnectionError);
+    expect(events.filter((event) => event.event === "closed")).toHaveLength(1);
+    expect(events.some((event) => event.event === "connect_failed")).toBe(false);
   });
 
   it("does not let an aborted secondary waiter cancel a shared initial connect", async () => {

@@ -50,6 +50,18 @@ afterEach(async () => {
 });
 
 describe("tcp transport", () => {
+  it("rejects connect when the signal is already aborted", async () => {
+    const port = await listenOnLocalhost();
+    const transport = createTcpTransport(`localhost:${port}`, { timeout: 20 });
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(transport.connect({ signal: controller.signal })).rejects.toHaveProperty(
+      "name",
+      "AbortError",
+    );
+  });
+
   it("rejects receive immediately after close", async () => {
     const port = await listenOnLocalhost();
     const transport = createTcpTransport(`localhost:${port}`, { timeout: 20 });

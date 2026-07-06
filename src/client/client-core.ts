@@ -30,6 +30,7 @@ import {
   throwIfAborted,
   waitForSharedPromise,
 } from "./internal/async";
+import { jitteredBackoffMs } from "./internal/backoff";
 
 const DEFAULT_CONNECT_WHEN_READY_BACKOFF_MS = 250;
 const DEFAULT_CONNECT_WHEN_READY_MAX_BACKOFF_MS = 2000;
@@ -39,7 +40,11 @@ function closedConnectionError(error: unknown): boolean {
 }
 
 function startupReadinessError(error: unknown): boolean {
-  return error instanceof TransportError || error instanceof ConnectionError;
+  return (
+    error instanceof TransportError ||
+    error instanceof ConnectionError ||
+    error instanceof TimeoutError
+  );
 }
 
 function timeoutWaitingForReady(timeoutMs: number): TimeoutError {
@@ -54,18 +59,35 @@ function resolveWaitOption(value: number | undefined, fallback: number): number 
   return Math.max(0, value);
 }
 
-function connectWhenReadyDelay(
-  currentBackoffMs: number,
-  maxBackoffMs: number,
-  remainingTimeoutMs: number,
-): number {
-  const cappedBackoffMs = Math.min(Math.max(currentBackoffMs, 0), Math.max(maxBackoffMs, 0));
-  if (cappedBackoffMs <= 0) {
-    return 0;
+function createConnectWhenReadyDeadline(timeoutMs: number, callerSignal?: AbortSignal) {
+  const controller = new AbortController();
+  const deadlineMs = Date.now() + timeoutMs;
+  let timedOut = false;
+
+  const onCallerAbort = (): void => {
+    controller.abort();
+  };
+
+  const timeoutId = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, timeoutMs);
+
+  if (callerSignal?.aborted) {
+    controller.abort();
+  } else {
+    callerSignal?.addEventListener("abort", onCallerAbort, { once: true });
   }
 
-  const jitterMs = Math.floor(Math.random() * cappedBackoffMs * 0.5);
-  return Math.min(Math.max(cappedBackoffMs + jitterMs, 1), maxBackoffMs, remainingTimeoutMs);
+  return {
+    signal: controller.signal,
+    hasExpired: (): boolean => timedOut || Date.now() >= deadlineMs,
+    remainingMs: (): number => Math.max(0, deadlineMs - Date.now()),
+    dispose: (): void => {
+      clearTimeout(timeoutId);
+      callerSignal?.removeEventListener("abort", onCallerAbort);
+    },
+  };
 }
 
 type DefaultedClientConfigKeys =
@@ -312,38 +334,55 @@ export function createClientWithTransport<TConfig extends ClientConfig>(
       DEFAULT_CONNECT_WHEN_READY_MAX_BACKOFF_MS,
     );
     let backoffMs = resolveWaitOption(options.backoffMs, DEFAULT_CONNECT_WHEN_READY_BACKOFF_MS);
-    const deadlineMs = Date.now() + timeoutMs;
+    const deadline = createConnectWhenReadyDeadline(timeoutMs, options.signal);
 
-    while (true) {
-      throwIfClientClosed();
-      throwIfAborted(options.signal);
+    try {
+      while (true) {
+        throwIfClientClosed();
+        throwIfAborted(options.signal);
 
-      const remainingTimeoutMs = deadlineMs - Date.now();
-      if (remainingTimeoutMs <= 0) {
-        throw timeoutWaitingForReady(timeoutMs);
+        try {
+          await connect({ signal: deadline.signal });
+          return;
+        } catch (error) {
+          if (isAbortError(error)) {
+            if (!options.signal?.aborted && deadline.hasExpired()) {
+              throw timeoutWaitingForReady(timeoutMs);
+            }
+
+            throw error;
+          }
+
+          if (clientClosed || closedConnectionError(error)) {
+            throw error;
+          }
+
+          if (!startupReadinessError(error)) {
+            throw error;
+          }
+
+          if (deadline.hasExpired()) {
+            throw timeoutWaitingForReady(timeoutMs);
+          }
+
+          const delayMs = Math.min(
+            jitteredBackoffMs(backoffMs, maxBackoffMs),
+            deadline.remainingMs(),
+          );
+          try {
+            await sleepWithAbort(delayMs, deadline.signal);
+          } catch (sleepError) {
+            if (isAbortError(sleepError) && !options.signal?.aborted && deadline.hasExpired()) {
+              throw timeoutWaitingForReady(timeoutMs);
+            }
+
+            throw sleepError;
+          }
+          backoffMs = Math.min(backoffMs * 2, maxBackoffMs);
+        }
       }
-
-      try {
-        await connect({ signal: options.signal });
-        return;
-      } catch (error) {
-        if (isAbortError(error) || clientClosed || closedConnectionError(error)) {
-          throw error;
-        }
-
-        if (!startupReadinessError(error)) {
-          throw error;
-        }
-
-        const remainingAfterAttemptMs = deadlineMs - Date.now();
-        if (remainingAfterAttemptMs <= 0) {
-          throw timeoutWaitingForReady(timeoutMs);
-        }
-
-        const delayMs = connectWhenReadyDelay(backoffMs, maxBackoffMs, remainingAfterAttemptMs);
-        await sleepWithAbort(delayMs, options.signal);
-        backoffMs = Math.min(backoffMs * 2, maxBackoffMs);
-      }
+    } finally {
+      deadline.dispose();
     }
   };
 

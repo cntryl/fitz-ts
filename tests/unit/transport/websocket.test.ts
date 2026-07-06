@@ -170,6 +170,17 @@ describe("websocket transport", () => {
 
     await transport.close();
   });
+
+  it("rejects Node sends once graceful close begins", async () => {
+    const { url } = await listenWithWebSocketServer();
+    const transport = createWebSocketTransport(url, { timeout: 100 });
+
+    await transport.connect();
+
+    const closing = transport.close();
+    await expect(transport.send(new Uint8Array([1, 2, 3]))).rejects.toThrow("not connected");
+    await closing;
+  });
 });
 
 describe("browser websocket transport", () => {
@@ -207,6 +218,48 @@ describe("browser websocket transport", () => {
       await transport.connect();
 
       await expect(transport.send(new Uint8Array([1, 2, 3]))).resolves.toBeUndefined();
+    } finally {
+      vi.stubGlobal("WebSocket", originalWebSocket);
+    }
+  });
+
+  it("rejects browser sends once graceful close begins", async () => {
+    const originalWebSocket = globalThis.WebSocket;
+
+    class BrowserWebSocket {
+      static instances: BrowserWebSocket[] = [];
+
+      binaryType = "";
+      onopen: (() => void) | null = null;
+      onmessage: ((event: { data: ArrayBuffer | Uint8Array | Blob }) => void) | null = null;
+      onerror: ((event: { message?: string }) => void) | null = null;
+      onclose: (() => void) | null = null;
+
+      constructor(_url: string) {
+        BrowserWebSocket.instances.push(this);
+        setTimeout(() => this.onopen?.(), 0);
+      }
+
+      send(_data: Uint8Array): void {}
+
+      close(): void {}
+    }
+
+    vi.stubGlobal("WebSocket", BrowserWebSocket);
+
+    try {
+      const { createWebSocketTransport: createBrowserTransport } =
+        await import("../../../src/transport/websocket.browser");
+      const transport = createBrowserTransport("ws://example.test/ws", { timeout: 20 });
+
+      await transport.connect();
+      const socket = BrowserWebSocket.instances[0];
+
+      const closing = transport.close();
+      await expect(transport.send(new Uint8Array([1, 2, 3]))).rejects.toThrow("not connected");
+
+      socket.onclose?.();
+      await closing;
     } finally {
       vi.stubGlobal("WebSocket", originalWebSocket);
     }

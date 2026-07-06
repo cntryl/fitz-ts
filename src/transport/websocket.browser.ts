@@ -55,6 +55,12 @@ function normalizeWebSocketUrl(url: string): string {
   return `ws://${url}`;
 }
 
+function abortError(): Error {
+  const error = new Error("The operation was aborted");
+  error.name = "AbortError";
+  return error;
+}
+
 function isBlob(data: BrowserWebSocketMessageData): data is Blob {
   return typeof Blob !== "undefined" && data instanceof Blob;
 }
@@ -90,15 +96,21 @@ export function createWebSocketTransport(url: string, options: TransportOptions 
     }
   };
 
-  const connect = async (): Promise<void> => {
+  const connect = async (options: { signal?: AbortSignal } = {}): Promise<void> => {
     return new Promise((resolve, reject) => {
       try {
+        if (options.signal?.aborted) {
+          reject(abortError());
+          return;
+        }
+
         const wsUrl = normalizeWebSocketUrl(url);
         ws = new (getWebSocketConstructor())(wsUrl);
         ws.binaryType = "arraybuffer";
 
         let settled = false;
         let connectTimeout: ReturnType<typeof setTimeout> | null = null;
+        let onAbort: (() => void) | null = null;
         const settle = (callback: () => void): void => {
           if (settled) {
             return;
@@ -109,8 +121,21 @@ export function createWebSocketTransport(url: string, options: TransportOptions 
             clearTimeout(connectTimeout);
             connectTimeout = null;
           }
+          if (onAbort) {
+            options.signal?.removeEventListener("abort", onAbort);
+          }
           callback();
         };
+
+        onAbort = () => {
+          settle(() => {
+            connected = false;
+            ws?.close();
+            reject(abortError());
+          });
+        };
+
+        options.signal?.addEventListener("abort", onAbort, { once: true });
 
         connectTimeout = setTimeout(() => {
           settle(() => {
@@ -162,7 +187,7 @@ export function createWebSocketTransport(url: string, options: TransportOptions 
   };
 
   const send = async (data: Uint8Array): Promise<void> => {
-    if (!connected) {
+    if (!connected || !ws) {
       throw new TransportError("WebSocket is not connected");
     }
 
@@ -221,21 +246,26 @@ export function createWebSocketTransport(url: string, options: TransportOptions 
   const close = async (): Promise<void> => {
     if (ws) {
       const activeWs = ws;
-      ws = null;
       if (!connected) {
+        ws = null;
         activeWs.close();
         return;
       }
 
+      connected = false;
       return new Promise<void>((resolve) => {
         const timeoutId = setTimeout(() => {
-          connected = false;
+          if (ws === activeWs) {
+            ws = null;
+          }
           resolve();
         }, 5000);
 
         activeWs.onclose = () => {
           clearTimeout(timeoutId);
-          connected = false;
+          if (ws === activeWs) {
+            ws = null;
+          }
           resolve();
         };
 

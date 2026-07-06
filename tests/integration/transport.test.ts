@@ -107,7 +107,7 @@ describe("Transport integration", () => {
 
       await expect(
         f.connectWhenReady(
-          { timeout: 1000 },
+          { timeout: 1000, authSettleDelayMs: 1000 },
           {
             timeoutMs: 5000,
             backoffMs: 10,

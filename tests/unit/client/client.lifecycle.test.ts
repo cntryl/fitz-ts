@@ -309,6 +309,88 @@ describe("Client lifecycle ownership", () => {
     expect(client.isConnected()).toBe(true);
   });
 
+  it("retries initial startup transport timeouts until a later attempt connects", async () => {
+    const connection = new FakeOwnedConnection();
+    let connectAttempts = 0;
+    connection.setConnectImpl(async () => {
+      connectAttempts += 1;
+      if (connectAttempts < 3) {
+        throw new TimeoutError("dial timed out");
+      }
+
+      connection.state = ConnectionState.Authenticated;
+    });
+    createConnectionMock.mockReturnValue(connection);
+
+    const client = createClient({ url: "ws://example.test" });
+
+    await expect(
+      client.connectWhenReady({
+        timeoutMs: 100,
+        backoffMs: 1,
+        maxBackoffMs: 1,
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(connection.connectCalls).toBe(3);
+    expect(client.isConnected()).toBe(true);
+  });
+
+  it("enforces connectWhenReady timeout against an in-flight startup attempt", async () => {
+    const connection = new FakeOwnedConnection();
+    let receivedSignal: AbortSignal | undefined;
+    connection.setConnectImpl(async (options) => {
+      receivedSignal = options?.signal;
+      await new Promise<void>((_resolve, reject) => {
+        options?.signal?.addEventListener(
+          "abort",
+          () => {
+            const error = new Error("The operation was aborted");
+            error.name = "AbortError";
+            reject(error);
+          },
+          { once: true },
+        );
+      });
+    });
+    createConnectionMock.mockReturnValue(connection);
+
+    const client = createClient({ url: "ws://example.test" });
+
+    await expect(
+      client.connectWhenReady({
+        timeoutMs: 10,
+        backoffMs: 1,
+        maxBackoffMs: 1,
+      }),
+    ).rejects.toBeInstanceOf(TimeoutError);
+
+    expect(receivedSignal?.aborted).toBe(true);
+    expect(connection.connectCalls).toBe(1);
+    expect(client.isConnected()).toBe(false);
+  });
+
+  it("attempts once when connectWhenReady timeoutMs is zero", async () => {
+    const connection = new FakeOwnedConnection();
+    connection.setConnectImpl(async () => {
+      connection.state = ConnectionState.Authenticated;
+    });
+    createConnectionMock.mockReturnValue(connection);
+
+    const client = createClient({ url: "ws://example.test" });
+
+    await expect(
+      client.connectWhenReady({
+        timeoutMs: 0,
+        backoffMs: 1,
+        maxBackoffMs: 1,
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(connection.connectCalls).toBe(1);
+    expect(client.isConnected()).toBe(true);
+  });
+
   it("rejects connectWhenReady with TimeoutError when total startup wait expires", async () => {
     const connection = new FakeOwnedConnection();
     connection.setConnectImpl(async () => {
