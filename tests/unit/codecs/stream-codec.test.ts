@@ -6,7 +6,11 @@
 
 import { describe, it, expect } from "vite-plus/test";
 import { StreamCodec } from "../../../src/domains/stream/codec";
-import { BufferReader, BufferWriter } from "../../../src/core/buffer";
+import {
+  createBufferReader,
+  createBufferWriter,
+  type BufferWriter,
+} from "../../../src/core/buffer";
 import type {
   StreamFilterClause,
   StreamFilterSet,
@@ -43,7 +47,7 @@ function encodeStreamRecord(options: {
   metadata?: Uint8Array;
   timestamp: bigint;
 }): Uint8Array {
-  const writer = new BufferWriter(256);
+  const writer = createBufferWriter(256);
   writer.writeU64BE(options.offset);
   writeOptionalU64(writer, options.areaOffset);
   writeOptionalU64(writer, options.realmOffset);
@@ -63,7 +67,7 @@ function encodeReadResponse(
     hasMore: boolean;
   },
 ): Uint8Array {
-  const data = new BufferWriter(512);
+  const data = createBufferWriter(512);
   data.writeU32BE(items.length);
   for (const item of items) {
     switch (item.kind) {
@@ -89,7 +93,7 @@ function encodeReadResponse(
   writeOptionalU64(data, cursor.lastRealmOffset);
   data.writeU8(cursor.hasMore ? 1 : 0);
 
-  const writer = new BufferWriter(560);
+  const writer = createBufferWriter(560);
   writer.writeU8(0);
   writer.writeU8(0);
   writer.writeU32BE(data.getLength());
@@ -118,7 +122,7 @@ function writeFilteredReason(
 }
 
 function encodeLastResponse(record: Uint8Array): Uint8Array {
-  const writer = new BufferWriter(320);
+  const writer = createBufferWriter(320);
   writer.writeU8(0);
   writer.writeU8(0);
   writer.writeU32BE(record.length);
@@ -136,7 +140,7 @@ function encodeMetadataResponse(metadata: {
   areaWatermark: bigint;
   realmWatermark: bigint;
 }): Uint8Array {
-  const data = new BufferWriter(256);
+  const data = createBufferWriter(256);
   writeOptionalU64(data, metadata.firstResourceOffset);
   writeOptionalU64(data, metadata.lastResourceOffset);
   data.writeU64BE(metadata.resourceCount);
@@ -146,7 +150,7 @@ function encodeMetadataResponse(metadata: {
   data.writeU64BE(metadata.areaWatermark);
   data.writeU64BE(metadata.realmWatermark);
 
-  const writer = new BufferWriter(320);
+  const writer = createBufferWriter(320);
   writer.writeU8(0);
   writer.writeU8(0);
   writer.writeU32BE(data.getLength());
@@ -269,7 +273,7 @@ describe("StreamCodec", () => {
   describe("BEGIN decoding", () => {
     it("should_decode_begin_response_with_session_id", () => {
       // Arrange
-      const writer = new BufferWriter(24);
+      const writer = createBufferWriter(24);
       writer.writeU8(0); // status = success
       writer.writeU8(1); // has_session_id = 1
       writer.writeU64BE(456n); // sessionId
@@ -296,7 +300,7 @@ describe("StreamCodec", () => {
     });
 
     it("should_reject_wrapped_response_with_trailing_bytes", () => {
-      const writer = new BufferWriter(16);
+      const writer = createBufferWriter(16);
       writer.writeU8(0);
       writer.writeU8(0);
       writer.writeU32BE(0);
@@ -337,7 +341,7 @@ describe("StreamCodec", () => {
         undefined,
         "proj.alpha",
       );
-      const reader = new BufferReader(encoded);
+      const reader = createBufferReader(encoded);
 
       expect(reader.readU64BE()).toBe(456n);
       expect(reader.readU64BE()).toBe(100n);
@@ -353,7 +357,7 @@ describe("StreamCodec", () => {
       const body = testData("record1");
       const metadata = testData("metadata1");
       const encoded = StreamCodec.encodeAppend(456n, 100n, body, metadata, "proj.alpha");
-      const reader = new BufferReader(encoded);
+      const reader = createBufferReader(encoded);
 
       expect(reader.readU64BE()).toBe(456n);
       expect(reader.readU64BE()).toBe(100n);
@@ -393,7 +397,7 @@ describe("StreamCodec", () => {
       // Assert
       expect(encoded).toBeInstanceOf(Uint8Array);
 
-      const reader = new BufferReader(encoded);
+      const reader = createBufferReader(encoded);
       expect(reader.readRoute()).toBe("stream://test/events");
       expect(reader.readU64BE()).toBe(50n);
       expect(reader.readU64BE()).toBe(25n);
@@ -406,7 +410,7 @@ describe("StreamCodec", () => {
       const encoded = StreamCodec.encodeRead("stream://test/events", 50n, 25, {
         maxBytes: 1024n,
       });
-      const reader = new BufferReader(encoded);
+      const reader = createBufferReader(encoded);
 
       expect(reader.readRoute()).toBe("stream://test/events");
       expect(reader.readU64BE()).toBe(50n);
@@ -423,7 +427,7 @@ describe("StreamCodec", () => {
       };
 
       const encoded = StreamCodec.encodeRead("stream://test/events", 0n, 10, { filter });
-      const reader = new BufferReader(encoded);
+      const reader = createBufferReader(encoded);
 
       expect(reader.readRoute()).toBe("stream://test/events");
       expect(reader.readU64BE()).toBe(0n);

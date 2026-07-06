@@ -4,14 +4,16 @@
  */
 
 import {
-  BufferWriter,
-  BufferReader,
+  createBufferWriter,
+  createBufferReader,
   getRouteEncoding,
   utf8Decoder,
   utf8Encoder,
   writeU32BEAt,
   writeU64BEAt,
   writeU64BENumberAt,
+  type BufferReader,
+  type BufferWriter,
 } from "../../core/buffer";
 import {
   StreamCommitMode,
@@ -125,7 +127,7 @@ export const StreamCodec = {
       return { status: decoded.status };
     }
 
-    const reader = new BufferReader(decoded.data);
+    const reader = createBufferReader(decoded.data);
     return { status: decoded.status, offset: reader.readU64BE() };
   },
 
@@ -145,7 +147,7 @@ export const StreamCodec = {
    * Payload: [status: u8]
    */
   decodeCommitResponse(payload: Uint8Array): { status: number } {
-    const reader = new BufferReader(payload);
+    const reader = createBufferReader(payload);
     const status = reader.readU8();
     return { status };
   },
@@ -165,7 +167,7 @@ export const StreamCodec = {
    * Payload: [status: u8]
    */
   decodeRollbackResponse(payload: Uint8Array): { status: number } {
-    const reader = new BufferReader(payload);
+    const reader = createBufferReader(payload);
     const status = reader.readU8();
     return { status };
   },
@@ -187,7 +189,7 @@ export const StreamCodec = {
     let filterBytes: Uint8Array | undefined;
 
     if (hasFilter) {
-      const filterWriter = new BufferWriter(64);
+      const filterWriter = createBufferWriter(64);
       encodeStreamFilterSet(filter, filterWriter);
       filterBytes = filterWriter.getBufferView();
     }
@@ -238,7 +240,7 @@ export const StreamCodec = {
       return { status: decoded.status, items: [] };
     }
 
-    const reader = new BufferReader(decoded.data);
+    const reader = createBufferReader(decoded.data);
     const count = reader.readU32BE();
     const items: StreamReadItem[] = [];
 
@@ -281,7 +283,7 @@ export const StreamCodec = {
       return { status: decoded.status };
     }
 
-    const reader = new BufferReader(decoded.data);
+    const reader = createBufferReader(decoded.data);
     const record = this.decodeStreamRecord(reader);
 
     return { status: decoded.status, record };
@@ -308,7 +310,7 @@ export const StreamCodec = {
       return { status: decoded.status };
     }
 
-    const reader = new BufferReader(decoded.data);
+    const reader = createBufferReader(decoded.data);
     const firstResourceOffset = reader.readOptionalU64();
     const lastResourceOffset = reader.readOptionalU64();
     const recordCount = reader.readU64BE();
@@ -334,7 +336,7 @@ export const StreamCodec = {
   },
 
   encodeSubscribe(pattern: string): Uint8Array {
-    const writer = new BufferWriter(128);
+    const writer = createBufferWriter(128);
     writer.writeRoute(pattern);
     return writer.getBufferView();
   },
@@ -343,7 +345,7 @@ export const StreamCodec = {
     status: number;
     subId?: bigint;
   } {
-    const reader = new BufferReader(payload);
+    const reader = createBufferReader(payload);
     const status = reader.readU8();
     if (status !== 0 || reader.isEOF()) {
       return { status };
@@ -358,13 +360,13 @@ export const StreamCodec = {
   },
 
   encodeUnsubscribe(pattern: string): Uint8Array {
-    const writer = new BufferWriter(128);
+    const writer = createBufferWriter(128);
     writer.writeRoute(pattern);
     return writer.getBufferView();
   },
 
   decodeUnsubscribeResponse(payload: Uint8Array): { status: number } {
-    const reader = new BufferReader(payload);
+    const reader = createBufferReader(payload);
     return { status: reader.readU8() };
   },
 
@@ -374,7 +376,7 @@ export const StreamCodec = {
     rawPayload: Uint8Array;
     parsedPayload: StreamCommitPayload;
   } {
-    const reader = new BufferReader(payload);
+    const reader = createBufferReader(payload);
     const subId = reader.readU64BE();
     const route = reader.readRoute();
     const rawPayload = reader.readBytes(reader.readU32BE());
@@ -470,7 +472,7 @@ export const StreamCodec = {
     sessionId?: bigint;
     data: Uint8Array;
   } {
-    const reader = new BufferReader(payload);
+    const reader = createBufferReader(payload);
     const status = reader.readU8();
     if (status !== 0) {
       return { status, data: new Uint8Array(0) };

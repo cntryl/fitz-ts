@@ -5,12 +5,31 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, expectTypeOf, it } from "vite-plus/test";
 
+import { Client } from "../../src/client/client";
 import type {
   BrowserClient,
   BrowserTransportType,
   BrowserWebSocketOptions,
 } from "../../src/client/browser-client";
+import { Client as BrowserClientAlias } from "../../src/client/browser-client";
+import { Connection } from "../../src/client/connection";
+import { Multiplexer } from "../../src/client/multiplexer";
+import { BufferReader, BufferWriter } from "../../src/core/buffer";
+import { Deferred } from "../../src/core/types";
+import { FrameParser } from "../../src/frame/codec";
+import { KvClient } from "../../src/domains/kv/client";
+import { LeaseClient } from "../../src/domains/lease/client";
+import { NoticeClient } from "../../src/domains/notice/client";
+import { QueueClient } from "../../src/domains/queue/client";
+import { RpcClient } from "../../src/domains/rpc/client";
+import { ScheduleClient } from "../../src/domains/schedule/client";
+import { StreamClient } from "../../src/domains/stream/client";
 import type { Client as BrowserFacadeClient } from "../../src/index.browser";
+
+type IsCallable<T> = T extends (...args: never[]) => unknown ? true : false;
+type IsNewable<T> = T extends abstract new (...args: never[]) => unknown ? true : false;
+type IsCallableFactoryAlias<T> =
+  IsCallable<T> extends true ? (IsNewable<T> extends false ? true : false) : false;
 
 function collectExportNames(source: string): string[] {
   const names: string[] = [];
@@ -239,5 +258,23 @@ describe("public surface", () => {
     expectTypeOf<BrowserFacadeClient>().toEqualTypeOf<BrowserClient>();
     expectTypeOf<BrowserClient["config"]["transport"]>().toEqualTypeOf<BrowserTransportType>();
     expectTypeOf<BrowserClient["config"]["webSocket"]>().toEqualTypeOf<BrowserWebSocketOptions>();
+  });
+
+  it("exports callable factory aliases without constructor signatures", () => {
+    expectTypeOf<IsCallableFactoryAlias<typeof Client>>().toEqualTypeOf<true>();
+    expectTypeOf<IsCallableFactoryAlias<typeof BrowserClientAlias>>().toEqualTypeOf<true>();
+    expectTypeOf<IsCallableFactoryAlias<typeof Connection>>().toEqualTypeOf<true>();
+    expectTypeOf<IsCallableFactoryAlias<typeof Multiplexer>>().toEqualTypeOf<true>();
+    expectTypeOf<IsCallableFactoryAlias<typeof FrameParser>>().toEqualTypeOf<true>();
+    expectTypeOf<IsCallableFactoryAlias<typeof Deferred>>().toEqualTypeOf<true>();
+    expectTypeOf<IsCallableFactoryAlias<typeof BufferWriter>>().toEqualTypeOf<true>();
+    expectTypeOf<IsCallableFactoryAlias<typeof BufferReader>>().toEqualTypeOf<true>();
+    expectTypeOf<IsCallableFactoryAlias<typeof KvClient>>().toEqualTypeOf<true>();
+    expectTypeOf<IsCallableFactoryAlias<typeof QueueClient>>().toEqualTypeOf<true>();
+    expectTypeOf<IsCallableFactoryAlias<typeof RpcClient>>().toEqualTypeOf<true>();
+    expectTypeOf<IsCallableFactoryAlias<typeof LeaseClient>>().toEqualTypeOf<true>();
+    expectTypeOf<IsCallableFactoryAlias<typeof NoticeClient>>().toEqualTypeOf<true>();
+    expectTypeOf<IsCallableFactoryAlias<typeof StreamClient>>().toEqualTypeOf<true>();
+    expectTypeOf<IsCallableFactoryAlias<typeof ScheduleClient>>().toEqualTypeOf<true>();
   });
 });

@@ -5,7 +5,7 @@
 import type { ClientConfig } from "../core/types";
 import { createBrowserTransport } from "../transport/factory.browser";
 import type { Client as CoreClient } from "./client-core";
-import { createClientConstructor, createClientWithTransport } from "./client-core";
+import { createClientWithTransport } from "./client-core";
 
 export type BrowserTransportType = "ws" | "auto";
 
@@ -39,4 +39,4 @@ export function createClient(config: BrowserClientConfig): BrowserClient {
   return createClientWithTransport(config, createBrowserTransport);
 }
 
-export const Client = createClientConstructor<BrowserClientConfig>(createClient);
+export const Client = createClient;

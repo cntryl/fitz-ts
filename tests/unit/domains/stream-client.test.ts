@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { BufferReader, BufferWriter } from "../../../src/core/buffer";
+import {
+  createBufferReader,
+  createBufferWriter,
+  type BufferWriter,
+} from "../../../src/core/buffer";
 import { ConnectionError } from "../../../src/core/errors";
 import {
   MSG_STREAM_APPEND,
@@ -9,7 +13,7 @@ import {
   MSG_STREAM_READ,
   MSG_STREAM_ROLLBACK,
 } from "../../../src/frame/types";
-import { StreamClient } from "../../../src/domains/stream/client";
+import { createStreamClient } from "../../../src/domains/stream/client";
 import type { Connection } from "../../../src/client/connection";
 import type { StreamFilterSet } from "../../../src/domains/stream/types";
 
@@ -101,7 +105,7 @@ class FakeStreamConnection {
 describe("StreamClient", () => {
   it("invalidates open stream sessions on disconnect", async () => {
     const connection = new FakeStreamConnection();
-    const client = new StreamClient(connection as unknown as Connection);
+    const client = createStreamClient(connection as unknown as Connection);
 
     const session = await client.begin("stream://realm/area/resource");
     connection.disconnect();
@@ -113,7 +117,7 @@ describe("StreamClient", () => {
 
   it("cancels an in-flight stream append request", async () => {
     const connection = new FakeStreamConnection();
-    const client = new StreamClient(connection as unknown as Connection);
+    const client = createStreamClient(connection as unknown as Connection);
 
     const session = await client.begin("stream://realm/area/resource");
     const controller = new AbortController();
@@ -128,7 +132,7 @@ describe("StreamClient", () => {
 
   it("encodes append discriminator options", async () => {
     const connection = new FakeStreamConnection("success");
-    const client = new StreamClient(connection as unknown as Connection);
+    const client = createStreamClient(connection as unknown as Connection);
 
     const session = await client.begin("stream://realm/area/resource");
     const offset = await session.append(0n, new Uint8Array([1, 2]), {
@@ -136,7 +140,7 @@ describe("StreamClient", () => {
     });
 
     expect(offset).toBe(0n);
-    const reader = new BufferReader(connection.lastPayload ?? new Uint8Array());
+    const reader = createBufferReader(connection.lastPayload ?? new Uint8Array());
     expect(reader.readU64BE()).toBe(1n);
     expect(reader.readU64BE()).toBe(0n);
     expect(reader.readU32BE()).toBe(2);
@@ -149,7 +153,7 @@ describe("StreamClient", () => {
 
   it("leaves a stream session usable after a failed commit", async () => {
     const connection = new FakeStreamConnection("success");
-    const client = new StreamClient(connection as unknown as Connection);
+    const client = createStreamClient(connection as unknown as Connection);
 
     const session = await client.begin("stream://realm/area/resource");
     connection.respond(MSG_STREAM_COMMIT, new Uint8Array([7]));
@@ -165,7 +169,7 @@ describe("StreamClient", () => {
 
   it("encodes read filter options", async () => {
     const connection = new FakeStreamConnection("success");
-    const client = new StreamClient(connection as unknown as Connection);
+    const client = createStreamClient(connection as unknown as Connection);
 
     const filter: StreamFilterSet = {
       clauses: [{ kind: "Equals", value: "proj.alpha" }],
@@ -174,7 +178,7 @@ describe("StreamClient", () => {
     const records = await client.read("stream://realm/area/resource", 5n, 10, { filter });
 
     expect(records).toEqual([]);
-    const reader = new BufferReader(connection.lastPayload ?? new Uint8Array());
+    const reader = createBufferReader(connection.lastPayload ?? new Uint8Array());
     expect(reader.readRoute()).toBe("stream://realm/area/resource");
     expect(reader.readU64BE()).toBe(5n);
     expect(reader.readU64BE()).toBe(10n);
@@ -206,7 +210,7 @@ describe("StreamClient", () => {
       },
     );
     const connection = new FakeStreamConnection("success", readResponse);
-    const client = new StreamClient(connection as unknown as Connection);
+    const client = createStreamClient(connection as unknown as Connection);
 
     const page = await client.readPage("stream://realm/area/resource", 4n, 10);
     expect(page.items).toHaveLength(2);
@@ -247,7 +251,7 @@ function encodeReadEvent(options: {
   metadata?: Uint8Array;
   timestamp: bigint;
 }): Uint8Array {
-  const writer = new BufferWriter(64);
+  const writer = createBufferWriter(64);
   writer.writeU8(0);
   writer.writeU64BE(options.offset);
   writeOptionalU64(writer, options.areaOffset);
@@ -284,7 +288,7 @@ function encodeReadFiltered(
   offset: bigint,
   reason?: "server_filter" | "permission" | "projection",
 ): Uint8Array {
-  const writer = new BufferWriter(16);
+  const writer = createBufferWriter(16);
   writer.writeU8(1);
   writer.writeU64BE(offset);
   writer.writeU8(
@@ -302,7 +306,7 @@ function encodeWrappedReadResponse(
     hasMore: boolean;
   },
 ): Uint8Array {
-  const data = new BufferWriter(256);
+  const data = createBufferWriter(256);
   data.writeU32BE(items.length);
   for (const item of items) {
     data.writeBytes(item);
@@ -318,7 +322,7 @@ function encodeWrappedReadResponse(
   }
   data.writeU8(cursor.hasMore ? 1 : 0);
 
-  const writer = new BufferWriter(320);
+  const writer = createBufferWriter(320);
   writer.writeU8(0);
   writer.writeU8(0);
   writer.writeU32BE(data.getLength());

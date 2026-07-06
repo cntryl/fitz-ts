@@ -3,7 +3,12 @@
  * Per fitz-go/internal/domains/notice/protocol.go
  */
 
-import { BufferReader, getRouteEncoding, writeU32BEAt, writeU64BEAt } from "../../core/buffer";
+import {
+  createBufferReader,
+  getRouteEncoding,
+  writeU32BEAt,
+  writeU64BEAt,
+} from "../../core/buffer";
 import { SubscribeResponse, UnsubscribeResponse } from "./types";
 
 export const NoticeCodec = {
@@ -40,7 +45,7 @@ export const NoticeCodec = {
       throw new Error("SUBSCRIBE response too short");
     }
 
-    const reader = new BufferReader(payload);
+    const reader = createBufferReader(payload);
     const status = reader.readU8();
     const hasSubId = reader.readU8();
 
@@ -83,7 +88,7 @@ export const NoticeCodec = {
     route: string;
     body: Uint8Array;
   } {
-    const reader = new BufferReader(payload);
+    const reader = createBufferReader(payload);
     const subId = reader.readU64BE();
     const route = reader.readRoute();
     const bodyLen = reader.readU32BE();

@@ -309,10 +309,4 @@ export function createFrameParser() {
   };
 }
 
-type FrameParserConstructor = {
-  new (): FrameParser;
-};
-
-export const FrameParser: FrameParserConstructor = function () {
-  return createFrameParser();
-} as unknown as FrameParserConstructor;
+export const FrameParser = createFrameParser;

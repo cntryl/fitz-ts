@@ -1,10 +1,9 @@
 import { describe } from "vitest";
 import { StreamCodec } from "../../src/domains/stream/codec";
 import { SYNC_CODEC_BATCH_SIZE, benchBatch } from "../_bench";
-import { encoder, routes } from "../_shared";
+import { metadata, payloads, routes } from "../_shared";
 
-const payload = encoder.encode("stream-payload");
-const metadata = encoder.encode("metadata");
+const payload = payloads.stream;
 
 describe("fitz-ts stream benchmarks", () => {
   benchBatch("stream begin encode", SYNC_CODEC_BATCH_SIZE, () => {

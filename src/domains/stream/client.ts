@@ -461,14 +461,7 @@ export function createStreamClient(connection: StreamConnectionPort) {
   };
 }
 
-type StreamClientConstructor = {
-  new (connection: StreamConnectionPort): StreamClient;
-  (connection: StreamConnectionPort): StreamClient;
-};
-
-export const StreamClient: StreamClientConstructor = function (connection: StreamConnectionPort) {
-  return createStreamClient(connection);
-} as unknown as StreamClientConstructor;
+export const StreamClient = createStreamClient;
 
 export * from "./types";
 

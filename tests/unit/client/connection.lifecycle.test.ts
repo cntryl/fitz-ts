@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 
-import { Connection } from "../../../src/client/connection";
+import { createConnection } from "../../../src/client/connection";
 import type { Transport } from "../../../src/transport/types";
 
 class FakeTransport implements Transport {
@@ -51,7 +51,7 @@ class FakeTransport implements Transport {
 describe("Connection lifecycle", () => {
   it("should expose a connection scope signal that aborts on close", async () => {
     const transport = new FakeTransport();
-    const connection = new Connection(
+    const connection = createConnection(
       () => transport,
       () => "",
       { authSettleDelayMs: 0 },
@@ -68,7 +68,7 @@ describe("Connection lifecycle", () => {
 
   it("should wait for active async handlers when closing connection", async () => {
     const transport = new FakeTransport();
-    const connection = new Connection(
+    const connection = createConnection(
       () => transport,
       () => "",
       {
@@ -112,7 +112,7 @@ describe("Connection lifecycle", () => {
 
   it("should abort scope, wait for active handlers, and drop queued handlers on close", async () => {
     const transport = new FakeTransport();
-    const connection = new Connection(
+    const connection = createConnection(
       () => transport,
       () => "",
       {
@@ -174,7 +174,7 @@ describe("Connection lifecycle", () => {
 
   it("should reject in-flight requests when connection is closed", async () => {
     const transport = new FakeTransport();
-    const connection = new Connection(
+    const connection = createConnection(
       () => transport,
       () => "",
       { authSettleDelayMs: 0 },

@@ -1,6 +1,6 @@
 import { expect, onTestFinished } from "vite-plus/test";
 
-import { Client } from "../../../src/client/client";
+import { createClient, type Client } from "../../../src/client/client";
 import type { ClientConfig } from "../../../src/core/types";
 import {
   generateExpiredTestJwt,
@@ -125,7 +125,7 @@ export class TestFixture {
     overrides: Partial<ClientConfig> = {},
     options: { signal?: AbortSignal } = {},
   ): Promise<void> {
-    this.clientInstance = new Client({
+    this.clientInstance = createClient({
       url: this.brokerAddr,
       transport: this.transport,
       tokenProvider: this.tokenProviderOverride ?? tokenProviderForMode(this.authMode),

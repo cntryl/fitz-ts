@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { BufferReader, BufferWriter } from "../../../src/core/buffer";
-import { ConnectionError } from "../../../src/core/errors";
+import { createBufferReader, createBufferWriter } from "../../../src/core/buffer";
+import { ConnectionError, KvError } from "../../../src/core/errors";
 import {
   MSG_KV_BEGIN,
   MSG_KV_COMMIT,
@@ -9,7 +9,7 @@ import {
   MSG_KV_ROLLBACK,
   MSG_KV_SCAN,
 } from "../../../src/frame/types";
-import { KvClient } from "../../../src/domains/kv/client";
+import { createKvClient } from "../../../src/domains/kv/client";
 
 class FakeKvConnection {
   public lastRequest: { messageType: number; payload: Uint8Array } | null = null;
@@ -79,18 +79,8 @@ class FakeKvConnection {
   }
 }
 
-function expectBeginRoute(connection: FakeKvConnection, route: string): void {
-  const lastRequest = connection.lastRequest;
-  if (!lastRequest) {
-    throw new Error("Expected BEGIN request to be recorded");
-  }
-
-  const reader = new BufferReader(lastRequest.payload);
-  expect(reader.readString()).toBe(route);
-}
-
 function encodeScanResponse(keys: Uint8Array[], hasMore: boolean): Uint8Array {
-  const writer = new BufferWriter();
+  const writer = createBufferWriter();
   writer.writeU8(0);
   writer.writeU32BE(keys.length);
 
@@ -104,10 +94,23 @@ function encodeScanResponse(keys: Uint8Array[], hasMore: boolean): Uint8Array {
   return writer.getBuffer();
 }
 
+async function expectKvRouteFailure(action: Promise<unknown>): Promise<void> {
+  let caught: unknown;
+
+  try {
+    await action;
+  } catch (error) {
+    caught = error;
+  }
+
+  expect(caught).toBeInstanceOf(KvError);
+  expect(caught).toMatchObject({ code: "KV_INVALID_ROUTE" });
+}
+
 describe("KvClient", () => {
   it("encodes the explicitly requested Sync durability in BEGIN payload", async () => {
     const connection = new FakeKvConnection();
-    const client = new KvClient(connection);
+    const client = createKvClient(connection);
 
     await client.begin("kv://realm/area/resource", { durability: "Sync" });
 
@@ -119,7 +122,7 @@ describe("KvClient", () => {
       throw new Error("Expected BEGIN request to be recorded");
     }
 
-    const reader = new BufferReader(lastRequest.payload);
+    const reader = createBufferReader(lastRequest.payload);
     reader.readString();
     reader.readU8();
     expect(reader.readU8()).toBe(1);
@@ -127,7 +130,7 @@ describe("KvClient", () => {
 
   it("accepts bare server-legal KV routes", async () => {
     const connection = new FakeKvConnection();
-    const client = new KvClient(connection);
+    const client = createKvClient(connection);
 
     await client.begin("realm/area/resource", { durability: "Buffered" });
 
@@ -136,45 +139,44 @@ describe("KvClient", () => {
       throw new Error("Expected BEGIN request to be recorded");
     }
 
-    const reader = new BufferReader(lastRequest.payload);
+    const reader = createBufferReader(lastRequest.payload);
     expect(reader.readString()).toBe("realm/area/resource");
     reader.readU8();
     expect(reader.readU8()).toBe(0);
   });
 
-  it("forwards wrong-scheme KV routes without local validation", async () => {
+  it("rejects wrong-scheme KV routes before sending", async () => {
     const connection = new FakeKvConnection();
-    const client = new KvClient(connection);
+    const client = createKvClient(connection);
 
-    await client.begin("queue://realm/area/resource", { durability: "Buffered" });
+    await expectKvRouteFailure(
+      client.begin("queue://realm/area/resource", { durability: "Buffered" }),
+    );
 
-    expect(connection.lastRequest?.messageType).toBe(MSG_KV_BEGIN);
-    expectBeginRoute(connection, "queue://realm/area/resource");
+    expect(connection.lastRequest).toBeNull();
   });
 
-  it("forwards empty-segment KV routes without local validation", async () => {
+  it("rejects empty-segment KV routes before sending", async () => {
     const connection = new FakeKvConnection();
-    const client = new KvClient(connection);
+    const client = createKvClient(connection);
 
-    await client.begin("kv://realm//resource", { durability: "Buffered" });
+    await expectKvRouteFailure(client.begin("kv://realm//resource", { durability: "Buffered" }));
 
-    expect(connection.lastRequest?.messageType).toBe(MSG_KV_BEGIN);
-    expectBeginRoute(connection, "kv://realm//resource");
+    expect(connection.lastRequest).toBeNull();
   });
 
-  it("forwards wildcard KV routes without local validation", async () => {
+  it("rejects wildcard KV routes before sending", async () => {
     const connection = new FakeKvConnection();
-    const client = new KvClient(connection);
+    const client = createKvClient(connection);
 
-    await client.begin("kv://realm/area/*", { durability: "Buffered" });
+    await expectKvRouteFailure(client.begin("kv://realm/area/*", { durability: "Buffered" }));
 
-    expect(connection.lastRequest?.messageType).toBe(MSG_KV_BEGIN);
-    expectBeginRoute(connection, "kv://realm/area/*");
+    expect(connection.lastRequest).toBeNull();
   });
 
   it("rejects BEGIN when durability is omitted", async () => {
     const connection = new FakeKvConnection();
-    const client = new KvClient(connection);
+    const client = createKvClient(connection);
 
     await expect(client.begin("kv://realm/area/resource", {} as never)).rejects.toMatchObject({
       code: "KV_MISSING_DURABILITY",
@@ -183,7 +185,7 @@ describe("KvClient", () => {
 
   it("invalidates open transactions on disconnect", async () => {
     const connection = new FakeKvConnection();
-    const client = new KvClient(connection);
+    const client = createKvClient(connection);
 
     const tx = await client.begin("kv://realm/area/resource", {
       durability: "Sync",
@@ -197,7 +199,7 @@ describe("KvClient", () => {
 
   it("cancels an in-flight kv transaction request", async () => {
     const connection = new FakeKvConnection();
-    const client = new KvClient(connection);
+    const client = createKvClient(connection);
 
     const tx = await client.begin("kv://realm/area/resource", {
       durability: "Sync",
@@ -214,7 +216,7 @@ describe("KvClient", () => {
 
   it("exposes scanPage hasMore and rejects truncated scan convenience results", async () => {
     const connection = new FakeKvConnection();
-    const client = new KvClient(connection);
+    const client = createKvClient(connection);
 
     const tx = await client.begin("kv://realm/area/resource", {
       durability: "Sync",
@@ -234,7 +236,7 @@ describe("KvClient", () => {
 
   it("leaves a transaction usable after a failed commit", async () => {
     const connection = new FakeKvConnection();
-    const client = new KvClient(connection);
+    const client = createKvClient(connection);
 
     const tx = await client.begin("kv://realm/area/resource", {
       durability: "Sync",

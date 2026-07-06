@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 
-import { BufferWriter } from "../../../src/core/buffer";
-import { ScheduleClient } from "../../../src/domains/schedule/client";
+import { createBufferWriter } from "../../../src/core/buffer";
+import { createScheduleClient } from "../../../src/domains/schedule/client";
 import {
   MSG_SCHEDULE_NOTIFY,
   MSG_SCHEDULE_SUBSCRIBE,
@@ -45,7 +45,7 @@ class FakeScheduleConsumerConnection {
 describe("ScheduleClient waitForNotifications", () => {
   it("yields notifications in order", async () => {
     const connection = new FakeScheduleConsumerConnection();
-    const client = new ScheduleClient(connection);
+    const client = createScheduleClient(connection);
     const iterator = client
       .waitForNotifications("schedule://realm/area/resource/run")
       [Symbol.asyncIterator]();
@@ -73,7 +73,7 @@ describe("ScheduleClient waitForNotifications", () => {
 
   it("does not lose notifications that arrive before the iterator waits", async () => {
     const connection = new FakeScheduleConsumerConnection();
-    const client = new ScheduleClient(connection);
+    const client = createScheduleClient(connection);
     const iterator = client
       .waitForNotifications("schedule://realm/area/resource/run")
       [Symbol.asyncIterator]();
@@ -93,7 +93,7 @@ describe("ScheduleClient waitForNotifications", () => {
 
   it("unsubscribes when waitForNotifications is aborted while waiting", async () => {
     const connection = new FakeScheduleConsumerConnection();
-    const client = new ScheduleClient(connection);
+    const client = createScheduleClient(connection);
     const controller = new AbortController();
     const iterator = client
       .waitForNotifications("schedule://realm/area/resource/run", {
@@ -113,7 +113,7 @@ describe("ScheduleClient waitForNotifications", () => {
 });
 
 function encodeScheduleNotification(subId: bigint, payload: Uint8Array): Uint8Array {
-  const writer = new BufferWriter(32);
+  const writer = createBufferWriter(32);
   writer.writeU64BE(subId);
   writer.writeU32BE(payload.length);
   writer.writeBytes(payload);

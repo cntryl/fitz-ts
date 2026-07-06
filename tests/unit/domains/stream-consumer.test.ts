@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 
-import { BufferReader, BufferWriter } from "../../../src/core/buffer";
-import { StreamClient } from "../../../src/domains/stream/client";
+import { createBufferReader, createBufferWriter } from "../../../src/core/buffer";
+import { createStreamClient } from "../../../src/domains/stream/client";
 import {
   MSG_STREAM_NOTIFY,
   MSG_STREAM_READ,
@@ -71,7 +71,7 @@ describe("StreamClient readWhenCommitted", () => {
     connection.readResponses.push(
       encodeWrappedReadResponse([encodeReadEvent(4n, new Uint8Array([1]))], 4n, false),
     );
-    const client = new StreamClient(connection);
+    const client = createStreamClient(connection);
 
     const result = await client
       .readWhenCommitted("stream://realm/area/resource", { offset: 4n, batchSize: 10 })
@@ -88,7 +88,7 @@ describe("StreamClient readWhenCommitted", () => {
       encodeWrappedReadResponse([encodeReadFiltered(5n)], 5n, false),
       encodeWrappedReadResponse([encodeReadEvent(6n, new Uint8Array([2]))], 6n, false),
     );
-    const client = new StreamClient(connection);
+    const client = createStreamClient(connection);
     const iterator = client
       .readWhenCommitted("stream://realm/area/resource", { offset: 4n })
       [Symbol.asyncIterator]();
@@ -115,7 +115,7 @@ describe("StreamClient readWhenCommitted", () => {
       encodeWrappedReadResponse([encodeReadFiltered(5n)], 5n, true),
       encodeWrappedReadResponse([encodeReadEvent(6n, new Uint8Array([3]))], 6n, false),
     );
-    const client = new StreamClient(connection);
+    const client = createStreamClient(connection);
 
     const result = await client
       .readWhenCommitted("stream://realm/area/resource", { offset: 4n })
@@ -133,7 +133,7 @@ describe("StreamClient readWhenCommitted", () => {
       encodeWrappedReadResponse([], 3n, false),
       encodeWrappedReadResponse([encodeReadEvent(4n, new Uint8Array([4]))], 4n, false),
     );
-    const client = new StreamClient(connection);
+    const client = createStreamClient(connection);
     const iterator = client
       .readWhenCommitted("stream://realm/area/resource", { offset: 4n, batchSize: 10 })
       [Symbol.asyncIterator]();
@@ -157,7 +157,7 @@ describe("StreamClient readWhenCommitted", () => {
   it("unsubscribes when readWhenCommitted is aborted while waiting", async () => {
     const connection = new FakeStreamConsumerConnection();
     connection.readResponses.push(encodeWrappedReadResponse([], 3n, false));
-    const client = new StreamClient(connection);
+    const client = createStreamClient(connection);
     const controller = new AbortController();
     const iterator = client
       .readWhenCommitted("stream://realm/area/resource", {
@@ -181,7 +181,7 @@ function readOffsets(connection: FakeStreamConsumerConnection): bigint[] {
   return connection.requests
     .filter((call) => call.messageType === MSG_STREAM_READ)
     .map((call) => {
-      const reader = new BufferReader(call.payload);
+      const reader = createBufferReader(call.payload);
       reader.readRoute();
       return reader.readU64BE();
     });
@@ -200,7 +200,7 @@ function encodeWrappedReadResponse(
   lastOffset: bigint,
   hasMore: boolean,
 ): Uint8Array {
-  const data = new BufferWriter(128);
+  const data = createBufferWriter(128);
   data.writeU32BE(items.length);
   for (const item of items) {
     data.writeBytes(item);
@@ -210,7 +210,7 @@ function encodeWrappedReadResponse(
   data.writeU8(0);
   data.writeU8(hasMore ? 1 : 0);
 
-  const writer = new BufferWriter(160);
+  const writer = createBufferWriter(160);
   writer.writeU8(0);
   writer.writeU8(0);
   writer.writeU32BE(data.getLength());
@@ -219,7 +219,7 @@ function encodeWrappedReadResponse(
 }
 
 function encodeReadEvent(offset: bigint, body: Uint8Array): Uint8Array {
-  const writer = new BufferWriter(64);
+  const writer = createBufferWriter(64);
   writer.writeU8(0);
   writer.writeU64BE(offset);
   writer.writeU8(0);
@@ -232,7 +232,7 @@ function encodeReadEvent(offset: bigint, body: Uint8Array): Uint8Array {
 }
 
 function encodeReadFiltered(offset: bigint): Uint8Array {
-  const writer = new BufferWriter(16);
+  const writer = createBufferWriter(16);
   writer.writeU8(1);
   writer.writeU64BE(offset);
   writer.writeU8(1);
@@ -240,7 +240,7 @@ function encodeReadFiltered(offset: bigint): Uint8Array {
 }
 
 function encodeStreamNotification(subId: bigint, route: string): Uint8Array {
-  const writer = new BufferWriter(96);
+  const writer = createBufferWriter(96);
   writer.writeU64BE(subId);
   writer.writeRoute(route);
   writer.writeU32BE(0);

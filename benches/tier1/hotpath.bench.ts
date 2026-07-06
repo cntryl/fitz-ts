@@ -1,7 +1,7 @@
 import { describe } from "vitest";
 
-import { Multiplexer } from "../../src/client/multiplexer";
-import { FrameCodec, FrameParser } from "../../src/frame/codec";
+import { createMultiplexer } from "../../src/client/multiplexer";
+import { FrameCodec, createFrameParser } from "../../src/frame/codec";
 import { NoticeCodec } from "../../src/domains/notice/codec";
 import { KvCodec } from "../../src/domains/kv/codec";
 import { LeaseCodec } from "../../src/domains/lease/codec";
@@ -19,24 +19,20 @@ import {
   consume,
 } from "../_bench";
 import {
+  benchKey,
   buildCorrelationIds,
   buildFrameBatch,
   buildResponseFrame,
   chunkBuffer,
   cycleFixture,
+  hotpathScheduleCron,
+  hotpathTxId,
+  payloads,
+  routes,
 } from "../_shared";
 
-const encoder = new TextEncoder();
-const route = "kv://bench/area/resource";
-const noticeRoute = "notice://bench/area/resource";
-const rpcRoute = "rpc://bench/area/resource";
-const queueRoute = "queue://bench/area/resource";
-const scheduleRoute = "schedule://bench/area/resource";
-const body = encoder.encode("benchmark-payload");
-const key = encoder.encode("bench-key");
-const txId = 42n;
+const body = payloads.hotpath;
 const leaseTtlSecs = 30;
-const scheduleCron = "*/5 * * * *";
 const rpcCorrelationIds = buildCorrelationIds(SYNC_CODEC_BATCH_SIZE);
 const responseFrames = Array.from({ length: 1_000 }, (_, index) => buildResponseFrame(index));
 const encodedFrame = FrameCodec.encodeFrame(101, body);
@@ -54,23 +50,23 @@ describe("fitz-ts hotpath benchmarks", () => {
   });
 
   benchBatch("notice publish encode", SYNC_CODEC_BATCH_SIZE, () => {
-    return NoticeCodec.encodePublish(noticeRoute, body);
+    return NoticeCodec.encodePublish(routes.notice, body);
   });
 
   benchBatch("kv get encode", SYNC_CODEC_BATCH_SIZE, () => {
-    return KvCodec.encodeGet(txId, route, key);
+    return KvCodec.encodeGet(hotpathTxId, routes.kv, benchKey);
   });
 
   benchBatch("lease acquire encode", SYNC_CODEC_BATCH_SIZE, () => {
-    return LeaseCodec.encodeAcquire(route, leaseTtlSecs);
+    return LeaseCodec.encodeAcquire(routes.lease, leaseTtlSecs);
   });
 
   benchBatch("queue enqueue encode", SYNC_CODEC_BATCH_SIZE, () => {
-    return QueueCodec.encodeEnqueue(queueRoute, body, { delayMs: 1500 });
+    return QueueCodec.encodeEnqueue(routes.queue, body, { delayMs: 1500 });
   });
 
   benchBatch("schedule create encode", SYNC_CODEC_BATCH_SIZE, () => {
-    return ScheduleCodec.encodeCreate(scheduleRoute, scheduleCron, body);
+    return ScheduleCodec.encodeCreate(routes.schedule, hotpathScheduleCron, body);
   });
 
   benchBatch("stream append encode", SYNC_CODEC_BATCH_SIZE, () => {
@@ -78,7 +74,7 @@ describe("fitz-ts hotpath benchmarks", () => {
   });
 
   benchBatch("rpc call encode", SYNC_CODEC_BATCH_SIZE, (index) => {
-    return RpcCodec.encodeRequest(cycleFixture(rpcCorrelationIds, index), rpcRoute, body);
+    return RpcCodec.encodeRequest(cycleFixture(rpcCorrelationIds, index), routes.rpc, body);
   });
 
   benchBatch("rpc correlation id generation", SYNC_CODEC_BATCH_SIZE, () => {
@@ -86,7 +82,7 @@ describe("fitz-ts hotpath benchmarks", () => {
   });
 
   benchAsync("multiplexer request/response round-trip", async () => {
-    const multiplexer = new Multiplexer();
+    const multiplexer = createMultiplexer();
     multiplexer.setConnected();
 
     for (let index = 0; index < ASYNC_ROUND_TRIP_BATCH_SIZE; index += 1) {
@@ -100,7 +96,7 @@ describe("fitz-ts hotpath benchmarks", () => {
   benchMacro("multiplexer 1k in-flight FIFO drain", async () => {
     let drained: unknown;
     for (let batch = 0; batch < FIFO_DRAIN_BATCH_SIZE; batch += 1) {
-      const multiplexer = new Multiplexer();
+      const multiplexer = createMultiplexer();
       multiplexer.setConnected();
 
       const pending = Array.from({ length: 1000 }, (_, index) =>
@@ -118,7 +114,7 @@ describe("fitz-ts hotpath benchmarks", () => {
   });
 
   benchBatch("frame parser fragmented stream", SYNC_CODEC_BATCH_SIZE, () => {
-    const parser = new FrameParser();
+    const parser = createFrameParser();
     let parsed: unknown;
 
     for (const chunk of parserChunks) {
@@ -129,7 +125,7 @@ describe("fitz-ts hotpath benchmarks", () => {
   });
 
   benchBatch("notice publish frame encode throughput", SYNC_CODEC_BATCH_SIZE, () => {
-    const payload = NoticeCodec.encodePublish(noticeRoute, body);
+    const payload = NoticeCodec.encodePublish(routes.notice, body);
     return FrameCodec.encodeFrame(401, payload);
   });
 });

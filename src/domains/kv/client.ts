@@ -45,14 +45,7 @@ export function createKvClient(connection: KvConnectionPort) {
   };
 }
 
-type KvClientConstructor = {
-  new (connection: KvConnectionPort): KvClient;
-  (connection: KvConnectionPort): KvClient;
-};
-
-export const KvClient: KvClientConstructor = function (connection: KvConnectionPort) {
-  return createKvClient(connection);
-} as unknown as KvClientConstructor;
+export const KvClient = createKvClient;
 
 export type { KvTransaction } from "./transaction";
 export * from "./types";

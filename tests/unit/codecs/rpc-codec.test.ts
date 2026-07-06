@@ -4,7 +4,7 @@
 
 import { describe, it, expect, vi, afterEach } from "vite-plus/test";
 import { RpcCodec } from "../../../src/domains/rpc/codec";
-import { BufferReader, BufferWriter } from "../../../src/core/buffer";
+import { createBufferReader, createBufferWriter } from "../../../src/core/buffer";
 import { ProtocolError } from "../../../src/core/errors";
 import { testData } from "../helpers/test-utils";
 
@@ -24,7 +24,7 @@ describe("RpcCodec", () => {
       const encoded = RpcCodec.encodeRequest(correlationId, route, payload);
 
       // Assert
-      const reader = new BufferReader(encoded);
+      const reader = createBufferReader(encoded);
       expect(reader.readBytes(16)).toEqual(correlationId);
       expect(reader.readString()).toBe(route);
       expect(reader.readU32BE()).toBe(payload.length);
@@ -50,7 +50,7 @@ describe("RpcCodec", () => {
   describe("REQUEST decoding", () => {
     it("should_decode_call_response_with_payload", () => {
       // Arrange
-      const writer = new BufferWriter(256);
+      const writer = createBufferWriter(256);
       writer.writeU8(0); // status = success
       const response = writer.getBuffer();
 
@@ -99,7 +99,7 @@ describe("RpcCodec", () => {
       const encoded = RpcCodec.encodeSubscribeWorker(pattern, 32);
 
       // Assert
-      const reader = new BufferReader(encoded);
+      const reader = createBufferReader(encoded);
       expect(reader.readString()).toBe(pattern);
       expect(reader.readU32BE()).toBe(32);
       expect(reader.isEOF()).toBe(true);
@@ -109,7 +109,7 @@ describe("RpcCodec", () => {
   describe("SUBSCRIBE_WORKER decoding", () => {
     it("should_decode_subscribe_response_with_sub_id", () => {
       // Arrange
-      const writer = new BufferWriter(16);
+      const writer = createBufferWriter(16);
       writer.writeU8(0); // status
       const response = writer.getBuffer();
 
@@ -123,7 +123,7 @@ describe("RpcCodec", () => {
 
   describe("error body decoding", () => {
     it("should_decode_rpc_error_body", () => {
-      const writer = new BufferWriter(64);
+      const writer = createBufferWriter(64);
       writer.writeU8(1);
       writer.writeU32BE(6002);
       writer.writeString("Worker disconnected or unregistered");
@@ -139,7 +139,7 @@ describe("RpcCodec", () => {
     });
 
     it("does not classify malformed or unknown terminal bodies as rpc errors", () => {
-      const unknownCode = new BufferWriter(64);
+      const unknownCode = createBufferWriter(64);
       unknownCode.writeU8(1);
       unknownCode.writeU32BE(7000);
       unknownCode.writeString("application payload");

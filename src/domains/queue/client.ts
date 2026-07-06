@@ -420,14 +420,7 @@ export function createQueueClient(connection: QueueConnectionPort) {
   };
 }
 
-type QueueClientConstructor = {
-  new (connection: QueueConnectionPort): QueueClient;
-  (connection: QueueConnectionPort): QueueClient;
-};
-
-export const QueueClient: QueueClientConstructor = function (connection: QueueConnectionPort) {
-  return createQueueClient(connection);
-} as unknown as QueueClientConstructor;
+export const QueueClient = createQueueClient;
 
 export * from "./types";
 

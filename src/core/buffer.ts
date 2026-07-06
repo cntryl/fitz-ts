@@ -315,14 +315,7 @@ export function createBufferWriter(capacity: number = 4096) {
   };
 }
 
-type BufferWriterConstructor = {
-  new (capacity?: number): BufferWriter;
-  (capacity?: number): BufferWriter;
-};
-
-export const BufferWriter: BufferWriterConstructor = function (capacity = 4096) {
-  return createBufferWriter(capacity);
-} as unknown as BufferWriterConstructor;
+export const BufferWriter = createBufferWriter;
 
 export type BufferReader = ReturnType<typeof createBufferReader>;
 
@@ -470,11 +463,4 @@ export function createBufferReader(buffer: Uint8Array) {
   };
 }
 
-type BufferReaderConstructor = {
-  new (buffer: Uint8Array): BufferReader;
-  (buffer: Uint8Array): BufferReader;
-};
-
-export const BufferReader: BufferReaderConstructor = function (buffer: Uint8Array) {
-  return createBufferReader(buffer);
-} as unknown as BufferReaderConstructor;
+export const BufferReader = createBufferReader;

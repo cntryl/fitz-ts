@@ -73,7 +73,7 @@ export function createLease(
     const data = assertSuccess(response, "EXTEND");
 
     if (data && data.length >= 8) {
-      const reader = new BufferReader(data);
+      const reader = createBufferReader(data);
       currentToken = reader.readU64BE();
     }
 
@@ -156,7 +156,7 @@ export enum LeaseStatus {
 }
 
 // Import needed types for Lease class methods
-import { BufferReader } from "../../core/buffer";
+import { createBufferReader } from "../../core/buffer";
 import { assertSuccess } from "../../protocol/response";
 import { MSG_LEASE_RENEW, MSG_LEASE_RELEASE } from "../../frame/types";
 import { LeaseCodec } from "./codec";

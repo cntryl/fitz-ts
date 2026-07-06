@@ -1,4 +1,4 @@
-import { createDeferred, Deferred } from "./types";
+import { createDeferred, type Deferred } from "./types";
 
 export type Disposable = {
   dispose(): void;

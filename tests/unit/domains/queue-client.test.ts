@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 
-import { BufferWriter } from "../../../src/core/buffer";
-import { QueueClient } from "../../../src/domains/queue/client";
+import { createBufferWriter } from "../../../src/core/buffer";
+import { createQueueClient } from "../../../src/domains/queue/client";
 import {
   MSG_QUEUE_NOTIFY,
   MSG_QUEUE_RESERVE,
@@ -72,7 +72,7 @@ describe("QueueClient reserveWhenAvailable", () => {
       encodeQueueReserveResponse([]),
       encodeQueueReserveResponse([{ id: 1n, token: 2n, body: new Uint8Array([3]) }]),
     );
-    const client = new QueueClient(connection);
+    const client = createQueueClient(connection);
     const iterator = client
       .reserveWhenAvailable("queue://realm/area/resource", {
         leaseSeconds: 30,
@@ -111,7 +111,7 @@ describe("QueueClient reserveWhenAvailable", () => {
         connection.notify();
       }
     };
-    const client = new QueueClient(connection);
+    const client = createQueueClient(connection);
 
     const result = await client
       .reserveWhenAvailable("queue://realm/area/resource", { leaseSeconds: 30 })
@@ -131,7 +131,7 @@ describe("QueueClient reserveWhenAvailable", () => {
       encodeQueueReserveResponse([]),
       encodeQueueReserveResponse([{ id: 1n, token: 2n, body: new Uint8Array([5]) }]),
     );
-    const client = new QueueClient(connection);
+    const client = createQueueClient(connection);
     const iterator = client
       .reserveWhenAvailable("queue://realm/area/resource", { leaseSeconds: 30, batchSize: 10 })
       [Symbol.asyncIterator]();
@@ -160,7 +160,7 @@ describe("QueueClient reserveWhenAvailable", () => {
   it("unsubscribes when the iterator is aborted", async () => {
     const connection = new FakeQueueConnection();
     connection.reserveResponses.push(encodeQueueReserveResponse([]));
-    const client = new QueueClient(connection);
+    const client = createQueueClient(connection);
     const controller = new AbortController();
     const iterator = client
       .reserveWhenAvailable("queue://realm/area/resource", {
@@ -192,7 +192,7 @@ function encodeQueueSubscribeResponse(subId: bigint): Uint8Array {
 function encodeQueueReserveResponse(
   items: Array<{ id: bigint; token: bigint; body: Uint8Array }>,
 ): Uint8Array {
-  const writer = new BufferWriter(64);
+  const writer = createBufferWriter(64);
   writer.writeU8(0);
   writer.writeU32BE(items.length);
   for (const item of items) {
@@ -205,7 +205,7 @@ function encodeQueueReserveResponse(
 }
 
 function encodeQueueNotification(subId: bigint, route: string): Uint8Array {
-  const writer = new BufferWriter(64);
+  const writer = createBufferWriter(64);
   writer.writeU64BE(subId);
   writer.writeRoute(route);
   return writer.getBuffer();

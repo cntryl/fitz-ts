@@ -12,7 +12,7 @@ vi.mock("../../../src/client/connection", () => ({
   createConnection: createConnectionMock,
 }));
 
-import { Client } from "../../../src/client/client";
+import { createClient } from "../../../src/client/client";
 
 class FakeOwnedConnection {
   public state = ConnectionState.Disconnected;
@@ -121,7 +121,7 @@ describe("Client lifecycle ownership", () => {
     });
     createConnectionMock.mockReturnValue(connection);
 
-    const client = new Client({ url: "ws://example.test" });
+    const client = createClient({ url: "ws://example.test" });
     const firstConnect = client.connect();
     const secondConnect = client.connect();
 
@@ -138,7 +138,7 @@ describe("Client lifecycle ownership", () => {
     const connection = new FakeOwnedConnection();
     createConnectionMock.mockReturnValue(connection);
 
-    const client = new Client({ url: "ws://example.test" });
+    const client = createClient({ url: "ws://example.test" });
     await client.connect();
     const kvClient = client.kv();
 
@@ -172,7 +172,7 @@ describe("Client lifecycle ownership", () => {
     const connection = new FakeOwnedConnection();
     createConnectionMock.mockReturnValue(connection);
 
-    const client = new Client({ url: "ws://example.test" });
+    const client = createClient({ url: "ws://example.test" });
     await client.connect();
 
     connection.state = ConnectionState.Reconnecting;
@@ -199,7 +199,7 @@ describe("Client lifecycle ownership", () => {
     });
     createConnectionMock.mockReturnValue(connection);
 
-    const client = new Client({ url: "ws://example.test" });
+    const client = createClient({ url: "ws://example.test" });
     const connect = client.connect();
 
     await client.close();
@@ -214,7 +214,7 @@ describe("Client lifecycle ownership", () => {
     const connection = new FakeOwnedConnection();
     createConnectionMock.mockReturnValue(connection);
 
-    const client = new Client({ url: "ws://example.test" });
+    const client = createClient({ url: "ws://example.test" });
     await client.connect();
 
     connection.state = ConnectionState.Reconnecting;
@@ -252,7 +252,7 @@ describe("Client lifecycle ownership", () => {
     });
     createConnectionMock.mockReturnValue(connection);
 
-    const client = new Client({ url: "ws://example.test" });
+    const client = createClient({ url: "ws://example.test" });
 
     await expect(client.connect()).rejects.toThrow("dial failed");
     await expect(client.connect()).resolves.toBeUndefined();

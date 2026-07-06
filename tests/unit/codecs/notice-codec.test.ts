@@ -4,7 +4,7 @@
 
 import { describe, it, expect } from "vite-plus/test";
 import { NoticeCodec } from "../../../src/domains/notice/codec";
-import { BufferWriter } from "../../../src/core/buffer";
+import { createBufferWriter } from "../../../src/core/buffer";
 import { testData } from "../helpers/test-utils";
 
 describe("NoticeCodec", () => {
@@ -55,7 +55,7 @@ describe("NoticeCodec", () => {
   describe("SUBSCRIBE decoding", () => {
     it("should_decode_subscribe_response_with_sub_id", () => {
       // Arrange
-      const writer = new BufferWriter(16);
+      const writer = createBufferWriter(16);
       writer.writeU8(0); // status = success
       writer.writeU8(1); // has_sub_id = 1
       writer.writeU64BE(333n); // subId
@@ -96,7 +96,7 @@ describe("NoticeCodec", () => {
   describe("NOTIFY decoding", () => {
     it("should_decode_notification_with_route_and_body", () => {
       // Arrange
-      const writer = new BufferWriter(256);
+      const writer = createBufferWriter(256);
       writer.writeU64BE(333n); // subId
       writer.writeString("notice://acme/alerts/cpu");
       writer.writeU32BE(testData('{"cpu": 95.5}').length);
@@ -114,7 +114,7 @@ describe("NoticeCodec", () => {
 
     it("should_decode_notification_with_empty_body", () => {
       // Arrange
-      const writer = new BufferWriter(64);
+      const writer = createBufferWriter(64);
       writer.writeU64BE(333n);
       writer.writeString("notice://test/event");
       writer.writeU32BE(0);
@@ -130,7 +130,7 @@ describe("NoticeCodec", () => {
     });
 
     it("should_reject_notification_with_trailing_bytes", () => {
-      const writer = new BufferWriter(64);
+      const writer = createBufferWriter(64);
       writer.writeU64BE(333n);
       writer.writeString("notice://test/event");
       writer.writeU32BE(0);

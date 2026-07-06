@@ -9,7 +9,7 @@
  * status=1: error, followed by [u32 len][error message]
  */
 
-import { BufferReader } from "../core/buffer";
+import { createBufferReader } from "../core/buffer";
 import { ProtocolError } from "../core/errors";
 
 export interface ParsedResponse {
@@ -30,7 +30,7 @@ export function parseStandardResponse(payload: Uint8Array): ParsedResponse {
     });
   }
 
-  const reader = new BufferReader(payload);
+  const reader = createBufferReader(payload);
   const status = reader.readU8();
 
   if (status === 0) {

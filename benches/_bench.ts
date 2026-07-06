@@ -32,14 +32,10 @@ const asyncOptions = {
   warmupIterations: 3,
 } satisfies BenchOptions;
 
-let consumeSink: unknown;
+let _consumeSink: unknown;
 
 export function consume(value: unknown): void {
-  consumeSink = value;
-}
-
-export function readConsumeSink(): unknown {
-  return consumeSink;
+  _consumeSink = value;
 }
 
 export function benchMicro(name: string, fn: BenchFn, options: BenchOptions = {}): void {

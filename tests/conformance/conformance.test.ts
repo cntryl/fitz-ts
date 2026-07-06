@@ -20,7 +20,7 @@ import { afterAll, describe, expect, it } from "vite-plus/test";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 
-import { Client } from "../../src/client/client.js";
+import { createClient, type Client } from "../../src/client/client.js";
 import type { ClientConfig } from "../../src/core/types.js";
 import { AuthenticationError, TimeoutError } from "../../src/core/errors.js";
 import type { InboundRequest, ResponseWriter } from "../../src/domains/rpc/types.js";
@@ -79,7 +79,7 @@ async function withClient<T>(
   overrides: Partial<ClientConfig>,
   fn: (client: Client) => Promise<T>,
 ): Promise<T> {
-  const client = new Client({
+  const client = createClient({
     url: BROKER_ADDR,
     transport: TRANSPORT,
     tokenProvider: tokenProvider(),
@@ -159,7 +159,7 @@ describe(`Fitz conformance â€” fitz-ts [transport=${TRANSPORT}, auth=${AUTH
     const result = await runScenario("CS-001", "connect success", "P0", async () => {
       const evidence: string[] = [];
 
-      const client = new Client({
+      const client = createClient({
         url: BROKER_ADDR,
         transport: TRANSPORT,
         tokenProvider: tokenProvider(),
@@ -198,7 +198,7 @@ describe(`Fitz conformance â€” fitz-ts [transport=${TRANSPORT}, auth=${AUTH
         // TCP transport with silent CONNECT: auth failure manifests as connection
         // close rather than a typed error on connect(). We accept either a throw
         // or a close that leaves isConnected() == false.
-        const client = new Client({
+        const client = createClient({
           url: brokerAddrFor("tcp", "invalid_signature"),
           transport: "tcp",
           tokenProvider: () => generateInvalidSignatureTestJwt(SECRET, AUDIENCE, TENANT),
@@ -231,7 +231,7 @@ describe(`Fitz conformance â€” fitz-ts [transport=${TRANSPORT}, auth=${AUTH
 
       // For WebSocket, auth failure should surface as AuthenticationError or
       // generic error on connect()
-      const client = new Client({
+      const client = createClient({
         url: brokerAddrFor("ws", "invalid_signature"),
         transport: "ws",
         tokenProvider: () => generateInvalidSignatureTestJwt(SECRET, AUDIENCE, TENANT),
@@ -418,14 +418,14 @@ describe(`Fitz conformance â€” fitz-ts [transport=${TRANSPORT}, auth=${AUTH
     const result = await runScenario("CS-007", "timeout handling", "P0", async () => {
       const evidence: string[] = [];
 
-      const workerClient = new Client({
+      const workerClient = createClient({
         url: BROKER_ADDR,
         transport: TRANSPORT,
         tokenProvider: tokenProvider(),
         timeout: 10000,
       });
 
-      const callerClient = new Client({
+      const callerClient = createClient({
         url: BROKER_ADDR,
         transport: TRANSPORT,
         tokenProvider: tokenProvider(),
@@ -481,14 +481,14 @@ describe(`Fitz conformance â€” fitz-ts [transport=${TRANSPORT}, auth=${AUTH
     const result = await runScenario("CS-008", "caller cancellation", "P0", async () => {
       const evidence: string[] = [];
 
-      const workerClient = new Client({
+      const workerClient = createClient({
         url: BROKER_ADDR,
         transport: TRANSPORT,
         tokenProvider: tokenProvider(),
         timeout: 10000,
       });
 
-      const callerClient = new Client({
+      const callerClient = createClient({
         url: BROKER_ADDR,
         transport: TRANSPORT,
         tokenProvider: tokenProvider(),
@@ -556,14 +556,14 @@ describe(`Fitz conformance â€” fitz-ts [transport=${TRANSPORT}, auth=${AUTH
     const result = await runScenario("CS-009", "disconnect during request", "P1", async () => {
       const evidence: string[] = [];
 
-      const workerClient = new Client({
+      const workerClient = createClient({
         url: BROKER_ADDR,
         transport: TRANSPORT,
         tokenProvider: tokenProvider(),
         timeout: 10000,
       });
 
-      const callerClient = new Client({
+      const callerClient = createClient({
         url: BROKER_ADDR,
         transport: TRANSPORT,
         tokenProvider: tokenProvider(),
@@ -625,7 +625,7 @@ describe(`Fitz conformance â€” fitz-ts [transport=${TRANSPORT}, auth=${AUTH
       const evidence: string[] = [];
 
       // Verify reconnect API is accessible
-      const client = new Client({
+      const client = createClient({
         url: BROKER_ADDR,
         transport: TRANSPORT,
         tokenProvider: tokenProvider(),
@@ -641,7 +641,7 @@ describe(`Fitz conformance â€” fitz-ts [transport=${TRANSPORT}, auth=${AUTH
         await client.close();
         evidence.push("client closed ok");
 
-        const client2 = new Client({
+        const client2 = createClient({
           url: BROKER_ADDR,
           transport: TRANSPORT,
           tokenProvider: tokenProvider(),
@@ -846,7 +846,7 @@ describe(`Fitz conformance â€” fitz-ts [transport=${TRANSPORT}, auth=${AUTH
     const result = await runScenario("CS-015", "shutdown during active work", "P1", async () => {
       const evidence: string[] = [];
 
-      const client = new Client({
+      const client = createClient({
         url: BROKER_ADDR,
         transport: TRANSPORT,
         tokenProvider: tokenProvider(),
@@ -912,7 +912,7 @@ describe(`Fitz conformance â€” fitz-ts [transport=${TRANSPORT}, auth=${AUTH
         await withClient({ timeout: 750, maxInFlightRequests: 16 }, async (client) => {
           const route = uniqueRoute("rpc");
 
-          const workerClient = new Client({
+          const workerClient = createClient({
             url: BROKER_ADDR,
             transport: TRANSPORT,
             tokenProvider: tokenProvider(),

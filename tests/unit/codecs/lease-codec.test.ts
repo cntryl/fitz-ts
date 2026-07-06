@@ -4,7 +4,7 @@
 
 import { describe, it, expect } from "vite-plus/test";
 import { LeaseCodec } from "../../../src/domains/lease/codec";
-import { BufferWriter } from "../../../src/core/buffer";
+import { createBufferWriter } from "../../../src/core/buffer";
 import { ProtocolError } from "../../../src/core/errors";
 import { testData as _testData } from "../helpers/test-utils";
 
@@ -35,7 +35,7 @@ describe("LeaseCodec", () => {
   describe("ACQUIRE decoding", () => {
     it("should_decode_acquire_response_with_token", () => {
       // Arrange
-      const writer = new BufferWriter(32);
+      const writer = createBufferWriter(32);
       writer.writeU8(0); // status = success
       writer.writeU8(0); // response_type = Acquired
       writer.writeU64BE(888n); // token
@@ -101,7 +101,7 @@ describe("LeaseCodec", () => {
   describe("SUBSCRIBE decoding", () => {
     it("should_decode_subscribe_response_with_sub_id", () => {
       // Arrange
-      const writer = new BufferWriter(16);
+      const writer = createBufferWriter(16);
       writer.writeU8(0); // status = success
       writer.writeU64BE(222n); // subId
       const response = writer.getBuffer();
@@ -124,7 +124,7 @@ describe("LeaseCodec", () => {
   describe("QUERY decoding", () => {
     it("should_decode_query_response_with_ttl_remaining_secs", () => {
       // Arrange
-      const writer = new BufferWriter(64);
+      const writer = createBufferWriter(64);
       writer.writeU8(0); // status = success
       writer.writeU8(1); // has_holder = yes
       writer.writeRoute("lease://owner/test");
@@ -146,7 +146,7 @@ describe("LeaseCodec", () => {
   describe("NOTIFY decoding", () => {
     it("should_decode_notification_payload", () => {
       // Arrange
-      const writer = new BufferWriter(32);
+      const writer = createBufferWriter(32);
       writer.writeU64BE(222n); // subId
       writer.writeString("lease://acme/resources/db_connection");
       const payload = writer.getBuffer();

@@ -2,8 +2,8 @@ import { performance } from "node:perf_hooks";
 
 import { describe, expect, it } from "vite-plus/test";
 
-import { Multiplexer } from "../../../src/client/multiplexer";
-import { FrameCodec, FrameParser } from "../../../src/frame/codec";
+import { createMultiplexer } from "../../../src/client/multiplexer";
+import { FrameCodec, createFrameParser } from "../../../src/frame/codec";
 import { KvCodec } from "../../../src/domains/kv/codec";
 import { LeaseCodec } from "../../../src/domains/lease/codec";
 import { NoticeCodec } from "../../../src/domains/notice/codec";
@@ -111,7 +111,7 @@ perfDescribe("fitz-ts hot-path thresholds", () => {
   });
 
   it("keeps the multiplexer hot paths within budget", async () => {
-    const multiplexer = new Multiplexer();
+    const multiplexer = createMultiplexer();
     multiplexer.setConnected();
 
     const roundTripElapsed = await measureAsync(10_000, async () => {
@@ -123,7 +123,7 @@ perfDescribe("fitz-ts hot-path thresholds", () => {
     expect(roundTripElapsed).toBeLessThan(thresholdsMs.multiplexerRoundTrip);
 
     const drainElapsed = await measureAsync(1, async () => {
-      const drainingMux = new Multiplexer();
+      const drainingMux = createMultiplexer();
       drainingMux.setConnected();
 
       const pending = Array.from({ length: 1_000 }, (_, index) =>
@@ -148,7 +148,7 @@ perfDescribe("fitz-ts hot-path thresholds", () => {
     combined.set(frameB, frameA.length);
 
     const parserElapsed = measureSync(10_000, () => {
-      const parser = new FrameParser();
+      const parser = createFrameParser();
       for (let index = 0; index < combined.length; index += 3) {
         parser.parseFrames(combined.subarray(index, Math.min(combined.length, index + 3)));
       }

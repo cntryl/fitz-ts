@@ -13,16 +13,16 @@ import type {
   TokenProvider,
   TransportType,
 } from "../core/types";
-import { Connection, createConnection } from "./connection";
+import { createConnection, type Connection } from "./connection";
 import type { Transport, TransportOptions } from "../transport/types";
 import { ConnectionError } from "../core/errors";
-import { KvClient } from "../domains/kv/client";
-import { QueueClient } from "../domains/queue/client";
-import { RpcClient } from "../domains/rpc/client";
-import { LeaseClient } from "../domains/lease/client";
-import { NoticeClient } from "../domains/notice/client";
-import { StreamClient } from "../domains/stream/client";
-import { ScheduleClient } from "../domains/schedule/client";
+import { createKvClient, type KvClient } from "../domains/kv/client";
+import { createQueueClient, type QueueClient } from "../domains/queue/client";
+import { createRpcClient, type RpcClient } from "../domains/rpc/client";
+import { createLeaseClient, type LeaseClient } from "../domains/lease/client";
+import { createNoticeClient, type NoticeClient } from "../domains/notice/client";
+import { createStreamClient, type StreamClient } from "../domains/stream/client";
+import { createScheduleClient, type ScheduleClient } from "../domains/schedule/client";
 import { throwIfAborted, waitForSharedPromise } from "./internal/async";
 
 type DefaultedClientConfigKeys =
@@ -137,13 +137,13 @@ export function createClientWithTransport<TConfig extends ClientConfig>(
   const domainFactories: {
     [K in DomainKey]: (connection: Connection) => DomainClients[K];
   } = {
-    kv: (activeConnection) => new KvClient(activeConnection),
-    queue: (activeConnection) => new QueueClient(activeConnection),
-    rpc: (activeConnection) => new RpcClient(activeConnection),
-    lease: (activeConnection) => new LeaseClient(activeConnection),
-    notice: (activeConnection) => new NoticeClient(activeConnection),
-    stream: (activeConnection) => new StreamClient(activeConnection),
-    schedule: (activeConnection) => new ScheduleClient(activeConnection),
+    kv: (activeConnection) => createKvClient(activeConnection),
+    queue: (activeConnection) => createQueueClient(activeConnection),
+    rpc: (activeConnection) => createRpcClient(activeConnection),
+    lease: (activeConnection) => createLeaseClient(activeConnection),
+    notice: (activeConnection) => createNoticeClient(activeConnection),
+    stream: (activeConnection) => createStreamClient(activeConnection),
+    schedule: (activeConnection) => createScheduleClient(activeConnection),
   };
 
   const resolveTokenProvider = (): TokenProvider => {
@@ -355,21 +355,4 @@ export function createClientWithTransport<TConfig extends ClientConfig>(
     getUrl,
     getState,
   } satisfies Client<TConfig>;
-}
-
-export type ClientConstructor<
-  TConfig extends ClientConfig = ClientConfig,
-  TClient extends Client<TConfig> = Client<TConfig>,
-> = {
-  new (config: TConfig): TClient;
-  (config: TConfig): TClient;
-};
-
-export function createClientConstructor<
-  TConfig extends ClientConfig,
-  TClient extends Client<TConfig> = Client<TConfig>,
->(createClient: (config: TConfig) => TClient): ClientConstructor<TConfig, TClient> {
-  return function (config: TConfig) {
-    return createClient(config);
-  } as unknown as ClientConstructor<TConfig, TClient>;
 }

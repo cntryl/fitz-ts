@@ -2,13 +2,13 @@
  * Test utilities and helpers
  */
 
-import { BufferWriter, BufferReader } from "../../../src/core/buffer";
+import { createBufferWriter, createBufferReader } from "../../../src/core/buffer";
 
 /**
  * Build a simple success response with u64 value
  */
 export function buildU64Response(value: bigint): Uint8Array {
-  const writer = new BufferWriter(16);
+  const writer = createBufferWriter(16);
   writer.writeU8(0); // status = success
   writer.writeU64BE(value);
   return writer.getBuffer();
@@ -18,7 +18,7 @@ export function buildU64Response(value: bigint): Uint8Array {
  * Build a simple success response with string value
  */
 export function buildStringResponse(value: string): Uint8Array {
-  const writer = new BufferWriter(256);
+  const writer = createBufferWriter(256);
   writer.writeU8(0); // status = success
   writer.writeString(value);
   return writer.getBuffer();
@@ -28,7 +28,7 @@ export function buildStringResponse(value: string): Uint8Array {
  * Build a simple success response with bytes value
  */
 export function buildBytesResponse(value: Uint8Array): Uint8Array {
-  const writer = new BufferWriter(value.length + 10);
+  const writer = createBufferWriter(value.length + 10);
   writer.writeU8(0); // status = success
   writer.writeBytes(value);
   return writer.getBuffer();
@@ -63,7 +63,7 @@ export function expectSuccess(response: Uint8Array): Uint8Array {
  * Encode a message frame: [msgType u16][length u16][payload]
  */
 export function encodeMessageFrame(msgType: number, payload: Uint8Array): Uint8Array {
-  const writer = new BufferWriter(4 + payload.length);
+  const writer = createBufferWriter(4 + payload.length);
   writer.writeU16BE(msgType);
   writer.writeU16BE(payload.length);
   writer.writeBytes(payload);
@@ -75,7 +75,7 @@ export function encodeMessageFrame(msgType: number, payload: Uint8Array): Uint8A
  */
 export function decodeMessageFrame(frame: Uint8Array): [number, Uint8Array] {
   if (frame.length < 4) throw new Error("Frame too short");
-  const reader = new BufferReader(frame);
+  const reader = createBufferReader(frame);
   const msgType = reader.readU16BE();
   const length = reader.readU16BE();
   if (4 + length !== frame.length) {

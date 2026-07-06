@@ -1,13 +1,13 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import {
-  BufferReader,
-  BufferWriter,
+  createBufferReader,
+  createBufferWriter,
   writeU64BEAt,
   writeU64BENumberAt,
 } from "../../../src/core/buffer";
 import { CodecError } from "../../../src/core/errors";
-import { FrameCodec, FrameParser } from "../../../src/frame/codec";
+import { FrameCodec, createFrameParser } from "../../../src/frame/codec";
 import {
   MSG_CONNECT,
   MSG_KV_BEGIN,
@@ -97,7 +97,7 @@ describe("protocol primitives", () => {
   });
 
   it("parses streamed frames across chunk boundaries", () => {
-    const parser = new FrameParser();
+    const parser = createFrameParser();
     const first = FrameCodec.encodeFrame(MSG_KV_BEGIN, new Uint8Array([1, 2]));
     const second = FrameCodec.encodeFrame(MSG_QUEUE_NOTIFY, new Uint8Array([3, 4, 5]));
     const combined = new Uint8Array(first.length + second.length);
@@ -115,7 +115,7 @@ describe("protocol primitives", () => {
   });
 
   it("parses frames with message type 0", () => {
-    const parser = new FrameParser();
+    const parser = createFrameParser();
     const encoded = FrameCodec.encodeFrame(0, new Uint8Array([7, 8, 9]));
     const parsed = parser.parseFrames(encoded);
 
@@ -123,7 +123,7 @@ describe("protocol primitives", () => {
   });
 
   it("parses escaped message type when header arrives one byte at a time", () => {
-    const parser = new FrameParser();
+    const parser = createFrameParser();
     const payload = new Uint8Array([4, 5, 6]);
     const encoded = FrameCodec.encodeFrame(MSG_SCHEDULE_NOTIFY, payload);
 
@@ -137,7 +137,7 @@ describe("protocol primitives", () => {
   });
 
   it("reports pending partial frame state", () => {
-    const parser = new FrameParser();
+    const parser = createFrameParser();
     const encoded = FrameCodec.encodeFrame(MSG_KV_BEGIN, new Uint8Array([1, 2, 3]));
 
     expect(parser.parseFrames(encoded.slice(0, 4))).toEqual([]);
@@ -160,7 +160,7 @@ describe("protocol primitives", () => {
   });
 
   it("round-trips primitive buffer types and optionals", () => {
-    const writer = new BufferWriter();
+    const writer = createBufferWriter();
     writer.writeU8(7);
     writer.writeU16BE(0x1234);
     writer.writeU32BE(0x12345678);
@@ -174,7 +174,7 @@ describe("protocol primitives", () => {
     writer.writeOptionalBytes(new Uint8Array([4, 5]));
     writer.writeOptionalBytes(undefined);
 
-    const reader = new BufferReader(writer.getBuffer());
+    const reader = createBufferReader(writer.getBuffer());
     expect(reader.readU8()).toBe(7);
     expect(reader.readU16BE()).toBe(0x1234);
     expect(reader.readU32BE()).toBe(0x12345678);
@@ -200,7 +200,7 @@ describe("protocol primitives", () => {
       expect(writeU64BENumberAt(actual, 0, value)).toBe(8);
       expect(actual).toEqual(expected);
 
-      const writer = new BufferWriter(8);
+      const writer = createBufferWriter(8);
       writer.writeU64BENumber(value);
       expect(writer.getBuffer()).toEqual(expected);
     }
@@ -215,13 +215,13 @@ describe("protocol primitives", () => {
   });
 
   it("rejects truncated primitive reads", () => {
-    const reader = new BufferReader(new Uint8Array([0x12]));
+    const reader = createBufferReader(new Uint8Array([0x12]));
 
     expect(() => reader.readU16BE()).toThrow("Buffer overflow");
   });
 
   it("rejects truncated string contents", () => {
-    const reader = new BufferReader(new Uint8Array([0x00, 0x00, 0x00, 0x05, 0x68, 0x69]));
+    const reader = createBufferReader(new Uint8Array([0x00, 0x00, 0x00, 0x05, 0x68, 0x69]));
 
     expect(() => reader.readString()).toThrow("Buffer overflow");
   });

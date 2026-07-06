@@ -218,14 +218,7 @@ export function createNoticeClient(connection: NoticeConnectionPort) {
   };
 }
 
-type NoticeClientConstructor = {
-  new (connection: NoticeConnectionPort): NoticeClient;
-  (connection: NoticeConnectionPort): NoticeClient;
-};
-
-export const NoticeClient: NoticeClientConstructor = function (connection: NoticeConnectionPort) {
-  return createNoticeClient(connection);
-} as unknown as NoticeClientConstructor;
+export const NoticeClient = createNoticeClient;
 
 export * from "./types";
 

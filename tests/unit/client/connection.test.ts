@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 
-import { Connection } from "../../../src/client/connection";
+import { createConnection, type Connection } from "../../../src/client/connection";
 import type {
   FitzLifecycleEvent,
   FitzLogger,
@@ -8,9 +8,9 @@ import type {
   FitzSpan,
   FitzTracer,
 } from "../../../src/core/types";
-import { BufferWriter } from "../../../src/core/buffer";
+import { createBufferWriter } from "../../../src/core/buffer";
 import { AuthenticationError, RequestQueueFullError } from "../../../src/core/errors";
-import { NoticeClient } from "../../../src/domains/notice/client";
+import { createNoticeClient } from "../../../src/domains/notice/client";
 import { FrameCodec } from "../../../src/frame/codec";
 import { MSG_CONNECT, MSG_NOTICE_NOTIFY, MSG_NOTICE_SUBSCRIBE } from "../../../src/frame/types";
 import type { Transport } from "../../../src/transport/types";
@@ -202,7 +202,7 @@ function encodeNoticeSubscribeResponse(subId: bigint): Uint8Array {
 }
 
 function encodeNoticeNotification(subId: bigint, route: string, body: Uint8Array): Uint8Array {
-  const writer = new BufferWriter(128);
+  const writer = createBufferWriter(128);
   writer.writeU64BE(subId);
   writer.writeString(route);
   writer.writeU32BE(body.length);
@@ -238,7 +238,7 @@ describe("Connection", () => {
   it("authenticates using the token provider and sends CONNECT first", async () => {
     const tokenProvider = vi.fn(async () => "jwt-token");
     const transport = new FakeTransport();
-    const connection = new Connection(() => transport, tokenProvider, {
+    const connection = createConnection(() => transport, tokenProvider, {
       authSettleDelayMs: 0,
     });
 
@@ -254,7 +254,7 @@ describe("Connection", () => {
 
   it("supports anonymous mode with an empty token", async () => {
     const transport = new FakeTransport();
-    const connection = new Connection(
+    const connection = createConnection(
       () => transport,
       () => "",
       {
@@ -277,7 +277,7 @@ describe("Connection", () => {
       releaseConnect = resolve;
     });
     const factory = vi.fn<() => Transport>().mockReturnValue(transport);
-    const connection = new Connection(factory, async () => "jwt-token", {
+    const connection = createConnection(factory, async () => "jwt-token", {
       authSettleDelayMs: 0,
     });
 
@@ -302,7 +302,7 @@ describe("Connection", () => {
       releaseConnect = resolve;
     });
     const factory = vi.fn<() => Transport>().mockReturnValue(transport);
-    const connection = new Connection(factory, async () => "jwt-token", {
+    const connection = createConnection(factory, async () => "jwt-token", {
       authSettleDelayMs: 0,
     });
 
@@ -328,7 +328,7 @@ describe("Connection", () => {
     const tokenProvider = vi.fn(async () => "jwt-token");
     const restore = vi.fn(async () => undefined);
 
-    const connection = new Connection(factory, tokenProvider, {
+    const connection = createConnection(factory, tokenProvider, {
       authSettleDelayMs: 0,
       reconnect: {
         enabled: true,
@@ -362,7 +362,7 @@ describe("Connection", () => {
       .mockReturnValueOnce(third);
     let restoreAttempts = 0;
 
-    const connection = new Connection(factory, async () => "jwt-token", {
+    const connection = createConnection(factory, async () => "jwt-token", {
       authSettleDelayMs: 0,
       reconnect: {
         enabled: true,
@@ -396,7 +396,7 @@ describe("Connection", () => {
     const second = new FakeTransport();
     const factory = vi.fn<() => Transport>().mockReturnValueOnce(first).mockReturnValueOnce(second);
 
-    const connection = new Connection(factory, async () => "jwt-token", {
+    const connection = createConnection(factory, async () => "jwt-token", {
       authSettleDelayMs: 1,
       reconnect: {
         enabled: true,
@@ -432,7 +432,7 @@ describe("Connection", () => {
       releaseConnect = resolve;
     });
 
-    const connection = new Connection(factory, async () => "jwt-token", {
+    const connection = createConnection(factory, async () => "jwt-token", {
       authSettleDelayMs: 0,
       reconnect: {
         enabled: true,
@@ -477,7 +477,7 @@ describe("Connection", () => {
       releaseReconnectConnect = resolve;
     });
 
-    const connection = new Connection(factory, async () => "jwt-token", {
+    const connection = createConnection(factory, async () => "jwt-token", {
       authSettleDelayMs: 0,
       reconnect: {
         enabled: true,
@@ -514,7 +514,7 @@ describe("Connection", () => {
     const second = new FakeTransport();
     const factory = vi.fn<() => Transport>().mockReturnValueOnce(first).mockReturnValueOnce(second);
 
-    const connection = new Connection(factory, async () => "", {
+    const connection = createConnection(factory, async () => "", {
       authSettleDelayMs: 0,
       reconnect: {
         enabled: true,
@@ -523,7 +523,7 @@ describe("Connection", () => {
         maxBackoffMs: 0,
       },
     });
-    const notice = new NoticeClient(connection);
+    const notice = createNoticeClient(connection);
     const received: string[] = [];
 
     await connection.connect();
@@ -578,7 +578,7 @@ describe("Connection", () => {
 
   it("bounds concurrent outbound requests to the configured limit", async () => {
     const transport = new FakeTransport();
-    const connection = new Connection(
+    const connection = createConnection(
       () => transport,
       async () => "",
       {
@@ -611,7 +611,7 @@ describe("Connection", () => {
   it("records request gate saturation while preserving queue full errors", async () => {
     const transport = new FakeTransport();
     const meter = new FakeMeter();
-    const connection = new Connection(
+    const connection = createConnection(
       () => transport,
       async () => "",
       {
@@ -650,7 +650,7 @@ describe("Connection", () => {
     const transport = new FakeTransport();
     const meter = new FakeMeter();
     const log = vi.fn();
-    const connection = new Connection(
+    const connection = createConnection(
       () => transport,
       async () => "",
       {
@@ -709,7 +709,7 @@ describe("Connection", () => {
   it("exposes the CONNECTED to AUTHENTICATING to AUTHENTICATED transition sequence", async () => {
     const transport = new FakeTransport();
     const events: FitzLifecycleEvent[] = [];
-    const connection = new Connection(
+    const connection = createConnection(
       () => transport,
       () => "",
       {
@@ -740,7 +740,7 @@ describe("Connection", () => {
     let restoreResolved = false;
     let stateDuringRestore: string | null = null;
 
-    const connection = new Connection(factory, async () => "jwt-token", {
+    const connection = createConnection(factory, async () => "jwt-token", {
       authSettleDelayMs: 0,
       reconnect: {
         enabled: true,
@@ -773,7 +773,7 @@ describe("Connection", () => {
     const first = new FakeTransport();
     const second = new FakeTransport();
     const factory = vi.fn<() => Transport>().mockReturnValueOnce(first).mockReturnValueOnce(second);
-    const connection = new Connection(factory, async () => "", {
+    const connection = createConnection(factory, async () => "", {
       authSettleDelayMs: 0,
       heartbeat: {
         enabled: false,
@@ -803,7 +803,7 @@ describe("Connection", () => {
   it("transitions to CLOSED and does not reconnect after auth rejection", async () => {
     const transport = new FakeTransport([new Error("connect failed: invalid jwt")]);
     const factory = vi.fn<() => Transport>().mockReturnValue(transport);
-    const connection = new Connection(factory, async () => "bad-token", {
+    const connection = createConnection(factory, async () => "bad-token", {
       authSettleDelayMs: 50,
       reconnect: {
         enabled: true,
@@ -823,7 +823,7 @@ describe("Connection", () => {
     const second = new FakeTransport();
     const events: FitzLifecycleEvent[] = [];
     const factory = vi.fn<() => Transport>().mockReturnValueOnce(first).mockReturnValueOnce(second);
-    const connection = new Connection(factory, async () => "jwt-token", {
+    const connection = createConnection(factory, async () => "jwt-token", {
       authSettleDelayMs: 0,
       reconnect: {
         enabled: true,
@@ -857,7 +857,7 @@ describe("Connection", () => {
     const first = new FakeTransport();
     const second = new FakeTransport();
     const factory = vi.fn<() => Transport>().mockReturnValueOnce(first).mockReturnValueOnce(second);
-    const connection = new Connection(factory, async () => "jwt-token", {
+    const connection = createConnection(factory, async () => "jwt-token", {
       authSettleDelayMs: 0,
       reconnect: {
         enabled: true,
@@ -885,7 +885,7 @@ describe("Connection", () => {
     const log = vi.fn();
     const logger: FitzLogger = { log };
 
-    const connection = new Connection(
+    const connection = createConnection(
       () => transport,
       () => "",
       {
@@ -922,7 +922,7 @@ describe("Connection", () => {
     const meter = new FakeMeter();
     const events: FitzLifecycleEvent[] = [];
 
-    const connection = new Connection(factory, async () => "jwt-token", {
+    const connection = createConnection(factory, async () => "jwt-token", {
       authSettleDelayMs: 0,
       reconnect: {
         enabled: true,
@@ -963,7 +963,7 @@ describe("Connection", () => {
     const transport = new FakeTransport();
     const tracer = new FakeTracer();
     const meter = new FakeMeter();
-    const connection = new Connection(
+    const connection = createConnection(
       () => transport,
       () => "",
       {
@@ -1002,7 +1002,7 @@ describe("Connection", () => {
     const transport = new FailingSendTransport(failure);
     const log = vi.fn();
     const logger: FitzLogger = { log };
-    const connection = new Connection(
+    const connection = createConnection(
       () => transport,
       () => "",
       {
@@ -1056,7 +1056,7 @@ describe("Connection", () => {
       releaseSend = () => resolve();
     });
     const transport = new FakeTransport();
-    const connection = new Connection(
+    const connection = createConnection(
       () => transport,
       () => "",
       {
@@ -1081,7 +1081,7 @@ describe("Connection", () => {
 
   it("rejects an in-flight request when the caller aborts", async () => {
     const transport = new FakeTransport();
-    const connection = new Connection(
+    const connection = createConnection(
       () => transport,
       () => "",
       {
@@ -1106,7 +1106,7 @@ describe("Connection", () => {
 
   it("aborts connect when the signal is canceled during auth settle", async () => {
     const transport = new FakeTransport();
-    const connection = new Connection(
+    const connection = createConnection(
       () => transport,
       () => "",
       {
@@ -1128,7 +1128,7 @@ describe("Connection", () => {
     vi.useFakeTimers();
     try {
       const transport = new FakeTransport();
-      const connection = new Connection(
+      const connection = createConnection(
         () => transport,
         () => "",
         {
@@ -1160,7 +1160,7 @@ describe("Connection", () => {
     vi.useFakeTimers();
     try {
       const transport = new FakeTransport();
-      const connection = new Connection(
+      const connection = createConnection(
         () => transport,
         () => "",
         {
@@ -1200,7 +1200,7 @@ describe("Connection", () => {
         .fn<() => Transport>()
         .mockReturnValueOnce(first)
         .mockReturnValueOnce(second);
-      const connection = new Connection(factory, () => "", {
+      const connection = createConnection(factory, () => "", {
         authSettleDelayMs: 0,
         heartbeat: {
           enabled: true,
@@ -1236,7 +1236,7 @@ describe("Connection", () => {
     const transport = new FakeTransport();
     const log = vi.fn();
     const logger: FitzLogger = { log };
-    const connection = new Connection(
+    const connection = createConnection(
       () => transport,
       () => "",
       {
@@ -1287,7 +1287,7 @@ describe("Connection", () => {
       const transport = new FakeTransport();
       const log = vi.fn();
       const logger: FitzLogger = { log };
-      const connection = new Connection(
+      const connection = createConnection(
         () => transport,
         () => "",
         {
@@ -1339,7 +1339,7 @@ describe("Connection", () => {
 
   it("fires disconnect listeners when close is called", async () => {
     const transport = new FakeTransport();
-    const connection = new Connection(
+    const connection = createConnection(
       () => transport,
       () => "",
       {

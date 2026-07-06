@@ -1,9 +1,9 @@
 import { describe } from "vitest";
 import { QueueCodec } from "../../src/domains/queue/codec";
 import { SYNC_CODEC_BATCH_SIZE, benchBatch } from "../_bench";
-import { encoder, routes } from "../_shared";
+import { payloads, routes } from "../_shared";
 
-const body = encoder.encode("queue-payload");
+const body = payloads.queue;
 
 describe("fitz-ts queue benchmarks", () => {
   benchBatch("queue enqueue encode", SYNC_CODEC_BATCH_SIZE, () => {

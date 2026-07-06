@@ -4,7 +4,7 @@
 
 import { describe, it, expect } from "vite-plus/test";
 import { ScheduleCodec } from "../../../src/domains/schedule/codec";
-import { BufferWriter } from "../../../src/core/buffer";
+import { createBufferWriter } from "../../../src/core/buffer";
 import { testData } from "../helpers/test-utils";
 
 describe("ScheduleCodec", () => {
@@ -39,7 +39,7 @@ describe("ScheduleCodec", () => {
   describe("CREATE decoding", () => {
     it("should_decode_create_response_with_schedule_id", () => {
       // Arrange
-      const writer = new BufferWriter(64);
+      const writer = createBufferWriter(64);
       writer.writeU8(1); // has_schedule_id
       writer.writeString("schedule_id_12345");
       const response = writer.getBuffer();
@@ -97,7 +97,7 @@ describe("ScheduleCodec", () => {
   describe("LIST decoding", () => {
     it("should_decode_list_response_with_single_entry", () => {
       // Arrange
-      const writer = new BufferWriter(128);
+      const writer = createBufferWriter(128);
       writer.writeU64BE(1n); // totalCount = 1
       // Entry 1
       writer.writeU8(1); // hasEntry = 1
@@ -123,7 +123,7 @@ describe("ScheduleCodec", () => {
 
     it("should_decode_list_response_empty", () => {
       // Arrange
-      const writer = new BufferWriter(16);
+      const writer = createBufferWriter(16);
       writer.writeU64BE(0n); // totalCount
       writer.writeU8(0); // hasEntry = 0 (no entries)
       const response = writer.getBuffer();
@@ -153,7 +153,7 @@ describe("ScheduleCodec", () => {
   describe("SUBSCRIBE decoding", () => {
     it("should_decode_subscribe_response_with_sub_id", () => {
       // Arrange
-      const writer = new BufferWriter(16);
+      const writer = createBufferWriter(16);
       writer.writeU8(1); // has_sub_id
       writer.writeU64BE(444n); // subId
       const response = writer.getBuffer();
@@ -175,7 +175,7 @@ describe("ScheduleCodec", () => {
   describe("NOTIFY decoding", () => {
     it("should_decode_schedule_fire_notification_with_sub_id", () => {
       // Arrange
-      const writer = new BufferWriter(256);
+      const writer = createBufferWriter(256);
       writer.writeU64BE(444n); // subId
       writer.writeU32BE(testData('{"execution_id": "exec_123"}').length);
       writer.writeBytes(testData('{"execution_id": "exec_123"}'));
@@ -190,7 +190,7 @@ describe("ScheduleCodec", () => {
     });
 
     it("should_reject_schedule_fire_notification_without_sub_id", () => {
-      const writer = new BufferWriter(256);
+      const writer = createBufferWriter(256);
       writer.writeU32BE(testData('{"execution_id": "exec_456"}').length);
       writer.writeBytes(testData('{"execution_id": "exec_456"}'));
 
@@ -200,7 +200,7 @@ describe("ScheduleCodec", () => {
     });
 
     it("should_reject_schedule_fire_notification_with_trailing_bytes", () => {
-      const writer = new BufferWriter(256);
+      const writer = createBufferWriter(256);
       writer.writeU64BE(444n);
       writer.writeU32BE(0);
       writer.writeU8(0xff);

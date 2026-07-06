@@ -80,6 +80,7 @@ export class ScheduleError extends Error {
     super(message);
     this.name = "ScheduleError";
     this.code = code;
+    Object.setPrototypeOf(this, ScheduleError.prototype);
   }
 }
 

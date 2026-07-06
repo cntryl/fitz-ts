@@ -47,7 +47,7 @@ import {
   TransportError,
 } from "../../core/errors";
 import { ConnectionState } from "../../core/types";
-import { BufferWriter, readU128BEAt, utf8Encoder } from "../../core/buffer";
+import { createBufferWriter, readU128BEAt, utf8Encoder } from "../../core/buffer";
 import { isConcreteRouteShape } from "../_routes";
 import { restoreMapEntriesAtomically } from "../internal/restore";
 
@@ -311,15 +311,6 @@ function createRpcIterator(
 }
 
 export type RpcClient = ReturnType<typeof createRpcClient>;
-
-type RpcClientConstructor = {
-  new (connection: RpcConnectionPort): RpcClient;
-  (connection: RpcConnectionPort): RpcClient;
-};
-
-export const RpcClient: RpcClientConstructor = function (connection: RpcConnectionPort) {
-  return createRpcClient(connection);
-} as unknown as RpcClientConstructor;
 
 export function createRpcClient(connection: RpcConnectionPort) {
   const { requestFrame, requestReconnectFrame } = createDomainClient(connection);
@@ -586,10 +577,12 @@ export function createRpcClient(connection: RpcConnectionPort) {
   };
 }
 
+export const RpcClient = createRpcClient;
+
 export * from "./types";
 
 function encodeRpcErrorBody(code: number, message: string): Uint8Array {
-  const writer = new BufferWriter(64);
+  const writer = createBufferWriter(64);
   writer.writeU8(1);
   writer.writeU32BE(code);
   writer.writeString(message);

@@ -4,7 +4,7 @@
  */
 
 import {
-  BufferReader,
+  createBufferReader,
   getRouteEncoding,
   writeU64BEAt,
   writeU64BENumberAt,
@@ -45,7 +45,7 @@ export const LeaseCodec = {
       );
     }
 
-    const reader = new BufferReader(payload);
+    const reader = createBufferReader(payload);
     const status = reader.readU8();
     if (status !== 0) {
       throw new ProtocolError(`ACQUIRE failed with status ${status}`, status, {
@@ -116,7 +116,7 @@ export const LeaseCodec = {
    * Held: [u8 has_holder=1][string owner_id][u64 ttl_remaining_secs][u32 pending_waiters]
    */
   decodeQueryResponse(payload: Uint8Array): QueryResponse {
-    const reader = new BufferReader(payload);
+    const reader = createBufferReader(payload);
     const status = reader.readU8();
     if (status !== 0) {
       return { status };
@@ -165,7 +165,7 @@ export const LeaseCodec = {
       );
     }
 
-    const reader = new BufferReader(payload);
+    const reader = createBufferReader(payload);
     const status = reader.readU8();
     if (status !== 0) {
       return { status };
@@ -192,7 +192,7 @@ export const LeaseCodec = {
       return { status: 0 };
     }
 
-    const reader = new BufferReader(payload);
+    const reader = createBufferReader(payload);
     return { status: reader.readU8() };
   },
 
@@ -204,7 +204,7 @@ export const LeaseCodec = {
     subId: bigint;
     route: string;
   } {
-    const reader = new BufferReader(payload);
+    const reader = createBufferReader(payload);
     const subId = reader.readU64BE();
     const route = reader.readRoute();
 

@@ -14,7 +14,7 @@ export type TaskGroupOptions = {
   readonly run: (ctx: TaskContext) => Promise<void>;
 };
 
-import { createDeferred, Deferred } from "./types";
+import { createDeferred, type Deferred } from "./types";
 
 export type TaskGroup = ReturnType<typeof createTaskGroup>;
 

@@ -1,27 +1,25 @@
 import { describe } from "vitest";
-import { FrameCodec, FrameParser } from "../../src/frame/codec";
+import { FrameCodec, createFrameParser } from "../../src/frame/codec";
 import { KvCodec } from "../../src/domains/kv/codec";
 import { NoticeCodec } from "../../src/domains/notice/codec";
 import { QueueCodec } from "../../src/domains/queue/codec";
 import { StreamCodec } from "../../src/domains/stream/codec";
 import { COMPOSITE_SYNC_BATCH_SIZE, benchBatch } from "../_bench";
-import { encoder, routes, buildFrameBatch } from "../_shared";
+import { benchKey, buildFrameBatch, payloads, routes, streamMetadata } from "../_shared";
 
-const body = encoder.encode("system-payload");
-const metadata = encoder.encode("meta");
-const key = encoder.encode("bench-key");
+const body = payloads.system;
 
 describe("fitz-ts protocol benchmarks", () => {
   benchBatch("frame batch encode + parse", COMPOSITE_SYNC_BATCH_SIZE, () => {
     const noticePayload = NoticeCodec.encodePublish(routes.notice, body);
     const queuePayload = QueueCodec.encodeEnqueue(routes.queue, body);
-    const streamPayload = StreamCodec.encodeBegin(routes.stream, metadata);
+    const streamPayload = StreamCodec.encodeBegin(routes.stream, streamMetadata);
     const frames = [
       FrameCodec.encodeFrame(401, noticePayload),
       FrameCodec.encodeFrame(402, queuePayload),
       FrameCodec.encodeFrame(403, streamPayload),
     ];
-    const parser = new FrameParser();
+    const parser = createFrameParser();
     return parser.parseFrames(buildFrameBatch(frames));
   });
 
@@ -32,7 +30,7 @@ describe("fitz-ts protocol benchmarks", () => {
 
   benchBatch("mixed payload encode batch", COMPOSITE_SYNC_BATCH_SIZE, () => {
     const noticePayload = NoticeCodec.encodePublish(routes.notice, body);
-    const kvPayload = KvCodec.encodeGet(42n, routes.kv, key);
+    const kvPayload = KvCodec.encodeGet(42n, routes.kv, benchKey);
     FrameCodec.encodeFrame(401, noticePayload);
     return FrameCodec.encodeFrame(102, kvPayload);
   });

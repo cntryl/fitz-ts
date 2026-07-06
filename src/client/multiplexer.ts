@@ -8,7 +8,13 @@
  * - No correlation IDs for most operations (except RPC streaming)
  */
 
-import { Deferred, ConnectionState, FitzMeter, FitzTracer } from "../core/types";
+import {
+  ConnectionState,
+  createDeferred,
+  type Deferred,
+  type FitzMeter,
+  type FitzTracer,
+} from "../core/types";
 import { ConnectionError, TimeoutError } from "../core/errors";
 
 export interface MultiplexerObservability {
@@ -306,7 +312,7 @@ export function createMultiplexer(observability: MultiplexerObservability = {}) 
       return Promise.reject(error);
     }
 
-    const deferred = Deferred<Uint8Array>();
+    const deferred = createDeferred<Uint8Array>();
     let settled = false;
     let onAbort: (() => void) | undefined;
 
@@ -633,15 +639,7 @@ export function createMultiplexer(observability: MultiplexerObservability = {}) 
   };
 }
 
-interface MultiplexerConstructor {
-  new (observability?: MultiplexerObservability): Multiplexer;
-}
-
-export const Multiplexer: MultiplexerConstructor = function (
-  observability: MultiplexerObservability = {},
-) {
-  return createMultiplexer(observability);
-} as unknown as MultiplexerConstructor;
+export const Multiplexer = createMultiplexer;
 
 function abortError(): Error {
   const error = new Error("The operation was aborted");

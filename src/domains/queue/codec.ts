@@ -3,12 +3,13 @@
  */
 
 import {
-  BufferReader,
+  createBufferReader,
   getRouteEncoding,
   utf8Decoder,
   writeU32BEAt,
   writeU64BEAt,
   writeU64BENumberAt,
+  type BufferReader,
 } from "../../core/buffer";
 import {
   QueueEnqueueResponse,
@@ -50,7 +51,7 @@ export const QueueCodec = {
    * Payload: [status: u8][message_id: u64]
    */
   decodeEnqueueResponse(payload: Uint8Array): QueueEnqueueResponse {
-    const reader = new BufferReader(payload);
+    const reader = createBufferReader(payload);
     const status = reader.readU8();
     if (status !== 0) {
       return { status, ...this.decodeErrorResponse(reader) };
@@ -91,7 +92,7 @@ export const QueueCodec = {
    * Payload: [status: u8][lease_count: u32]([message_id: u64][lease_token: u64][body_len: u32][body: bytes] ...)
    */
   decodeReserveResponse(payload: Uint8Array): QueueReserveResponse {
-    const reader = new BufferReader(payload);
+    const reader = createBufferReader(payload);
     const status = reader.readU8();
 
     if (status !== 0) {
@@ -138,7 +139,7 @@ export const QueueCodec = {
    * Payload: [status: u8]
    */
   decodeCompleteResponse(payload: Uint8Array): QueueCompleteResponse {
-    const reader = new BufferReader(payload);
+    const reader = createBufferReader(payload);
     const status = reader.readU8();
     if (status !== 0) {
       return { status, ...this.decodeErrorResponse(reader) };
@@ -174,7 +175,7 @@ export const QueueCodec = {
    * Payload: [status: u8]
    */
   decodeExtendResponse(payload: Uint8Array): QueueExtendResponse {
-    const reader = new BufferReader(payload);
+    const reader = createBufferReader(payload);
     const status = reader.readU8();
     if (status !== 0) {
       return { status, ...this.decodeErrorResponse(reader) };
@@ -196,7 +197,7 @@ export const QueueCodec = {
    * Payload: [status: u8][sub_id: u64]
    */
   decodeSubscribeResponse(payload: Uint8Array): QueueSubscribeResponse {
-    const reader = new BufferReader(payload);
+    const reader = createBufferReader(payload);
     const status = reader.readU8();
     if (status !== 0) {
       return { status, ...this.decodeErrorResponse(reader) };
@@ -233,7 +234,7 @@ export const QueueCodec = {
    * Payload: [status: u8]
    */
   decodeUnsubscribeResponse(payload: Uint8Array): QueueUnsubscribeResponse {
-    const reader = new BufferReader(payload);
+    const reader = createBufferReader(payload);
     const status = reader.readU8();
     if (status !== 0) {
       return { status, ...this.decodeErrorResponse(reader) };
@@ -250,7 +251,7 @@ export const QueueCodec = {
     subId: bigint;
     route: string;
   } {
-    const reader = new BufferReader(payload);
+    const reader = createBufferReader(payload);
     const subId = reader.readU64BE();
     const route = reader.readRoute();
 

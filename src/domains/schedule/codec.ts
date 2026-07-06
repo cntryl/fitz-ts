@@ -4,7 +4,7 @@
  */
 
 import {
-  BufferReader,
+  createBufferReader,
   getRouteEncoding,
   utf8Encoder,
   writeU32BEAt,
@@ -46,7 +46,7 @@ export const ScheduleCodec = {
    * Success payload: [optional has_schedule_id: u8][schedule_id: string if has=1]
    */
   decodeCreateResponse(data: Uint8Array): ScheduleCreateResponse {
-    const reader = new BufferReader(data);
+    const reader = createBufferReader(data);
     let scheduleId: string | undefined;
     if (!reader.isEOF() && reader.readU8() === 1) {
       scheduleId = reader.readString();
@@ -91,7 +91,7 @@ export const ScheduleCodec = {
    * Success payload: [total_count: u64][has_entry: u8]...[route: string][cron: string][payload: bytes when has_entry=1]
    */
   decodeListResponse(data: Uint8Array): ScheduleListResponse {
-    const reader = new BufferReader(data);
+    const reader = createBufferReader(data);
     if (reader.remainingBytes() < 8) {
       throw new Error("LIST response missing total_count");
     }
@@ -132,7 +132,7 @@ export const ScheduleCodec = {
    * Success payload: [has_sub_id: u8][sub_id: u64 if has=1]
    */
   decodeSubscribeResponse(data: Uint8Array): ScheduleSubscribeResponse {
-    const reader = new BufferReader(data);
+    const reader = createBufferReader(data);
     if (reader.isEOF()) {
       throw new Error("SUBSCRIBE response missing subscription_id");
     }
@@ -173,7 +173,7 @@ export const ScheduleCodec = {
       throw new Error("SCHEDULE_NOTIFY payload too short");
     }
 
-    const reader = new BufferReader(payload);
+    const reader = createBufferReader(payload);
     const subId = reader.readU64BE();
     const payloadLength = reader.readU32BE();
     if (reader.remainingBytes() < payloadLength) {

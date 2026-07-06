@@ -313,16 +313,7 @@ export function createScheduleClient(connection: ScheduleConnectionPort) {
   };
 }
 
-type ScheduleClientConstructor = {
-  new (connection: ScheduleConnectionPort): ScheduleClient;
-  (connection: ScheduleConnectionPort): ScheduleClient;
-};
-
-export const ScheduleClient: ScheduleClientConstructor = function (
-  connection: ScheduleConnectionPort,
-) {
-  return createScheduleClient(connection);
-} as unknown as ScheduleClientConstructor;
+export const ScheduleClient = createScheduleClient;
 
 export * from "./types";
 

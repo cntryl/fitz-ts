@@ -1,14 +1,13 @@
 import { describe } from "vitest";
 import { ScheduleCodec } from "../../src/domains/schedule/codec";
 import { SYNC_CODEC_BATCH_SIZE, benchBatch } from "../_bench";
-import { encoder, routes } from "../_shared";
+import { payloads, routes, scheduleCronAtFive } from "../_shared";
 
-const payload = encoder.encode("schedule-payload");
-const cronExpr = "0 5 * * *";
+const payload = payloads.schedule;
 
 describe("fitz-ts schedule benchmarks", () => {
   benchBatch("schedule create encode", SYNC_CODEC_BATCH_SIZE, () => {
-    return ScheduleCodec.encodeCreate(routes.schedule, cronExpr, payload);
+    return ScheduleCodec.encodeCreate(routes.schedule, scheduleCronAtFive, payload);
   });
 
   benchBatch("schedule list encode", SYNC_CODEC_BATCH_SIZE, () => {

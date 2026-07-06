@@ -4,7 +4,7 @@ import * as net from "node:net";
 import { describe, expect, it, vi } from "vite-plus/test";
 import { WebSocket, WebSocketServer } from "ws";
 
-import { Client } from "../../src/client/client";
+import { createClient } from "../../src/client/client";
 import type { FitzLifecycleEvent } from "../../src/core/types";
 import { generateValidTestJwt } from "./fixture/jwt";
 import {
@@ -411,7 +411,7 @@ describe("Client ownership integration", () => {
       await publisher.connectOrFail();
       const proxy = await createTransportProxy(transport, brokerAddrFor(transport, "anonymous"));
       const events: FitzLifecycleEvent[] = [];
-      const subscriber = new Client({
+      const subscriber = createClient({
         url: proxy.url,
         transport,
         tokenProvider: () => "",

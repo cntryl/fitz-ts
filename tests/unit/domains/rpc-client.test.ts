@@ -8,14 +8,19 @@ import {
   ErrCodeRpcWorkerNotFound,
   RpcError,
 } from "../../../src/core/errors";
-import { BufferReader, BufferWriter, utf8Decoder, utf8Encoder } from "../../../src/core/buffer";
+import {
+  createBufferReader,
+  createBufferWriter,
+  utf8Decoder,
+  utf8Encoder,
+} from "../../../src/core/buffer";
 import {
   MSG_RPC_REQUEST,
   MSG_RPC_RESPONSE,
   MSG_RPC_SUBSCRIBE_WORKER,
   MSG_RPC_UNSUBSCRIBE_WORKER,
 } from "../../../src/frame/types";
-import { RpcClient } from "../../../src/domains/rpc/client";
+import { createRpcClient } from "../../../src/domains/rpc/client";
 import { RpcCodec } from "../../../src/domains/rpc/codec";
 
 class FakeRpcConnection {
@@ -125,7 +130,7 @@ class FakeRpcConnection {
 describe("RpcClient", () => {
   it("swallows worker response sends after the connection closes", async () => {
     const connection = new FakeRpcConnection();
-    const client = new RpcClient(connection);
+    const client = createRpcClient(connection);
     const route = "rpc://realm/area/method";
 
     await client.registerWorker(route, async (_req, writer) => {
@@ -152,7 +157,7 @@ describe("RpcClient", () => {
 
   it("does not send a stale worker response after disconnect and reconnect", async () => {
     const connection = new FakeRpcConnection();
-    const client = new RpcClient(connection);
+    const client = createRpcClient(connection);
     const route = "rpc://realm/area/method";
     let releaseHandler: () => void = () => undefined;
     const handlerGate = new Promise<void>((resolve) => {
@@ -186,7 +191,7 @@ describe("RpcClient", () => {
 
   it("re-subscribes workers on reconnect and handles requests with the restored handler", async () => {
     const connection = new FakeRpcConnection();
-    const client = new RpcClient(connection);
+    const client = createRpcClient(connection);
     const route = "rpc://realm/area/method";
     const handledBodies: string[] = [];
 
@@ -229,7 +234,7 @@ describe("RpcClient", () => {
 
   it("returns a terminal backpressure response when local worker dispatch is saturated", async () => {
     const connection = new FakeRpcConnection();
-    const client = new RpcClient(connection);
+    const client = createRpcClient(connection);
     const route = "rpc://realm/area/method";
     const worker = vi.fn(async () => undefined);
     connection.asyncDispatchAccepted = false;
@@ -266,7 +271,7 @@ describe("RpcClient", () => {
 
   it("does not re-subscribe workers after they unsubscribe", async () => {
     const connection = new FakeRpcConnection();
-    const client = new RpcClient(connection);
+    const client = createRpcClient(connection);
     const subscription = await client.registerWorker(
       "rpc://realm/area/method",
       async () => undefined,
@@ -282,7 +287,7 @@ describe("RpcClient", () => {
 
   it("encodes worker maxConcurrency and rejects invalid values", async () => {
     const connection = new FakeRpcConnection();
-    const client = new RpcClient(connection);
+    const client = createRpcClient(connection);
 
     await client.registerWorker("rpc://realm/area/method", async () => undefined, {
       maxConcurrency: 32,
@@ -308,7 +313,7 @@ describe("RpcClient", () => {
 
   it("does not register an RPC ACK notification handler", async () => {
     const connection = new FakeRpcConnection();
-    const client = new RpcClient(connection);
+    const client = createRpcClient(connection);
 
     await client.registerWorker("rpc://realm/area/method", async () => undefined);
 
@@ -319,7 +324,7 @@ describe("RpcClient", () => {
     const controller = new AbortController();
     controller.abort();
     const connection = new FakeRpcConnection();
-    const client = new RpcClient(connection);
+    const client = createRpcClient(connection);
 
     await expect(
       client.call("rpc://realm/area/method", new Uint8Array([1]), {
@@ -332,7 +337,7 @@ describe("RpcClient", () => {
 
   it("delivers a terminal RPC response frame that also carries a body", async () => {
     const connection = new FakeRpcConnection();
-    const client = new RpcClient(connection);
+    const client = createRpcClient(connection);
 
     const iterator = await client.call("rpc://realm/area/method", new Uint8Array([1]));
 
@@ -362,7 +367,7 @@ describe("RpcClient", () => {
 
   it("fails a pending iterator when the connection disconnects", async () => {
     const connection = new FakeRpcConnection();
-    const client = new RpcClient(connection);
+    const client = createRpcClient(connection);
 
     const iterator = await client.call("rpc://realm/area/method", new Uint8Array([1]));
 
@@ -376,7 +381,7 @@ describe("RpcClient", () => {
 
   it("fails immediately when an RPC stream reports worker not found", async () => {
     const connection = new FakeRpcConnection();
-    const client = new RpcClient(connection);
+    const client = createRpcClient(connection);
 
     const iterator = await client.call("rpc://realm/area/method", new Uint8Array([1]));
 
@@ -406,7 +411,7 @@ describe("RpcClient", () => {
 
   it("delivers ambiguous terminal RPC bodies as successful data", async () => {
     const connection = new FakeRpcConnection();
-    const client = new RpcClient(connection);
+    const client = createRpcClient(connection);
 
     const iterator = await client.call("rpc://realm/area/method", new Uint8Array([1]));
 
@@ -435,7 +440,7 @@ describe("RpcClient", () => {
 
   it("maps terminal RPC error frames by domain code", async () => {
     const connection = new FakeRpcConnection();
-    const client = new RpcClient(connection);
+    const client = createRpcClient(connection);
 
     const iterator = await client.call("rpc://realm/area/method", new Uint8Array([1]));
     const request = connection.lastRequest;
@@ -469,7 +474,7 @@ describe("RpcClient", () => {
     vi.useFakeTimers();
     try {
       const connection = new FakeRpcConnection();
-      const client = new RpcClient(connection);
+      const client = createRpcClient(connection);
 
       const iterator = await client.call("rpc://realm/area/method", new Uint8Array([1]), {
         timeoutMs: 10000,
@@ -509,7 +514,7 @@ describe("RpcClient", () => {
     vi.useFakeTimers();
     try {
       const connection = new FakeRpcConnection();
-      const client = new RpcClient(connection);
+      const client = createRpcClient(connection);
 
       const iterator = await client.call("rpc://realm/area/method", new Uint8Array([1]), {
         timeoutMs: 10000,
@@ -538,7 +543,7 @@ function encodeWorkerNotFoundBody(): Uint8Array {
 }
 
 function encodeRpcErrorBody(code: number, message: string): Uint8Array {
-  const writer = new BufferWriter();
+  const writer = createBufferWriter();
   writer.writeU8(1);
   writer.writeU32BE(code);
   writer.writeString(message);
@@ -546,7 +551,7 @@ function encodeRpcErrorBody(code: number, message: string): Uint8Array {
 }
 
 function readSubscribeMaxConcurrency(payload: Uint8Array): number {
-  const reader = new BufferReader(payload);
+  const reader = createBufferReader(payload);
   reader.readString();
   const maxConcurrency = reader.readU32BE();
   expect(reader.isEOF()).toBe(true);

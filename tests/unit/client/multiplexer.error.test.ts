@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { Multiplexer } from "../../../src/client/multiplexer";
+import { createMultiplexer } from "../../../src/client/multiplexer";
 import { ConnectionError } from "../../../src/core/errors";
 
 describe("Multiplexer shutdown errors", () => {
   it("rejects pending requests with ConnectionError on disconnect", async () => {
-    const multiplexer = new Multiplexer();
+    const multiplexer = createMultiplexer();
     multiplexer.setConnected();
 
     const pending = multiplexer.request(77, new Uint8Array([1]), async () => undefined, 1000);

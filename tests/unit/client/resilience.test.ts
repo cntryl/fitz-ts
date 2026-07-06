@@ -1,11 +1,11 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 
-import { Connection } from "../../../src/client/connection";
+import { createConnection } from "../../../src/client/connection";
 import { ConnectionError, RequestQueueFullError } from "../../../src/core/errors";
 import { Frame, FrameCodec } from "../../../src/frame/codec";
 import { MSG_LEASE_QUERY, MSG_QUEUE_ENQUEUE } from "../../../src/frame/types";
-import { LeaseClient } from "../../../src/domains/lease/client";
-import { QueueClient } from "../../../src/domains/queue/client";
+import { createLeaseClient } from "../../../src/domains/lease/client";
+import { createQueueClient } from "../../../src/domains/queue/client";
 import type { Transport } from "../../../src/transport/types";
 
 class ScriptedTransport implements Transport {
@@ -158,7 +158,7 @@ describe("Connection resilience", () => {
     };
 
     const factory = vi.fn<() => Transport>().mockReturnValueOnce(first).mockReturnValueOnce(second);
-    const connection = new Connection(factory, () => "", {
+    const connection = createConnection(factory, () => "", {
       authSettleDelayMs: 0,
       reconnect: {
         enabled: true,
@@ -167,7 +167,7 @@ describe("Connection resilience", () => {
         maxBackoffMs: 0,
       },
     });
-    const lease = new LeaseClient(connection);
+    const lease = createLeaseClient(connection);
 
     await connection.connect();
     await confirmSession(first);
@@ -210,7 +210,7 @@ describe("Connection resilience", () => {
     };
 
     const factory = vi.fn<() => Transport>().mockReturnValueOnce(first).mockReturnValueOnce(second);
-    const connection = new Connection(factory, () => "", {
+    const connection = createConnection(factory, () => "", {
       authSettleDelayMs: 0,
       maxRequestQueueSize: 1,
       reconnect: {
@@ -220,7 +220,7 @@ describe("Connection resilience", () => {
         maxBackoffMs: 0,
       },
     });
-    const lease = new LeaseClient(connection);
+    const lease = createLeaseClient(connection);
 
     await connection.connect();
     await confirmSession(first);
@@ -245,7 +245,7 @@ describe("Connection resilience", () => {
 
   it("fails immediately during disconnects when reconnect is disabled", async () => {
     const transport = new ScriptedTransport();
-    const connection = new Connection(
+    const connection = createConnection(
       () => transport,
       () => "",
       {
@@ -255,7 +255,7 @@ describe("Connection resilience", () => {
         },
       },
     );
-    const lease = new LeaseClient(connection);
+    const lease = createLeaseClient(connection);
 
     await connection.connect();
     await confirmSession(transport);
@@ -288,7 +288,7 @@ describe("Connection resilience", () => {
     };
 
     const factory = vi.fn<() => Transport>().mockReturnValueOnce(first).mockReturnValueOnce(second);
-    const connection = new Connection(factory, () => "", {
+    const connection = createConnection(factory, () => "", {
       authSettleDelayMs: 0,
       reconnect: {
         enabled: true,
@@ -303,7 +303,7 @@ describe("Connection resilience", () => {
         maxBackoffMs: 0,
       },
     });
-    const lease = new LeaseClient(connection);
+    const lease = createLeaseClient(connection);
 
     await connection.connect();
     await confirmSession(first);
@@ -341,7 +341,7 @@ describe("Connection resilience", () => {
       activeTransport.pushRead(FrameCodec.encodeFrame(MSG_QUEUE_ENQUEUE, encodeQueueSuccess(7n)));
     };
 
-    const connection = new Connection(
+    const connection = createConnection(
       () => transport,
       () => "",
       {
@@ -354,7 +354,7 @@ describe("Connection resilience", () => {
         },
       },
     );
-    const queue = new QueueClient(connection);
+    const queue = createQueueClient(connection);
 
     await connection.connect();
 
@@ -376,7 +376,7 @@ describe("Connection resilience", () => {
       }
     };
 
-    const connection = new Connection(
+    const connection = createConnection(
       () => transport,
       () => "",
       {
@@ -389,7 +389,7 @@ describe("Connection resilience", () => {
         },
       },
     );
-    const queue = new QueueClient(connection);
+    const queue = createQueueClient(connection);
 
     await connection.connect();
     await confirmSession(transport);
@@ -412,7 +412,7 @@ describe("Connection resilience", () => {
       }
     };
 
-    const connection = new Connection(
+    const connection = createConnection(
       () => transport,
       () => "",
       {
@@ -428,7 +428,7 @@ describe("Connection resilience", () => {
         },
       },
     );
-    const queue = new QueueClient(connection);
+    const queue = createQueueClient(connection);
 
     await connection.connect();
     await confirmSession(transport);

@@ -4,7 +4,7 @@
 
 import { describe, it, expect } from "vite-plus/test";
 import { QueueCodec } from "../../../src/domains/queue/codec";
-import { BufferReader, BufferWriter } from "../../../src/core/buffer";
+import { createBufferReader, createBufferWriter } from "../../../src/core/buffer";
 import { testData } from "../helpers/test-utils";
 
 describe("QueueCodec", () => {
@@ -21,7 +21,7 @@ describe("QueueCodec", () => {
       expect(encoded).toBeInstanceOf(Uint8Array);
       expect(encoded.length).toBeGreaterThan(0);
 
-      const reader = new BufferReader(encoded);
+      const reader = createBufferReader(encoded);
       expect(reader.readRoute()).toBe(route);
       expect(reader.readU32BE()).toBe(body.length);
       expect(reader.readBytes(body.length)).toEqual(body);
@@ -42,7 +42,7 @@ describe("QueueCodec", () => {
       const body = testData("delayed");
 
       const encoded = QueueCodec.encodeEnqueue(route, body, { delayMs: 2500 });
-      const reader = new BufferReader(encoded);
+      const reader = createBufferReader(encoded);
 
       expect(reader.readRoute()).toBe(route);
       expect(reader.readU32BE()).toBe(body.length);
@@ -56,7 +56,7 @@ describe("QueueCodec", () => {
   describe("ENQUEUE decoding", () => {
     it("should_decode_enqueue_response_with_message_id", () => {
       // Arrange
-      const writer = new BufferWriter(16);
+      const writer = createBufferWriter(16);
       writer.writeU8(0); // status = success
       writer.writeU64BE(999n); // messageId
       const response = writer.getBuffer();
@@ -82,7 +82,7 @@ describe("QueueCodec", () => {
       // Assert
       expect(encoded).toBeInstanceOf(Uint8Array);
 
-      const reader = new BufferReader(encoded);
+      const reader = createBufferReader(encoded);
       expect(reader.readRoute()).toBe(route);
       expect(reader.readU64BE()).toBe(BigInt(ttlSecs));
       expect(reader.readU8()).toBe(0);
@@ -94,7 +94,7 @@ describe("QueueCodec", () => {
       const ttlSecs = 30;
 
       const encoded = QueueCodec.encodeReserve(route, ttlSecs, 10);
-      const reader = new BufferReader(encoded);
+      const reader = createBufferReader(encoded);
 
       expect(reader.readRoute()).toBe(route);
       expect(reader.readU64BE()).toBe(BigInt(ttlSecs));
@@ -107,7 +107,7 @@ describe("QueueCodec", () => {
   describe("RESERVE decoding", () => {
     it("should_decode_reserve_response_with_item", () => {
       // Arrange
-      const writer = new BufferWriter(256);
+      const writer = createBufferWriter(256);
       writer.writeU8(0); // status
       writer.writeU32BE(1); // leaseCount = 1
       writer.writeU64BE(100n); // itemId
@@ -132,7 +132,7 @@ describe("QueueCodec", () => {
 
     it("should_decode_reserve_error_response_with_error_code", () => {
       // Arrange
-      const writer = new BufferWriter(8);
+      const writer = createBufferWriter(8);
       writer.writeU8(1); // status = error
       writer.writeU8(4); // QueueNotFound
       const response = writer.getBuffer();
@@ -147,7 +147,7 @@ describe("QueueCodec", () => {
 
     it("should_decode_reserve_response_no_item", () => {
       // Arrange
-      const writer = new BufferWriter(8);
+      const writer = createBufferWriter(8);
       writer.writeU8(0); // status
       writer.writeU32BE(0); // leaseCount = 0
       const response = writer.getBuffer();
@@ -175,7 +175,7 @@ describe("QueueCodec", () => {
       // Assert
       expect(encoded).toBeInstanceOf(Uint8Array);
 
-      const reader = new BufferReader(encoded);
+      const reader = createBufferReader(encoded);
       expect(reader.readRoute()).toBe(route);
       expect(reader.readU64BE()).toBe(messageId);
       expect(reader.readU64BE()).toBe(token);
@@ -197,7 +197,7 @@ describe("QueueCodec", () => {
       // Assert
       expect(encoded).toBeInstanceOf(Uint8Array);
 
-      const reader = new BufferReader(encoded);
+      const reader = createBufferReader(encoded);
       expect(reader.readRoute()).toBe(route);
       expect(reader.readU64BE()).toBe(messageId);
       expect(reader.readU64BE()).toBe(token);
@@ -221,7 +221,7 @@ describe("QueueCodec", () => {
   describe("SUBSCRIBE decoding", () => {
     it("should_decode_subscribe_response_with_sub_id", () => {
       // Arrange
-      const writer = new BufferWriter(16);
+      const writer = createBufferWriter(16);
       writer.writeU8(0); // status
       writer.writeU64BE(555n); // subId
       const response = writer.getBuffer();

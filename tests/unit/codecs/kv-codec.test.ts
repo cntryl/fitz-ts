@@ -5,7 +5,7 @@
 
 import { describe, it, expect } from "vite-plus/test";
 import { KvCodec } from "../../../src/domains/kv/codec";
-import { BufferReader, BufferWriter } from "../../../src/core/buffer";
+import { createBufferReader, createBufferWriter } from "../../../src/core/buffer";
 import {
   testData,
   buildU64Response,
@@ -34,7 +34,7 @@ describe("KvCodec", () => {
       const encoded = KvCodec.encodeBegin("kv://test/app/data", "ReadOnly", "Buffered");
 
       // Assert: Verify encoding is valid
-      const reader = new BufferReader(encoded);
+      const reader = createBufferReader(encoded);
       const route = reader.readString();
       expect(route).toBe("kv://test/app/data");
     });
@@ -79,7 +79,7 @@ describe("KvCodec", () => {
 
     it("should_decode_begin_response_with_error_status", () => {
       // Arrange
-      const writer = new BufferWriter(16);
+      const writer = createBufferWriter(16);
       writer.writeU8(5); // status = OperationNotAllowed
       writer.writeU64BE(0n); // Still need tx_id field
       const response = writer.getBuffer();
@@ -119,7 +119,7 @@ describe("KvCodec", () => {
       const encoded = KvCodec.encodePut(txId, route, key, value);
 
       // Assert
-      const reader = new BufferReader(encoded);
+      const reader = createBufferReader(encoded);
       const decodedTxId = reader.readU64BE();
       expect(decodedTxId).toBe(txId);
     });
@@ -175,7 +175,7 @@ describe("KvCodec", () => {
       const encoded = KvCodec.encodeGet(txId, route, key);
 
       // Assert
-      const reader = new BufferReader(encoded);
+      const reader = createBufferReader(encoded);
       expect(reader.readU64BE()).toBe(txId);
     });
   });
@@ -183,7 +183,7 @@ describe("KvCodec", () => {
   describe("GET decoding", () => {
     it("should_decode_get_response_with_value", () => {
       // Arrange
-      const writer = new BufferWriter(256);
+      const writer = createBufferWriter(256);
       writer.writeU8(0); // status = success
       writer.writeU8(1); // found = 1
       const value = testData("found_value");
@@ -244,7 +244,7 @@ describe("KvCodec", () => {
       const encoded = KvCodec.encodeScan(100n, "kv://test/app/items", undefined);
 
       // Assert
-      const reader = new BufferReader(encoded);
+      const reader = createBufferReader(encoded);
       expect(reader.readU64BE()).toBe(100n);
     });
 
@@ -267,7 +267,7 @@ describe("KvCodec", () => {
   describe("SCAN decoding", () => {
     it("should_decode_scan_response_with_multiple_keys", () => {
       // Arrange
-      const writer = new BufferWriter(256);
+      const writer = createBufferWriter(256);
       writer.writeU8(0); // status
       writer.writeU32BE(2); // count = 2
       // Key 1
@@ -297,7 +297,7 @@ describe("KvCodec", () => {
 
     it("should_decode_scan_response_with_empty_result", () => {
       // Arrange
-      const writer = new BufferWriter(8);
+      const writer = createBufferWriter(8);
       writer.writeU8(0); // status
       writer.writeU32BE(0); // count = 0
       writer.writeU8(0); // has_more = false
@@ -313,7 +313,7 @@ describe("KvCodec", () => {
 
     it("should_decode_scan_response_with_has_more", () => {
       // Arrange
-      const writer = new BufferWriter(256);
+      const writer = createBufferWriter(256);
       writer.writeU8(0); // status
       writer.writeU32BE(1); // count = 1
       writer.writeU32BE(testData("key1").length);
@@ -338,7 +338,7 @@ describe("KvCodec", () => {
       const encoded = KvCodec.encodeCommit(100n, "kv://test/app/data");
 
       // Assert
-      const reader = new BufferReader(encoded);
+      const reader = createBufferReader(encoded);
       expect(reader.readU64BE()).toBe(100n);
     });
   });
@@ -349,7 +349,7 @@ describe("KvCodec", () => {
       const encoded = KvCodec.encodeRollback(100n, "kv://test/app/data");
 
       // Assert
-      const reader = new BufferReader(encoded);
+      const reader = createBufferReader(encoded);
       expect(reader.readU64BE()).toBe(100n);
     });
   });
@@ -391,7 +391,7 @@ describe("KvCodec", () => {
       const putDecoded = KvCodec.decodePutResponse(putResponse);
       expect(putDecoded.status).toBe(0);
 
-      const getWriter = new BufferWriter(256);
+      const getWriter = createBufferWriter(256);
       getWriter.writeU8(0); // status
       getWriter.writeU8(1); // found
       getWriter.writeU32BE(value.length);

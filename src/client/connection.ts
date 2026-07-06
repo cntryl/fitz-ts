@@ -8,17 +8,18 @@
 
 import { Transport } from "../transport/types";
 import {
-  AsyncHandlerOptions,
   ConnectionState,
-  Deferred,
-  FitzObservability,
-  HeartbeatOptions,
-  RetryOptions,
-  TokenProvider,
+  createDeferred,
+  type AsyncHandlerOptions,
+  type Deferred,
+  type FitzObservability,
+  type HeartbeatOptions,
+  type RetryOptions,
+  type TokenProvider,
 } from "../core/types";
 import { createScope, Scope } from "../core/lifecycle";
 import { utf8Encoder } from "../core/buffer";
-import { FrameCodec, FrameParser } from "../frame/codec";
+import { createFrameParser, FrameCodec } from "../frame/codec";
 import { MSG_CONNECT } from "../frame/types";
 import {
   AuthenticationError,
@@ -27,7 +28,7 @@ import {
   RequestQueueFullError,
   TransportError,
 } from "../core/errors";
-import { Multiplexer } from "./multiplexer";
+import { createMultiplexer, type Multiplexer } from "./multiplexer";
 import {
   attachResilienceMeta,
   classifyFailureKind,
@@ -104,7 +105,7 @@ export function createConnection(
   let transport: Transport | null = null;
   let state: ConnectionState = ConnectionState.Disconnected;
   let requestGate = createRequestGate(maxInFlightRequests, maxRequestQueueSize);
-  const frameParser = new FrameParser();
+  const frameParser = createFrameParser();
   const reconnectListeners = new Set<ReconnectListener>();
   const disconnectListeners = new Set<DisconnectListener>();
   let writeChain: Promise<void> = Promise.resolve();
@@ -155,7 +156,7 @@ export function createConnection(
     }
   };
 
-  const multiplexer = new Multiplexer({
+  const multiplexer = createMultiplexer({
     meter: observability?.meter,
     tracer: observability?.tracer,
   });
@@ -701,7 +702,7 @@ export function createConnection(
     setState(ConnectionState.Connected);
     setState(ConnectionState.Authenticating);
     emitLifecycleEvent("auth_start");
-    authOutcome = new Deferred<void>();
+    authOutcome = createDeferred<void>();
 
     try {
       await sendConnect();
@@ -1027,26 +1028,4 @@ export function createConnection(
   };
 }
 
-interface ConnectionConstructor {
-  new (
-    transportFactory: TransportFactory,
-    tokenProvider: TokenProvider,
-    options?: ConnectionOptions,
-  ): Connection;
-  (
-    transportFactory: TransportFactory,
-    tokenProvider: TokenProvider,
-    options?: ConnectionOptions,
-  ): Connection;
-  prototype: any;
-}
-
-export const Connection: ConnectionConstructor = function (
-  transportFactory: TransportFactory,
-  tokenProvider: TokenProvider,
-  options: ConnectionOptions = {},
-) {
-  const connection = createConnection(transportFactory, tokenProvider, options);
-  Object.setPrototypeOf(connection, Connection.prototype);
-  return connection;
-} as unknown as ConnectionConstructor;
+export const Connection = createConnection;

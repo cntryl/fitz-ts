@@ -124,12 +124,7 @@ export function createDeferred<T = unknown>(): Deferred<T> {
   return { promise, resolve, reject };
 }
 
-type DeferredConstructor = {
-  new <T = unknown>(): Deferred<T>;
-  <T = unknown>(): Deferred<T>;
-};
-
-export const Deferred: DeferredConstructor = createDeferred as unknown as DeferredConstructor;
+export const Deferred = createDeferred;
 
 /**
  * Connection state machine

@@ -3,8 +3,8 @@
  */
 
 import {
-  BufferWriter,
-  BufferReader,
+  createBufferWriter,
+  createBufferReader,
   getRouteEncoding,
   writeU32BEAt,
   writeU64BEAt,
@@ -34,7 +34,7 @@ export const KvCodec = {
   },
 
   decodeBeginResponse(payload: Uint8Array): KvBeginResponse {
-    const reader = new BufferReader(payload);
+    const reader = createBufferReader(payload);
     const status = reader.readU8();
     const txId = reader.isEOF() ? undefined : reader.readU64BE();
     return { status, txId };
@@ -61,7 +61,7 @@ export const KvCodec = {
   },
 
   decodeStatusResponse(payload: Uint8Array): KvStatusResponse {
-    const reader = new BufferReader(payload);
+    const reader = createBufferReader(payload);
     return { status: reader.readU8() };
   },
 
@@ -83,7 +83,7 @@ export const KvCodec = {
   },
 
   decodeGetResponse(payload: Uint8Array): KvGetResponse {
-    const reader = new BufferReader(payload);
+    const reader = createBufferReader(payload);
     const status = reader.readU8();
     const found = !reader.isEOF() && reader.readU8() === 1;
 
@@ -140,7 +140,7 @@ export const KvCodec = {
   },
 
   encodeScan(txId: bigint, route: string, options: KvScanOptions = {}): Uint8Array {
-    const writer = new BufferWriter(512);
+    const writer = createBufferWriter(512);
     writer.writeU64BE(txId);
     writer.writeRoute(route);
 
@@ -172,7 +172,7 @@ export const KvCodec = {
   },
 
   decodeScanResponse(payload: Uint8Array): KvScanResponse {
-    const reader = new BufferReader(payload);
+    const reader = createBufferReader(payload);
     const status = reader.readU8();
 
     if (reader.isEOF()) {

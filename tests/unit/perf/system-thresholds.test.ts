@@ -2,7 +2,7 @@ import { performance } from "node:perf_hooks";
 
 import { describe, expect, it } from "vite-plus/test";
 
-import { FrameCodec, FrameParser } from "../../../src/frame/codec";
+import { FrameCodec, createFrameParser } from "../../../src/frame/codec";
 import { KvCodec } from "../../../src/domains/kv/codec";
 import { NoticeCodec } from "../../../src/domains/notice/codec";
 import { QueueCodec } from "../../../src/domains/queue/codec";
@@ -54,7 +54,7 @@ describe("fitz-ts system perf thresholds", () => {
 
     expect(
       measureSync(10_000, () => {
-        const parser = new FrameParser();
+        const parser = createFrameParser();
         parser.parseFrames(combined);
       }),
     ).toBeLessThan(adjustedThreshold(thresholdsMs.frameBatchEncodeParse));

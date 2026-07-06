@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 
-import { Multiplexer } from "../../../src/client/multiplexer";
+import { createMultiplexer } from "../../../src/client/multiplexer";
 import { ConnectionError, TimeoutError } from "../../../src/core/errors";
 import { MSG_RPC_REQUEST, MSG_RPC_RESPONSE } from "../../../src/frame/types";
 import { RpcCodec } from "../../../src/domains/rpc/codec";
@@ -59,7 +59,7 @@ class FakeMeter implements FitzMeter {
 
 describe("Multiplexer", () => {
   it("ignores optional broker replies without treating them as dropped", () => {
-    const multiplexer = new Multiplexer();
+    const multiplexer = createMultiplexer();
     multiplexer.setConnected();
 
     multiplexer.expectOptionalResponse(500);
@@ -72,7 +72,7 @@ describe("Multiplexer", () => {
   });
 
   it("ignores late frames after disconnect", () => {
-    const multiplexer = new Multiplexer();
+    const multiplexer = createMultiplexer();
     multiplexer.setConnected();
     multiplexer.setDisconnected();
 
@@ -85,7 +85,7 @@ describe("Multiplexer", () => {
   });
 
   it("drops unexpected authenticated frames only after optional responses are exhausted", () => {
-    const multiplexer = new Multiplexer();
+    const multiplexer = createMultiplexer();
     multiplexer.setConnected();
 
     const release = multiplexer.expectOptionalResponse(500);
@@ -101,7 +101,7 @@ describe("Multiplexer", () => {
   it("records tracing and metrics for successful requests", async () => {
     const tracer = new FakeTracer();
     const meter = new FakeMeter();
-    const multiplexer = new Multiplexer({ tracer, meter });
+    const multiplexer = createMultiplexer({ tracer, meter });
     multiplexer.setConnected();
 
     const request = multiplexer.request(77, new Uint8Array([1]), async () => undefined, 100);
@@ -126,7 +126,7 @@ describe("Multiplexer", () => {
     vi.useFakeTimers();
     const tracer = new FakeTracer();
     const meter = new FakeMeter();
-    const multiplexer = new Multiplexer({ tracer, meter });
+    const multiplexer = createMultiplexer({ tracer, meter });
     multiplexer.setConnected();
 
     const request = multiplexer.request(88, new Uint8Array([1]), async () => undefined, 10);
@@ -146,7 +146,7 @@ describe("Multiplexer", () => {
   it("records disconnect failures once and closes the span", async () => {
     const tracer = new FakeTracer();
     const meter = new FakeMeter();
-    const multiplexer = new Multiplexer({ tracer, meter });
+    const multiplexer = createMultiplexer({ tracer, meter });
     const controller = new AbortController();
     const removeAbortListener = vi.spyOn(controller.signal, "removeEventListener");
     multiplexer.setConnected();
@@ -172,7 +172,7 @@ describe("Multiplexer", () => {
   });
 
   it("rejects all pending requests on disconnect when the FIFO contains holes", async () => {
-    const multiplexer = new Multiplexer();
+    const multiplexer = createMultiplexer();
     const controller = new AbortController();
     multiplexer.setConnected();
 
@@ -207,7 +207,7 @@ describe("Multiplexer", () => {
   it("rejects timed-out requests without waiting for send to finish", async () => {
     vi.useFakeTimers();
     try {
-      const multiplexer = new Multiplexer();
+      const multiplexer = createMultiplexer();
       let releaseSend: () => void = () => undefined;
       const sendBlocked = new Promise<void>((resolve) => {
         releaseSend = resolve;
@@ -239,7 +239,7 @@ describe("Multiplexer", () => {
   });
 
   it("rejects aborted requests without waiting for send to finish", async () => {
-    const multiplexer = new Multiplexer();
+    const multiplexer = createMultiplexer();
     const controller = new AbortController();
     const sendBlocked = new Promise<void>(() => undefined);
     multiplexer.setConnected();
@@ -269,7 +269,7 @@ describe("Multiplexer", () => {
     const sendBlocked = new Promise<void>((resolve) => {
       releaseSend = resolve;
     });
-    const multiplexer = new Multiplexer();
+    const multiplexer = createMultiplexer();
     const handler = vi.fn();
     const correlationId = new Uint8Array(16).fill(0x42);
     const inboundRequest = RpcCodec.encodeRequest(
@@ -308,7 +308,7 @@ describe("Multiplexer", () => {
     const sendBlocked = new Promise<void>((resolve) => {
       releaseSend = resolve;
     });
-    const multiplexer = new Multiplexer();
+    const multiplexer = createMultiplexer();
     const handler = vi.fn();
     const streamResponse = RpcCodec.encodeResponse(
       new Uint8Array(16).fill(0x33),
@@ -343,7 +343,7 @@ describe("Multiplexer", () => {
   });
 
   it("preserves FIFO request matching when a registered classifier returns false", async () => {
-    const multiplexer = new Multiplexer();
+    const multiplexer = createMultiplexer();
     const handler = vi.fn();
     const response = new Uint8Array([7]);
 

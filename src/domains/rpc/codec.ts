@@ -4,7 +4,7 @@
  */
 
 import {
-  BufferReader,
+  createBufferReader,
   getRouteEncoding,
   readU128BEAt,
   readU32BEAt,
@@ -203,7 +203,7 @@ export const RpcCodec = {
         operation: "RPC_REQUEST",
       });
     }
-    const reader = new BufferReader(payload);
+    const reader = createBufferReader(payload);
     const status = reader.readU8();
     return { status };
   },
@@ -377,7 +377,7 @@ export const RpcCodec = {
         operation: "RPC_SUBSCRIBE_WORKER",
       });
     }
-    const reader = new BufferReader(payload);
+    const reader = createBufferReader(payload);
     const status = reader.readU8();
     return { status };
   },
@@ -399,7 +399,7 @@ export const RpcCodec = {
         operation: "RPC_UNSUBSCRIBE_WORKER",
       });
     }
-    const reader = new BufferReader(payload);
+    const reader = createBufferReader(payload);
     const status = reader.readU8();
     return { status };
   },
@@ -410,7 +410,7 @@ export const RpcCodec = {
     }
 
     try {
-      const reader = new BufferReader(payload);
+      const reader = createBufferReader(payload);
       if (reader.readU8() !== 1) {
         return null;
       }

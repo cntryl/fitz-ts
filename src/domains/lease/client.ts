@@ -199,14 +199,7 @@ export function createLeaseClient(connection: LeaseConnectionPort) {
   };
 }
 
-type LeaseClientConstructor = {
-  new (connection: LeaseConnectionPort): LeaseClient;
-  (connection: LeaseConnectionPort): LeaseClient;
-};
-
-export const LeaseClient: LeaseClientConstructor = function (connection: LeaseConnectionPort) {
-  return createLeaseClient(connection);
-} as unknown as LeaseClientConstructor;
+export const LeaseClient = createLeaseClient;
 
 export * from "./types";
 

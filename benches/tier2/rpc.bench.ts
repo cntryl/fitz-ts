@@ -1,9 +1,9 @@
 import { describe } from "vitest";
 import { RpcCodec } from "../../src/domains/rpc/codec";
 import { SYNC_CODEC_BATCH_SIZE, benchBatch } from "../_bench";
-import { buildCorrelationIds, cycleFixture, encoder, routes } from "../_shared";
+import { buildCorrelationIds, cycleFixture, payloads, routes } from "../_shared";
 
-const body = encoder.encode("rpc-payload");
+const body = payloads.rpc;
 const correlationIds = buildCorrelationIds(SYNC_CODEC_BATCH_SIZE);
 const correlationId = correlationIds[0];
 

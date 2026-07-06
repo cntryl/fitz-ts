@@ -7,9 +7,32 @@ export const routes = {
   reply: "rpc://bench/area/reply",
   queue: "queue://bench/area/resource",
   lease: "lease://bench/area/resource",
-  schedule: "schedule://bench/area/resource",
+  schedule: "schedule://bench/area/resource/run",
   stream: "stream://bench/area/resource",
 };
+
+export const payloads = {
+  hotpath: encoder.encode("benchmark-payload"),
+  subsystem: encoder.encode("subsystem-payload"),
+  queue: encoder.encode("queue-payload"),
+  rpc: encoder.encode("rpc-payload"),
+  stream: encoder.encode("stream-payload"),
+  schedule: encoder.encode("schedule-payload"),
+  system: encoder.encode("system-payload"),
+  integration: encoder.encode("integration-payload"),
+  payloadA: encoder.encode("payload-a"),
+  payloadB: encoder.encode("payload-b"),
+};
+
+export const benchKey = encoder.encode("bench-key");
+export const metadata = encoder.encode("metadata");
+export const streamMetadata = encoder.encode("meta");
+export const scheduleCron = "0 0 * * *";
+export const scheduleCronAtFive = "0 5 * * *";
+export const hotpathScheduleCron = "*/5 * * * *";
+export const durability = "Sync";
+export const defaultTxId = 1n;
+export const hotpathTxId = 42n;
 
 export function buildResponseFrame(index: number): Uint8Array {
   return encoder.encode(`response-${index}`);

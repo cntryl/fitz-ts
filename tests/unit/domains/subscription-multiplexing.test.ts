@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { BufferWriter, utf8Decoder, utf8Encoder } from "../../../src/core/buffer";
-import { LeaseClient } from "../../../src/domains/lease/client";
-import { NoticeClient } from "../../../src/domains/notice/client";
-import { QueueClient } from "../../../src/domains/queue/client";
-import { ScheduleClient } from "../../../src/domains/schedule/client";
-import { StreamClient } from "../../../src/domains/stream/client";
+import { createBufferWriter, utf8Decoder, utf8Encoder } from "../../../src/core/buffer";
+import { createLeaseClient } from "../../../src/domains/lease/client";
+import { createNoticeClient } from "../../../src/domains/notice/client";
+import { createQueueClient } from "../../../src/domains/queue/client";
+import { createScheduleClient } from "../../../src/domains/schedule/client";
+import { createStreamClient } from "../../../src/domains/stream/client";
 import {
   MSG_LEASE_NOTIFY,
   MSG_LEASE_SUBSCRIBE,
@@ -115,7 +115,7 @@ class FakeSubscriptionConnection {
 }
 
 function encodeOptionalSubIdResponse(subId: bigint): Uint8Array {
-  const writer = new BufferWriter(16);
+  const writer = createBufferWriter(16);
   writer.writeU8(0);
   writer.writeU8(1);
   writer.writeU64BE(subId);
@@ -123,14 +123,14 @@ function encodeOptionalSubIdResponse(subId: bigint): Uint8Array {
 }
 
 function encodeQueueSubIdResponse(subId: bigint): Uint8Array {
-  const writer = new BufferWriter(16);
+  const writer = createBufferWriter(16);
   writer.writeU8(0);
   writer.writeU64BE(subId);
   return writer.getBuffer();
 }
 
 function encodeLeaseSubscribeResponse(subId: bigint): Uint8Array {
-  const writer = new BufferWriter(16);
+  const writer = createBufferWriter(16);
   writer.writeU8(0);
   writer.writeU64BE(subId);
   return writer.getBuffer();
@@ -141,7 +141,7 @@ function encodeStatusOnlyResponse(): Uint8Array {
 }
 
 function encodeNoticeNotification(subId: bigint, route: string, body: Uint8Array): Uint8Array {
-  const writer = new BufferWriter(128);
+  const writer = createBufferWriter(128);
   writer.writeU64BE(subId);
   writer.writeString(route);
   writer.writeU32BE(body.length);
@@ -150,21 +150,21 @@ function encodeNoticeNotification(subId: bigint, route: string, body: Uint8Array
 }
 
 function encodeQueueNotification(subId: bigint, route: string): Uint8Array {
-  const writer = new BufferWriter(128);
+  const writer = createBufferWriter(128);
   writer.writeU64BE(subId);
   writer.writeString(route);
   return writer.getBuffer();
 }
 
 function encodeLeaseNotification(subId: bigint, route: string): Uint8Array {
-  const writer = new BufferWriter(128);
+  const writer = createBufferWriter(128);
   writer.writeU64BE(subId);
   writer.writeString(route);
   return writer.getBuffer();
 }
 
 function encodeScheduleNotification(subId: bigint, payload: Uint8Array): Uint8Array {
-  const writer = new BufferWriter(128);
+  const writer = createBufferWriter(128);
   writer.writeU64BE(subId);
   writer.writeU32BE(payload.length);
   writer.writeBytes(payload);
@@ -172,7 +172,7 @@ function encodeScheduleNotification(subId: bigint, payload: Uint8Array): Uint8Ar
 }
 
 function encodeStreamNotification(subId: bigint, route: string, payload: Uint8Array): Uint8Array {
-  const writer = new BufferWriter(128);
+  const writer = createBufferWriter(128);
   writer.writeU64BE(subId);
   writer.writeString(route);
   writer.writeU32BE(payload.length);
@@ -187,7 +187,7 @@ describe("Subscription Multiplexing", () => {
       [MSG_NOTICE_SUBSCRIBE, encodeOptionalSubIdResponse(12n)],
       [MSG_NOTICE_UNSUBSCRIBE, encodeStatusOnlyResponse()],
     ]);
-    const client = new NoticeClient(connection);
+    const client = createNoticeClient(connection);
     const firstRoutes: string[] = [];
     const secondRoutes: string[] = [];
     const pattern = "notice://realm/area/resource";
@@ -250,7 +250,7 @@ describe("Subscription Multiplexing", () => {
       [MSG_NOTICE_SUBSCRIBE, encodeOptionalSubIdResponse(11n)],
       [MSG_NOTICE_UNSUBSCRIBE, encodeStatusOnlyResponse()],
     ]);
-    const client = new NoticeClient(connection);
+    const client = createNoticeClient(connection);
     const deliveredRoutes: string[] = [];
     const pattern = "notice://realm/area/resource";
 
@@ -275,7 +275,7 @@ describe("Subscription Multiplexing", () => {
       [MSG_QUEUE_SUBSCRIBE, encodeQueueSubIdResponse(22n)],
       [MSG_QUEUE_UNSUBSCRIBE, encodeStatusOnlyResponse()],
     ]);
-    const client = new QueueClient(connection);
+    const client = createQueueClient(connection);
     const firstRoutes: string[] = [];
     const secondRoutes: string[] = [];
     const pattern = "queue://realm/area/resource";
@@ -327,7 +327,7 @@ describe("Subscription Multiplexing", () => {
       [MSG_LEASE_SUBSCRIBE, encodeLeaseSubscribeResponse(32n)],
       [MSG_LEASE_UNSUBSCRIBE, encodeStatusOnlyResponse()],
     ]);
-    const client = new LeaseClient(connection);
+    const client = createLeaseClient(connection);
     const firstRoutes: string[] = [];
     const secondRoutes: string[] = [];
     const pattern = "lease://realm/area/resource";
@@ -374,7 +374,7 @@ describe("Subscription Multiplexing", () => {
       [MSG_SCHEDULE_SUBSCRIBE, encodeOptionalSubIdResponse(42n)],
       [MSG_SCHEDULE_UNSUBSCRIBE, encodeStatusOnlyResponse()],
     ]);
-    const client = new ScheduleClient(connection);
+    const client = createScheduleClient(connection);
     const firstPayloads: string[] = [];
     const secondPayloads: string[] = [];
     const pattern = "schedule://realm/area/resource/run";
@@ -438,7 +438,7 @@ describe("Subscription Multiplexing", () => {
       [MSG_STREAM_SUBSCRIBE, encodeOptionalSubIdResponse(52n)],
       [MSG_STREAM_UNSUBSCRIBE, encodeStatusOnlyResponse()],
     ]);
-    const client = new StreamClient(connection);
+    const client = createStreamClient(connection);
     const firstNotifications: Array<{
       route: string;
       event?: string;
