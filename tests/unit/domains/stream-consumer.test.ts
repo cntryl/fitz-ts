@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 
-import type { Connection } from "../../../src/client/connection";
 import { BufferReader, BufferWriter } from "../../../src/core/buffer";
 import { StreamClient } from "../../../src/domains/stream/client";
 import {
@@ -72,7 +71,7 @@ describe("StreamClient readWhenCommitted", () => {
     connection.readResponses.push(
       encodeWrappedReadResponse([encodeReadEvent(4n, new Uint8Array([1]))], 4n, false),
     );
-    const client = new StreamClient(connection as unknown as Connection);
+    const client = new StreamClient(connection);
 
     const result = await client
       .readWhenCommitted("stream://realm/area/resource", { offset: 4n, batchSize: 10 })
@@ -89,7 +88,7 @@ describe("StreamClient readWhenCommitted", () => {
       encodeWrappedReadResponse([encodeReadFiltered(5n)], 5n, false),
       encodeWrappedReadResponse([encodeReadEvent(6n, new Uint8Array([2]))], 6n, false),
     );
-    const client = new StreamClient(connection as unknown as Connection);
+    const client = new StreamClient(connection);
     const iterator = client
       .readWhenCommitted("stream://realm/area/resource", { offset: 4n })
       [Symbol.asyncIterator]();
@@ -116,7 +115,7 @@ describe("StreamClient readWhenCommitted", () => {
       encodeWrappedReadResponse([encodeReadFiltered(5n)], 5n, true),
       encodeWrappedReadResponse([encodeReadEvent(6n, new Uint8Array([3]))], 6n, false),
     );
-    const client = new StreamClient(connection as unknown as Connection);
+    const client = new StreamClient(connection);
 
     const result = await client
       .readWhenCommitted("stream://realm/area/resource", { offset: 4n })
@@ -134,7 +133,7 @@ describe("StreamClient readWhenCommitted", () => {
       encodeWrappedReadResponse([], 3n, false),
       encodeWrappedReadResponse([encodeReadEvent(4n, new Uint8Array([4]))], 4n, false),
     );
-    const client = new StreamClient(connection as unknown as Connection);
+    const client = new StreamClient(connection);
     const iterator = client
       .readWhenCommitted("stream://realm/area/resource", { offset: 4n, batchSize: 10 })
       [Symbol.asyncIterator]();
@@ -152,6 +151,28 @@ describe("StreamClient readWhenCommitted", () => {
     expect(readOffsets(connection)).toEqual([4n, 4n]);
 
     await iterator.return?.();
+    expect(connection.unsubscribeCount).toBe(1);
+  });
+
+  it("unsubscribes when readWhenCommitted is aborted while waiting", async () => {
+    const connection = new FakeStreamConsumerConnection();
+    connection.readResponses.push(encodeWrappedReadResponse([], 3n, false));
+    const client = new StreamClient(connection);
+    const controller = new AbortController();
+    const iterator = client
+      .readWhenCommitted("stream://realm/area/resource", {
+        offset: 4n,
+        signal: controller.signal,
+      })
+      [Symbol.asyncIterator]();
+
+    const pending = iterator.next();
+    await vi.waitFor(() => {
+      expect(readOffsets(connection)).toEqual([4n]);
+    });
+    controller.abort();
+
+    await expect(pending).rejects.toMatchObject({ name: "AbortError" });
     expect(connection.unsubscribeCount).toBe(1);
   });
 });

@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 
-import type { Connection } from "../../../src/client/connection";
 import { BufferWriter } from "../../../src/core/buffer";
 import { QueueClient } from "../../../src/domains/queue/client";
 import {
@@ -73,7 +72,7 @@ describe("QueueClient reserveWhenAvailable", () => {
       encodeQueueReserveResponse([]),
       encodeQueueReserveResponse([{ id: 1n, token: 2n, body: new Uint8Array([3]) }]),
     );
-    const client = new QueueClient(connection as unknown as Connection);
+    const client = new QueueClient(connection);
     const iterator = client
       .reserveWhenAvailable("queue://realm/area/resource", {
         leaseSeconds: 30,
@@ -112,7 +111,7 @@ describe("QueueClient reserveWhenAvailable", () => {
         connection.notify();
       }
     };
-    const client = new QueueClient(connection as unknown as Connection);
+    const client = new QueueClient(connection);
 
     const result = await client
       .reserveWhenAvailable("queue://realm/area/resource", { leaseSeconds: 30 })
@@ -132,7 +131,7 @@ describe("QueueClient reserveWhenAvailable", () => {
       encodeQueueReserveResponse([]),
       encodeQueueReserveResponse([{ id: 1n, token: 2n, body: new Uint8Array([5]) }]),
     );
-    const client = new QueueClient(connection as unknown as Connection);
+    const client = new QueueClient(connection);
     const iterator = client
       .reserveWhenAvailable("queue://realm/area/resource", { leaseSeconds: 30, batchSize: 10 })
       [Symbol.asyncIterator]();
@@ -161,7 +160,7 @@ describe("QueueClient reserveWhenAvailable", () => {
   it("unsubscribes when the iterator is aborted", async () => {
     const connection = new FakeQueueConnection();
     connection.reserveResponses.push(encodeQueueReserveResponse([]));
-    const client = new QueueClient(connection as unknown as Connection);
+    const client = new QueueClient(connection);
     const controller = new AbortController();
     const iterator = client
       .reserveWhenAvailable("queue://realm/area/resource", {

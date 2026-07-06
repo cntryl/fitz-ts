@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 
-import type { Connection } from "../../../src/client/connection";
 import { BufferWriter } from "../../../src/core/buffer";
 import { ScheduleClient } from "../../../src/domains/schedule/client";
 import {
@@ -46,7 +45,7 @@ class FakeScheduleConsumerConnection {
 describe("ScheduleClient waitForNotifications", () => {
   it("yields notifications in order", async () => {
     const connection = new FakeScheduleConsumerConnection();
-    const client = new ScheduleClient(connection as unknown as Connection);
+    const client = new ScheduleClient(connection);
     const iterator = client
       .waitForNotifications("schedule://realm/area/resource/run")
       [Symbol.asyncIterator]();
@@ -74,7 +73,7 @@ describe("ScheduleClient waitForNotifications", () => {
 
   it("does not lose notifications that arrive before the iterator waits", async () => {
     const connection = new FakeScheduleConsumerConnection();
-    const client = new ScheduleClient(connection as unknown as Connection);
+    const client = new ScheduleClient(connection);
     const iterator = client
       .waitForNotifications("schedule://realm/area/resource/run")
       [Symbol.asyncIterator]();
@@ -90,6 +89,26 @@ describe("ScheduleClient waitForNotifications", () => {
       done: false,
       value: { payload: new Uint8Array([3]) },
     });
+  });
+
+  it("unsubscribes when waitForNotifications is aborted while waiting", async () => {
+    const connection = new FakeScheduleConsumerConnection();
+    const client = new ScheduleClient(connection);
+    const controller = new AbortController();
+    const iterator = client
+      .waitForNotifications("schedule://realm/area/resource/run", {
+        signal: controller.signal,
+      })
+      [Symbol.asyncIterator]();
+
+    const pending = iterator.next();
+    await vi.waitFor(() => {
+      expect(connection.handlers.has(MSG_SCHEDULE_NOTIFY)).toBe(true);
+    });
+    controller.abort();
+
+    await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+    expect(connection.unsubscribeCount).toBe(1);
   });
 });
 

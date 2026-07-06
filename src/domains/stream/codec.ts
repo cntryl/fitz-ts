@@ -33,16 +33,23 @@ export const StreamCodec = {
    * Payload: [route: string][has_ingest_metadata: u8][ingest_metadata?: bytes]
    */
   encodeBegin(route: string, ingestMetadata?: Uint8Array): Uint8Array {
-    const writer = new BufferWriter(256);
-    writer.writeRoute(route);
+    const routeBytes = getRouteEncoding(route);
     if (ingestMetadata && ingestMetadata.length > 0) {
-      writer.writeU8(1);
-      writer.writeU32BE(ingestMetadata.length);
-      writer.writeBytes(ingestMetadata);
-    } else {
-      writer.writeU8(0);
+      const buffer = new Uint8Array(routeBytes.length + 1 + 4 + ingestMetadata.length);
+      let offset = 0;
+
+      buffer.set(routeBytes, offset);
+      offset += routeBytes.length;
+      buffer[offset++] = 1;
+      offset = writeU32BEAt(buffer, offset, ingestMetadata.length);
+      buffer.set(ingestMetadata, offset);
+      return buffer;
     }
-    return writer.getBufferView();
+
+    const buffer = new Uint8Array(routeBytes.length + 1);
+    buffer.set(routeBytes, 0);
+    buffer[routeBytes.length] = 0;
+    return buffer;
   },
 
   /**
@@ -127,10 +134,10 @@ export const StreamCodec = {
    * Payload: [session_id: u64][mode: u8]
    */
   encodeCommit(sessionId: bigint, mode: StreamCommitMode): Uint8Array {
-    const writer = new BufferWriter(64);
-    writer.writeU64BE(sessionId);
-    writer.writeU8(mode === "Sync" ? 1 : 0);
-    return writer.getBufferView();
+    const buffer = new Uint8Array(9);
+    writeU64BEAt(buffer, 0, sessionId);
+    buffer[8] = mode === "Sync" ? 1 : 0;
+    return buffer;
   },
 
   /**
@@ -148,9 +155,9 @@ export const StreamCodec = {
    * Payload: [session_id: u64]
    */
   encodeRollback(sessionId: bigint): Uint8Array {
-    const writer = new BufferWriter(64);
-    writer.writeU64BE(sessionId);
-    return writer.getBufferView();
+    const buffer = new Uint8Array(8);
+    writeU64BEAt(buffer, 0, sessionId);
+    return buffer;
   },
 
   /**
@@ -258,9 +265,7 @@ export const StreamCodec = {
    * Payload: [route: string]
    */
   encodeLast(route: string): Uint8Array {
-    const writer = new BufferWriter(128);
-    writer.writeRoute(route);
-    return writer.getBufferView();
+    return getRouteEncoding(route).slice();
   },
 
   /**
@@ -287,9 +292,7 @@ export const StreamCodec = {
    * Payload: [route: string]
    */
   encodeMetadata(route: string): Uint8Array {
-    const writer = new BufferWriter(128);
-    writer.writeRoute(route);
-    return writer.getBufferView();
+    return getRouteEncoding(route).slice();
   },
 
   /**

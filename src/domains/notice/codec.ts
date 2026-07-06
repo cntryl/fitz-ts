@@ -3,7 +3,7 @@
  * Per fitz-go/internal/domains/notice/protocol.go
  */
 
-import { BufferWriter, BufferReader } from "../../core/buffer";
+import { BufferReader, getRouteEncoding, writeU32BEAt, writeU64BEAt } from "../../core/buffer";
 import { SubscribeResponse, UnsubscribeResponse } from "./types";
 
 export const NoticeCodec = {
@@ -12,11 +12,15 @@ export const NoticeCodec = {
    * Payload: [string route][bytes body]
    */
   encodePublish(route: string, body: Uint8Array): Uint8Array {
-    const writer = new BufferWriter(256);
-    writer.writeRoute(route);
-    writer.writeU32BE(body.length);
-    writer.writeBytes(body);
-    return writer.getBufferView();
+    const routeBytes = getRouteEncoding(route);
+    const buffer = new Uint8Array(routeBytes.length + 4 + body.length);
+    let offset = 0;
+
+    buffer.set(routeBytes, offset);
+    offset += routeBytes.length;
+    offset = writeU32BEAt(buffer, offset, body.length);
+    buffer.set(body, offset);
+    return buffer;
   },
 
   /**
@@ -24,9 +28,7 @@ export const NoticeCodec = {
    * Payload: [string pattern]
    */
   encodeSubscribe(pattern: string): Uint8Array {
-    const writer = new BufferWriter(64);
-    writer.writeRoute(pattern);
-    return writer.getBufferView();
+    return getRouteEncoding(pattern).slice();
   },
 
   /**
@@ -59,9 +61,9 @@ export const NoticeCodec = {
    * Payload: [u64 subscription_id]
    */
   encodeUnsubscribe(subId: bigint): Uint8Array {
-    const writer = new BufferWriter(64);
-    writer.writeU64BE(subId);
-    return writer.getBufferView();
+    const buffer = new Uint8Array(8);
+    writeU64BEAt(buffer, 0, subId);
+    return buffer;
   },
 
   /**

@@ -74,11 +74,11 @@ describe("RPC integration", () => {
       const f = new TestFixture(transport, authMode);
       await f.connectOrFail();
 
-      await expect(
-        f.client().rpc().call(f.uniqueRoute("rpc"), b("nobody-home"), {
-          timeoutMs: 500,
-        }),
-      ).rejects.toBeTruthy();
+      const iterator = await f.client().rpc().call(f.uniqueRoute("rpc"), b("nobody-home"), {
+        timeoutMs: 500,
+      });
+
+      await expect(iterator.next()).rejects.toBeTruthy();
     });
 
     it("should load balance requests across multiple workers", async () => {
@@ -164,11 +164,11 @@ describe("RPC integration", () => {
 
       await sub.unsubscribe();
 
-      await expect(
-        caller.client().rpc().call(route, b("dead"), {
-          timeoutMs: 500,
-        }),
-      ).rejects.toBeTruthy();
+      const dead = await caller.client().rpc().call(route, b("dead"), {
+        timeoutMs: 500,
+      });
+
+      await expect(dead.next()).rejects.toBeTruthy();
     });
   });
 });

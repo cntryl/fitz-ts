@@ -3,7 +3,13 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, expectTypeOf, it } from "vite-plus/test";
+
+import type {
+  BrowserClient,
+  BrowserTransportType,
+  BrowserWebSocketOptions,
+} from "../../src/client/browser-client";
 
 function collectExportNames(source: string): string[] {
   const names: string[] = [];
@@ -143,6 +149,7 @@ describe("public surface", () => {
       "InboundRequest",
       "ResponseWriter",
       "RpcHandler",
+      "RegisterWorkerOptions",
       "RpcSubscription",
       "RpcStatus",
       "LeaseClient",
@@ -224,5 +231,10 @@ describe("public surface", () => {
 
     const streamSource = readSource("../../src/domains/stream/types.ts");
     expect(streamSource).toContain("export function createStreamSubscription(");
+  });
+
+  it("keeps browser client config browser-safe", () => {
+    expectTypeOf<BrowserClient["config"]["transport"]>().toEqualTypeOf<BrowserTransportType>();
+    expectTypeOf<BrowserClient["config"]["webSocket"]>().toEqualTypeOf<BrowserWebSocketOptions>();
   });
 });

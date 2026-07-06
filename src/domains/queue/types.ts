@@ -3,7 +3,7 @@
  * Per fitz-go/internal/domains/queue/queue.go
  */
 
-import { Connection } from "../../client/connection";
+import type { DisconnectListenerPort, RequestPort } from "../base";
 import { QueueCodec } from "./codec";
 import { QueueError } from "../../core/errors";
 import { MSG_QUEUE_EXTEND, MSG_QUEUE_COMPLETE } from "../../frame/types";
@@ -19,7 +19,7 @@ export function createQueueItem(
   token: bigint,
   body: Uint8Array,
   route: string,
-  connection: Connection,
+  connection: RequestPort & DisconnectListenerPort,
 ) {
   let closed = false;
   let unsubscribeDisconnect: () => void = () => undefined;

@@ -3,9 +3,21 @@
  */
 
 import { createDomainClient } from "../base";
+import type {
+  AsyncDispatchPort,
+  DisconnectListenerPort,
+  NotificationPort,
+  PushClassifierPort,
+  ReconnectListenerPort,
+  ReconnectRestoreRequestPort,
+  RequestPort,
+  SendPort,
+  StateReadPort,
+} from "../base";
 import { RpcCodec, acquirePooledCorrelationId, releasePooledCorrelationId } from "./codec";
 import {
   RequestOptions,
+  RegisterWorkerOptions,
   ResponseFrame,
   RpcHandler,
   RpcSubscription,
@@ -16,34 +28,54 @@ import {
 import {
   MSG_RPC_REQUEST,
   MSG_RPC_RESPONSE,
-  MSG_RPC_ACK,
   MSG_RPC_SUBSCRIBE_WORKER,
   MSG_RPC_UNSUBSCRIBE_WORKER,
 } from "../../frame/types";
 import {
   ConnectionError,
+  ErrCodeRpcBackpressure,
+  ErrCodeRpcCorrelationNotFound,
+  ErrCodeRpcRouteNotRegistered,
+  ErrCodeRpcTimeout,
+  ErrCodeRpcUnauthorized,
   ErrCodeRpcWorkerNotFound,
   RpcError,
   TransportError,
 } from "../../core/errors";
 import { ConnectionState } from "../../core/types";
-import { readU128BEAt, utf8Encoder } from "../../core/buffer";
+import { BufferWriter, readU128BEAt, utf8Encoder } from "../../core/buffer";
 import { isConcreteRouteShape } from "../_routes";
-import type { Connection } from "../../client/connection";
+
+type RpcConnectionPort = RequestPort &
+  SendPort &
+  NotificationPort &
+  ReconnectListenerPort &
+  DisconnectListenerPort &
+  AsyncDispatchPort &
+  StateReadPort &
+  PushClassifierPort &
+  Partial<ReconnectRestoreRequestPort>;
 
 type DecodedInboundRequest = {
   correlationId: Uint8Array;
   route: string;
-  replyRoute: string;
   body: Uint8Array;
 };
+
+type RegisteredWorker = {
+  handler: RpcHandler;
+  options: Required<RegisterWorkerOptions>;
+};
+
+const DEFAULT_WORKER_MAX_CONCURRENCY = 1;
+const MAX_WORKER_MAX_CONCURRENCY = 1024;
 
 type ManagedResponseWriter = ResponseWriter & {
   dispose(): void;
 };
 
 function createRpcResponseWriter(
-  connection: Connection,
+  connection: SendPort & DisconnectListenerPort & StateReadPort,
   correlationId: Uint8Array,
 ): ManagedResponseWriter {
   let sequence = 0n;
@@ -91,7 +123,7 @@ function createRpcResponseWriter(
   };
 }
 
-function isBenignShutdownError(error: unknown, connection: Connection): boolean {
+function isBenignShutdownError(error: unknown, connection: StateReadPort): boolean {
   if (connection.getState() !== ConnectionState.Authenticated) {
     return true;
   }
@@ -276,19 +308,19 @@ function createRpcIterator(
 export type RpcClient = ReturnType<typeof createRpcClient>;
 
 type RpcClientConstructor = {
-  new (connection: Connection): RpcClient;
-  (connection: Connection): RpcClient;
+  new (connection: RpcConnectionPort): RpcClient;
+  (connection: RpcConnectionPort): RpcClient;
 };
 
-export const RpcClient: RpcClientConstructor = function (connection: Connection) {
+export const RpcClient: RpcClientConstructor = function (connection: RpcConnectionPort) {
   return createRpcClient(connection);
 } as unknown as RpcClientConstructor;
 
-export function createRpcClient(connection: Connection) {
+export function createRpcClient(connection: RpcConnectionPort) {
   const { requestFrame, requestReconnectFrame } = createDomainClient(connection);
   type PendingRpcEntry = { iterator: RpcIterator; correlationId: Uint8Array };
   const pendingRpcs = new Map<bigint, PendingRpcEntry>();
-  const workers = new Map<string, RpcHandler>();
+  const workers = new Map<string, RegisteredWorker>();
   let initialized = false;
 
   const cleanupPendingRpc = (correlationKey: bigint, correlationId: Uint8Array): void => {
@@ -318,8 +350,13 @@ export function createRpcClient(connection: Connection) {
 
     const registeredWorkers = Array.from(workers.entries());
     workers.clear();
-    for (const [route, handler] of registeredWorkers) {
-      await registerWorkerInternal(route, handler, requestReconnectFrame);
+    for (const [route, registration] of registeredWorkers) {
+      await registerWorkerInternal(
+        route,
+        registration.handler,
+        registration.options,
+        requestReconnectFrame,
+      );
     }
   });
 
@@ -344,18 +381,7 @@ export function createRpcClient(connection: Connection) {
 
     try {
       const payload = RpcCodec.encodeCallRequest(correlationId, route, body);
-      const response = await requestFrame(MSG_RPC_REQUEST, payload, options?.signal);
-
-      const decoded = RpcCodec.decodeRequestResponse(response);
-      if (decoded.status !== RpcStatus.Ok) {
-        cleanupPendingRpc(correlationKey, correlationId);
-        throw new RpcError(
-          `RPC REQUEST failed: status ${decoded.status}`,
-          "REQUEST_FAILED",
-          decoded.status,
-        );
-      }
-
+      await connection.send(MSG_RPC_REQUEST, payload, options?.signal);
       return iterator;
     } catch (error) {
       cleanupPendingRpc(correlationKey, correlationId);
@@ -366,9 +392,10 @@ export function createRpcClient(connection: Connection) {
   const registerWorkerInternal = async (
     route: string,
     handler: RpcHandler,
+    options: Required<RegisterWorkerOptions>,
     request = requestFrame,
   ): Promise<void> => {
-    const payload = RpcCodec.encodeSubscribeWorker(route);
+    const payload = RpcCodec.encodeSubscribeWorker(route, options.maxConcurrency);
     const response = await request(MSG_RPC_SUBSCRIBE_WORKER, payload);
     const decoded = RpcCodec.decodeSubscribeWorkerResponse(response);
 
@@ -380,13 +407,18 @@ export function createRpcClient(connection: Connection) {
       );
     }
 
-    workers.set(route, handler);
+    workers.set(route, { handler, options });
   };
 
-  const registerWorker = async (route: string, handler: RpcHandler): Promise<RpcSubscription> => {
+  const registerWorker = async (
+    route: string,
+    handler: RpcHandler,
+    options?: RegisterWorkerOptions,
+  ): Promise<RpcSubscription> => {
     assertRpcRoute(route);
     initRpcHandler();
-    await registerWorkerInternal(route, handler);
+    const normalizedOptions = normalizeRegisterWorkerOptions(options);
+    await registerWorkerInternal(route, handler, normalizedOptions);
 
     const unsubscribeFn = async (registeredRoute: string) => {
       await unregisterWorker(registeredRoute);
@@ -417,6 +449,13 @@ export function createRpcClient(connection: Connection) {
     }
     initialized = true;
 
+    connection.registerPushFrameClassifier?.(MSG_RPC_RESPONSE, (payload) =>
+      RpcCodec.isStreamResponsePayload(payload),
+    );
+    connection.registerPushFrameClassifier?.(MSG_RPC_REQUEST, (payload) =>
+      RpcCodec.isInboundRequestPayload(payload),
+    );
+
     connection.registerNotificationHandler(MSG_RPC_RESPONSE, (payload: Uint8Array) => {
       try {
         const { correlationKey, sequence, body, streamEnd } = RpcCodec.decodeResponseKey(payload);
@@ -424,11 +463,6 @@ export function createRpcClient(connection: Connection) {
       } catch {
         // Best-effort decode for background frames.
       }
-    });
-
-    connection.registerNotificationHandler(MSG_RPC_ACK, () => {
-      // Worker ACK frames are broker-internal flow control signals. The current
-      // public RPC API does not surface them.
     });
 
     connection.registerNotificationHandler(MSG_RPC_REQUEST, (payload: Uint8Array) => {
@@ -454,12 +488,12 @@ export function createRpcClient(connection: Connection) {
     }
     const iterator = entry.iterator;
 
-    const terminalError = RpcCodec.decodeErrorBody(body);
-    if (terminalError?.code === ErrCodeRpcWorkerNotFound) {
+    const terminalError = streamEnd ? RpcCodec.decodeErrorBody(body) : null;
+    if (terminalError) {
       iterator.fail(
         new RpcError(
-          terminalError.message || "RPC worker not found",
-          "WORKER_NOT_FOUND",
+          terminalError.message || "RPC error",
+          rpcErrorCodeName(terminalError.code),
           terminalError.code,
         ),
       );
@@ -478,20 +512,19 @@ export function createRpcClient(connection: Connection) {
   };
 
   const handleRpcRequest = (req: DecodedInboundRequest): void => {
-    const handler = workers.get(req.route);
+    const registration = workers.get(req.route);
 
-    if (!handler) {
+    if (!registration) {
       return;
     }
 
     const writer = createRpcResponseWriter(connection, req.correlationId);
 
-    connection.dispatchAsyncHandler(async () => {
+    const accepted = tryDispatchRpcHandler(async () => {
       try {
-        await handler(
+        await registration.handler(
           {
             route: req.route,
-            replyRoute: req.replyRoute,
             body: req.body,
           },
           writer,
@@ -511,6 +544,32 @@ export function createRpcClient(connection: Connection) {
         writer.dispose();
       }
     });
+
+    if (!accepted) {
+      void sendBackpressureResponse(writer);
+    }
+  };
+
+  const tryDispatchRpcHandler = (task: () => void | Promise<void>): boolean => {
+    if (typeof connection.tryDispatchAsyncHandler === "function") {
+      return connection.tryDispatchAsyncHandler(task);
+    }
+
+    connection.dispatchAsyncHandler(task);
+    return true;
+  };
+
+  const sendBackpressureResponse = async (writer: ManagedResponseWriter): Promise<void> => {
+    try {
+      await writer.send(
+        encodeRpcErrorBody(ErrCodeRpcBackpressure, "Local RPC worker is overloaded"),
+        true,
+      );
+    } catch {
+      // Best-effort overload response.
+    } finally {
+      writer.dispose();
+    }
   };
 
   const correlationIdToKey = (correlationId: Uint8Array): bigint => {
@@ -525,11 +584,59 @@ export function createRpcClient(connection: Connection) {
 
 export * from "./types";
 
+function encodeRpcErrorBody(code: number, message: string): Uint8Array {
+  const writer = new BufferWriter(64);
+  writer.writeU8(1);
+  writer.writeU32BE(code);
+  writer.writeString(message);
+  return writer.getBuffer();
+}
+
 function assertRpcRoute(route: string): void {
   if (!isConcreteRouteShape(route, "rpc")) {
     throw new RpcError(
       `Invalid rpc route: ${route} (expected rpc://{realm}/{area}/{resource} or any other concrete rpc route, no empty segments or wildcards)`,
       "INVALID_ROUTE",
     );
+  }
+}
+
+function normalizeRegisterWorkerOptions(
+  options: RegisterWorkerOptions | undefined,
+): Required<RegisterWorkerOptions> {
+  const maxConcurrency = options?.maxConcurrency ?? DEFAULT_WORKER_MAX_CONCURRENCY;
+
+  if (
+    !Number.isInteger(maxConcurrency) ||
+    maxConcurrency < 1 ||
+    maxConcurrency > MAX_WORKER_MAX_CONCURRENCY
+  ) {
+    throw new RpcError(
+      `Invalid rpc worker maxConcurrency: ${maxConcurrency} (expected integer in 1..=${MAX_WORKER_MAX_CONCURRENCY})`,
+      "INVALID_OPTIONS",
+    );
+  }
+
+  return { maxConcurrency };
+}
+
+function rpcErrorCodeName(domainCode: number): string {
+  switch (domainCode) {
+    case ErrCodeRpcTimeout:
+      return "TIMEOUT";
+    case ErrCodeRpcWorkerNotFound:
+      return "WORKER_NOT_FOUND";
+    case ErrCodeRpcBackpressure:
+      return "BACKPRESSURE";
+    case ErrCodeRpcRouteNotRegistered:
+      return "ROUTE_NOT_REGISTERED";
+    case ErrCodeRpcCorrelationNotFound:
+      return "CORRELATION_NOT_FOUND";
+    case ErrCodeRpcUnauthorized:
+      return "UNAUTHORIZED";
+    case 6007:
+      return "DUPLICATE_CORRELATION";
+    default:
+      return "DOMAIN_ERROR";
   }
 }

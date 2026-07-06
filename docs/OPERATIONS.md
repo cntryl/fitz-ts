@@ -32,6 +32,20 @@ swap out cached domain clients, or replace the owned connection object.
 
 The initial `connect()` call is still one-shot by default. If startup should keep waiting for Fitz to come back, add that outer loop in the application process manager or bootstrap code.
 
+## Domain Recovery Semantics
+
+Reconnect creates a new broker session. fitz-ts rebuilds only state that the client owns locally and invalidates broker-owned handles from the old session:
+
+| Domain surface                            | fitz-ts behavior after reconnect                                                                                                               |
+| ----------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| Notice subscriptions                      | Re-subscribes active client-owned handlers. Missed notices are not replayed.                                                                   |
+| Queue availability subscriptions          | Re-subscribes active watches. `QueueItem` handles reserved before disconnect fail; call `reserve()` again.                                     |
+| RPC workers and pending calls             | Re-registers active workers before reporting reconnect success. Pending callers fail with `ConnectionError`.                                   |
+| Lease subscriptions and handles           | Re-subscribes change handlers. `Lease` handles acquired before disconnect fail; call `acquire()` again.                                        |
+| Stream subscriptions, sessions, and reads | Re-subscribes live commit handlers. `StreamSession` handles fail after disconnect. Replay resumes only from offsets owned by application code. |
+| Schedule subscriptions                    | Re-subscribes active schedule notification handlers. Durable schedule definitions remain broker state; live subscriptions do not.              |
+| KV transactions                           | Open transaction handles fail after disconnect; begin a fresh transaction if work must continue.                                               |
+
 ## Heartbeats
 
 Idle subscription clients stay connected by default. `heartbeat.enabled` defaults to `true`, `heartbeat.intervalMs` defaults to `10000`, and `heartbeat.timeoutMs` defaults to `30000`.

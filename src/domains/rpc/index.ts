@@ -12,4 +12,5 @@ export {
   type ResponseWriter,
   type RpcHandler,
   type RequestOptions,
+  type RegisterWorkerOptions,
 } from "./types";

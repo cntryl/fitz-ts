@@ -67,6 +67,10 @@ class FakeConnection {
     this.lastRequest = { messageType, payload };
   }
 
+  async send(messageType: number, payload: Uint8Array): Promise<void> {
+    this.lastRequest = { messageType, payload };
+  }
+
   getMultiplexer(): { expectOptionalResponse: (messageType: number) => () => void } {
     return this.multiplexer;
   }

@@ -1,31 +1,37 @@
-import { bench, describe } from "vitest";
+import { describe } from "vitest";
 import { RpcCodec } from "../../src/domains/rpc/codec";
-import { encoder, routes } from "../_shared";
+import { SYNC_CODEC_BATCH_SIZE, benchBatch } from "../_bench";
+import { buildCorrelationIds, cycleFixture, encoder, routes } from "../_shared";
 
 const body = encoder.encode("rpc-payload");
-const correlationId = RpcCodec.generateCorrelationId();
+const correlationIds = buildCorrelationIds(SYNC_CODEC_BATCH_SIZE);
+const correlationId = correlationIds[0];
 
 const responseFrame = RpcCodec.encodeResponse(correlationId, 1n, body, true);
-const requestFrame = RpcCodec.encodeRequest(correlationId, routes.rpc, routes.reply, body);
+const requestFrame = RpcCodec.encodeRequest(correlationId, routes.rpc, body);
 
 describe("fitz-ts rpc benchmarks", () => {
-  bench("rpc encode request", () => {
-    RpcCodec.encodeRequest(RpcCodec.generateCorrelationId(), routes.rpc, routes.reply, body);
+  benchBatch("rpc encode request", SYNC_CODEC_BATCH_SIZE, (index) => {
+    return RpcCodec.encodeRequest(cycleFixture(correlationIds, index), routes.rpc, body);
   });
 
-  bench("rpc encode response", () => {
-    RpcCodec.encodeResponse(correlationId, 1n, body, false);
+  benchBatch("rpc encode response", SYNC_CODEC_BATCH_SIZE, () => {
+    return RpcCodec.encodeResponse(correlationId, 1n, body, false);
   });
 
-  bench("rpc decode response", () => {
-    RpcCodec.decodeResponse(responseFrame);
+  benchBatch("rpc decode response", SYNC_CODEC_BATCH_SIZE, () => {
+    return RpcCodec.decodeResponse(responseFrame);
   });
 
-  bench("rpc decode inbound request", () => {
-    RpcCodec.decodeInboundRequest(requestFrame);
+  benchBatch("rpc decode inbound request", SYNC_CODEC_BATCH_SIZE, () => {
+    return RpcCodec.decodeInboundRequest(requestFrame);
   });
 
-  bench("rpc subscribe worker encode", () => {
-    RpcCodec.encodeSubscribeWorker(routes.rpc);
+  benchBatch("rpc subscribe worker encode", SYNC_CODEC_BATCH_SIZE, () => {
+    return RpcCodec.encodeSubscribeWorker(routes.rpc, 1);
+  });
+
+  benchBatch("rpc correlation id generation", SYNC_CODEC_BATCH_SIZE, () => {
+    return RpcCodec.generateCorrelationId();
   });
 });

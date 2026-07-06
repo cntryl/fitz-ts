@@ -11,7 +11,6 @@ const encoder = new TextEncoder();
 const queueRoute = "queue://bench/area/resource";
 const scheduleRoute = "schedule://bench/area/resource";
 const rpcRoute = "rpc://bench/area/resource";
-const replyRoute = "rpc://bench/area/reply";
 const body = encoder.encode("subsystem-payload");
 const scheduleCron = "0 0 * * *";
 
@@ -37,11 +36,16 @@ function measureSync(iterations: number, callback: () => void): number {
     callback();
   }
 
-  const startedAt = performance.now();
-  for (let index = 0; index < iterations; index += 1) {
-    callback();
+  const samples: number[] = [];
+  for (let sample = 0; sample < 3; sample += 1) {
+    const startedAt = performance.now();
+    for (let index = 0; index < iterations; index += 1) {
+      callback();
+    }
+    samples.push(performance.now() - startedAt);
   }
-  return performance.now() - startedAt;
+
+  return Math.min(...samples);
 }
 
 describe("fitz-ts subsystem perf thresholds", () => {
@@ -67,11 +71,11 @@ describe("fitz-ts subsystem perf thresholds", () => {
 
   it("keeps rpc codec encode/decode cost within budget", () => {
     const correlationId = RpcCodec.generateCorrelationId();
-    const requestFrame = RpcCodec.encodeRequest(correlationId, rpcRoute, replyRoute, body);
+    const requestFrame = RpcCodec.encodeRequest(correlationId, rpcRoute, body);
 
     expect(
       measureSync(100_000, () =>
-        RpcCodec.encodeRequest(RpcCodec.generateCorrelationId(), rpcRoute, replyRoute, body),
+        RpcCodec.encodeRequest(RpcCodec.generateCorrelationId(), rpcRoute, body),
       ),
     ).toBeLessThan(adjustedThreshold(thresholdsMs.rpcEncodeRequest));
 

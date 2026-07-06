@@ -3,8 +3,16 @@
  */
 
 import { createDomainClient } from "../base";
+import type {
+  AsyncDispatchPort,
+  DisconnectListenerPort,
+  NotificationPort,
+  ReconnectListenerPort,
+  ReconnectRestoreRequestPort,
+  RequestPort,
+  RetryExecutionPort,
+} from "../base";
 import { attachResilienceMeta } from "../../client/resilience";
-import type { Connection } from "../../client/connection";
 import { QueueError } from "../../core/errors";
 import { createWakeGate } from "../../core/wake-gate";
 import {
@@ -32,9 +40,17 @@ type QueueSubscriptionState = {
   handlers: Map<number, AvailabilityHandler>;
 };
 
+type QueueConnectionPort = RequestPort &
+  ReconnectListenerPort &
+  DisconnectListenerPort &
+  NotificationPort &
+  AsyncDispatchPort &
+  RetryExecutionPort &
+  Partial<ReconnectRestoreRequestPort>;
+
 export type QueueClient = ReturnType<typeof createQueueClient>;
 
-export function createQueueClient(connection: Connection) {
+export function createQueueClient(connection: QueueConnectionPort) {
   const { requestFrame, requestReconnectFrame, runWithRetry } = createDomainClient(connection);
   const subscriptionsByPattern = new Map<string, QueueSubscriptionState>();
   const patternsBySubId = new Map<bigint, string>();
@@ -362,11 +378,11 @@ export function createQueueClient(connection: Connection) {
 }
 
 type QueueClientConstructor = {
-  new (connection: Connection): QueueClient;
-  (connection: Connection): QueueClient;
+  new (connection: QueueConnectionPort): QueueClient;
+  (connection: QueueConnectionPort): QueueClient;
 };
 
-export const QueueClient: QueueClientConstructor = function (connection: Connection) {
+export const QueueClient: QueueClientConstructor = function (connection: QueueConnectionPort) {
   return createQueueClient(connection);
 } as unknown as QueueClientConstructor;
 

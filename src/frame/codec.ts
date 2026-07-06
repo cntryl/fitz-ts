@@ -146,7 +146,58 @@ export function createFrameParser() {
     end += data.length;
   };
 
+  const parseCompleteInputFrames = (data: Uint8Array): { frames: Frame[]; consumed: number } => {
+    const frames: Frame[] = [];
+    let cursor = 0;
+
+    while (cursor < data.length) {
+      const frameStart = cursor;
+      const firstByte = data[cursor++];
+      let parsedMessageType: number;
+
+      if (firstByte === 0xff) {
+        if (cursor + 2 > data.length) {
+          return { frames, consumed: frameStart };
+        }
+        parsedMessageType = (data[cursor] << 8) | data[cursor + 1];
+        cursor += 2;
+      } else {
+        parsedMessageType = firstByte;
+      }
+
+      if (cursor + 2 > data.length) {
+        return { frames, consumed: frameStart };
+      }
+
+      const parsedPayloadLength = (data[cursor] << 8) | data[cursor + 1];
+      cursor += 2;
+      if (cursor + parsedPayloadLength > data.length) {
+        return { frames, consumed: frameStart };
+      }
+
+      frames.push({
+        messageType: parsedMessageType,
+        payload: data.subarray(cursor, cursor + parsedPayloadLength),
+      });
+      cursor += parsedPayloadLength;
+    }
+
+    return { frames, consumed: cursor };
+  };
+
   const parseFrames = (data: Uint8Array): Frame[] => {
+    if (state === 0 && offset === end && data.length > 0) {
+      const parsed = parseCompleteInputFrames(data);
+      if (parsed.consumed === data.length) {
+        return parsed.frames;
+      }
+
+      if (parsed.consumed > 0) {
+        appendData(data.subarray(parsed.consumed));
+        return parsed.frames;
+      }
+    }
+
     appendData(data);
 
     const frames: Frame[] = [];

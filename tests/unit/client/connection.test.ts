@@ -9,7 +9,7 @@ import type {
   FitzTracer,
 } from "../../../src/core/types";
 import { BufferWriter } from "../../../src/core/buffer";
-import { AuthenticationError } from "../../../src/core/errors";
+import { AuthenticationError, RequestQueueFullError } from "../../../src/core/errors";
 import { NoticeClient } from "../../../src/domains/notice/client";
 import { FrameCodec } from "../../../src/frame/codec";
 import { MSG_CONNECT, MSG_NOTICE_NOTIFY, MSG_NOTICE_SUBSCRIBE } from "../../../src/frame/types";
@@ -543,6 +543,104 @@ describe("Connection", () => {
     transport.pushRead(FrameCodec.encodeFrame(77, new Uint8Array([9])));
     await expect(firstRequest).resolves.toEqual(new Uint8Array([9]));
 
+    await connection.close();
+  });
+
+  it("records request gate saturation while preserving queue full errors", async () => {
+    const transport = new FakeTransport();
+    const meter = new FakeMeter();
+    const connection = new Connection(
+      () => transport,
+      async () => "",
+      {
+        authSettleDelayMs: 0,
+        maxInFlightRequests: 1,
+        maxRequestQueueSize: 0,
+        observability: {
+          meter,
+        },
+      },
+    );
+
+    await connection.connect();
+
+    const firstRequest = connection.request(77, new Uint8Array([1]));
+    await vi.waitFor(() => {
+      expect(transport.sent).toHaveLength(2);
+    });
+
+    await expect(connection.request(77, new Uint8Array([2]))).rejects.toBeInstanceOf(
+      RequestQueueFullError,
+    );
+    expect(meter.counters).toContainEqual({
+      name: "fitz.request_gate.full",
+      value: 1,
+      attributes: { messageType: 77 },
+    });
+
+    transport.pushRead(FrameCodec.encodeFrame(77, new Uint8Array([9])));
+    await expect(firstRequest).resolves.toEqual(new Uint8Array([9]));
+
+    await connection.close();
+  });
+
+  it("records bounded async handler gauges and saturation through connection observability", async () => {
+    const transport = new FakeTransport();
+    const meter = new FakeMeter();
+    const log = vi.fn();
+    const connection = new Connection(
+      () => transport,
+      async () => "",
+      {
+        asyncHandlers: {
+          maxConcurrency: 1,
+          timeoutMs: 1_000,
+        },
+        maxRequestQueueSize: 1,
+        observability: {
+          logger: { log },
+          meter,
+        },
+      },
+    );
+    const events: string[] = [];
+    let releaseFirst: () => void = () => undefined;
+
+    expect(
+      connection.dispatchAsyncHandler(async () => {
+        events.push("first");
+        await new Promise<void>((resolve) => {
+          releaseFirst = resolve;
+        });
+      }),
+    ).toBe(true);
+    expect(
+      connection.dispatchAsyncHandler(() => {
+        events.push("second");
+      }),
+    ).toBe(true);
+    expect(
+      connection.dispatchAsyncHandler(() => {
+        events.push("dropped");
+      }),
+    ).toBe(false);
+
+    await Promise.resolve();
+    expect(events).toEqual(["first"]);
+    expect(meter.gauges.some((entry) => entry.name === "fitz.async_handlers.active")).toBe(true);
+    expect(meter.gauges.some((entry) => entry.name === "fitz.async_handlers.queued")).toBe(true);
+    expect(meter.counters).toContainEqual({
+      name: "fitz.async_handlers.saturated",
+      value: 1,
+      attributes: undefined,
+    });
+    expect(log).toHaveBeenCalledWith(
+      "warn",
+      "fitz.connection.handler_saturated",
+      expect.objectContaining({ activeCount: 1, queuedCount: 1, saturationCount: 1 }),
+    );
+
+    releaseFirst();
     await connection.close();
   });
 

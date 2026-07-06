@@ -20,7 +20,12 @@ function sign(input: string, secret: string): string {
   return createHmac("sha256", secret).update(input).digest("base64url");
 }
 
-function generateTestJwt(secret: string, audience: string, expiresAtSeconds: number): string {
+function generateTestJwt(
+  secret: string,
+  audience: string,
+  expiresAtSeconds: number,
+  tenant: string,
+): string {
   const now = Math.floor(Date.now() / 1000);
   const header = encodeBase64Url(
     JSON.stringify({
@@ -32,8 +37,8 @@ function generateTestJwt(secret: string, audience: string, expiresAtSeconds: num
     JSON.stringify({
       iss: "",
       aud: audience,
-      sub: "fitz-ts-tests",
-      tid: "fitz-ts-tests",
+      sub: tenant,
+      tid: tenant,
       exp: expiresAtSeconds,
       iat: now,
       permissions: DEFAULT_PERMISSIONS,
@@ -43,14 +48,23 @@ function generateTestJwt(secret: string, audience: string, expiresAtSeconds: num
   return `${header}.${payload}.${signature}`;
 }
 
-export function generateValidTestJwt(secret: string, audience: string): string {
-  return generateTestJwt(secret, audience, Math.floor(Date.now() / 1000) + 3600);
+export function generateValidTestJwt(secret: string, audience: string, tenant: string): string {
+  return generateTestJwt(secret, audience, Math.floor(Date.now() / 1000) + 3600, tenant);
 }
 
-export function generateExpiredTestJwt(secret: string, audience: string): string {
-  return generateTestJwt(secret, audience, Math.floor(Date.now() / 1000) - 3600);
+export function generateExpiredTestJwt(secret: string, audience: string, tenant: string): string {
+  return generateTestJwt(secret, audience, Math.floor(Date.now() / 1000) - 3600, tenant);
 }
 
-export function generateInvalidSignatureTestJwt(secret: string, audience: string): string {
-  return generateTestJwt(`${secret}-invalid`, audience, Math.floor(Date.now() / 1000) + 3600);
+export function generateInvalidSignatureTestJwt(
+  secret: string,
+  audience: string,
+  tenant: string,
+): string {
+  return generateTestJwt(
+    `${secret}-invalid`,
+    audience,
+    Math.floor(Date.now() / 1000) + 3600,
+    tenant,
+  );
 }

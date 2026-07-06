@@ -43,8 +43,9 @@ const OUTPUT_PATH = resolve(
   process.env["CONFORMANCE_OUTPUT"] ?? "./artifacts/conformance-results.json",
 );
 const CLIENT_NAME = "fitz-ts";
-const SECRET = process.env["FITZ_BROKER_JWT_HMAC_SECRET"] ?? "test-secret-key";
+const SECRET = process.env["FITZ_BROKER_JWT_HMAC_SECRET"] ?? "dev-test-secret";
 const AUDIENCE = process.env["FITZ_BROKER_JWT_AUDIENCE"] ?? "fitz";
+const TENANT = process.env["FITZ_BROKER_JWT_TENANT"] ?? "dev";
 
 const BROKER_ADDR = brokerAddrFor(TRANSPORT, AUTH_MODE);
 // ---------------------------------------------------------------------------
@@ -68,7 +69,7 @@ function tokenProvider(): () => string | Promise<string> {
     case "anonymous":
       return () => "";
     case "valid_jwt":
-      return () => generateValidTestJwt(SECRET, AUDIENCE);
+      return () => generateValidTestJwt(SECRET, AUDIENCE, TENANT);
     default:
       return () => "";
   }
@@ -91,6 +92,19 @@ async function withClient<T>(
   } finally {
     await client.close().catch(() => undefined);
   }
+}
+
+async function expectRpcIteratorFailure(
+  iterator: AsyncIterableIterator<unknown>,
+): Promise<unknown> {
+  let caught: unknown;
+  try {
+    await iterator.next();
+  } catch (err) {
+    caught = err;
+  }
+  expect(caught).toBeTruthy();
+  return caught;
 }
 
 async function runScenario(
@@ -187,7 +201,7 @@ describe(`Fitz conformance â€” fitz-ts [transport=${TRANSPORT}, auth=${AUTH
         const client = new Client({
           url: brokerAddrFor("tcp", "invalid_signature"),
           transport: "tcp",
-          tokenProvider: () => generateInvalidSignatureTestJwt(SECRET, AUDIENCE),
+          tokenProvider: () => generateInvalidSignatureTestJwt(SECRET, AUDIENCE, TENANT),
           timeout: 3000,
         });
         try {
@@ -220,7 +234,7 @@ describe(`Fitz conformance â€” fitz-ts [transport=${TRANSPORT}, auth=${AUTH
       const client = new Client({
         url: brokerAddrFor("ws", "invalid_signature"),
         transport: "ws",
-        tokenProvider: () => generateInvalidSignatureTestJwt(SECRET, AUDIENCE),
+        tokenProvider: () => generateInvalidSignatureTestJwt(SECRET, AUDIENCE, TENANT),
         timeout: 3000,
       });
       try {
@@ -290,13 +304,8 @@ describe(`Fitz conformance â€” fitz-ts [transport=${TRANSPORT}, auth=${AUTH
 
       await withClient({}, async (client) => {
         const noWorkerRoute = uniqueRoute("rpc");
-        let caught: unknown;
-        try {
-          await client.rpc().call(noWorkerRoute, b("ping"), { timeoutMs: 500 });
-        } catch (err) {
-          caught = err;
-        }
-        expect(caught).toBeTruthy();
+        const iterator = await client.rpc().call(noWorkerRoute, b("ping"), { timeoutMs: 500 });
+        const caught = await expectRpcIteratorFailure(iterator);
         evidence.push(`rpc to unregistered route threw: ${(caught as Error).constructor.name}`);
 
         // Client must still be usable
@@ -365,14 +374,8 @@ describe(`Fitz conformance â€” fitz-ts [transport=${TRANSPORT}, auth=${AUTH
 
         // No worker registered â€” server returns RPC_ERR_NO_WORKER (retryable or
         // domain error, code should be accessible on the thrown error)
-        let caught: unknown;
-        try {
-          await client.rpc().call(route, b("ping"), { timeoutMs: 500 });
-        } catch (err) {
-          caught = err;
-        }
-
-        expect(caught).toBeTruthy();
+        const iterator = await client.rpc().call(route, b("ping"), { timeoutMs: 500 });
+        const caught = await expectRpcIteratorFailure(iterator);
         const err = caught as Error & { code?: string; domainCode?: number };
         evidence.push(`error class: ${err.constructor.name}`);
         evidence.push(`error.code: ${err.code ?? "n/a"}`);
@@ -415,17 +418,33 @@ describe(`Fitz conformance â€” fitz-ts [transport=${TRANSPORT}, auth=${AUTH
     const result = await runScenario("CS-007", "timeout handling", "P0", async () => {
       const evidence: string[] = [];
 
-      await withClient({}, async (client) => {
+      const workerClient = new Client({
+        url: BROKER_ADDR,
+        transport: TRANSPORT,
+        tokenProvider: tokenProvider(),
+        timeout: 10000,
+      });
+
+      const callerClient = new Client({
+        url: BROKER_ADDR,
+        transport: TRANSPORT,
+        tokenProvider: tokenProvider(),
+        timeout: 10000,
+      });
+
+      try {
+        await workerClient.connect();
+        await callerClient.connect();
+
         const route = uniqueRoute("rpc");
+        const sub = await workerClient.rpc().registerWorker(route, async () => {
+          await new Promise<void>((resolve) => setTimeout(resolve, 2000));
+        });
+
         const start = Date.now();
-        let caught: unknown;
-        try {
-          await client.rpc().call(route, b("nobody"), { timeoutMs: 250 });
-        } catch (err) {
-          caught = err;
-        }
+        const iterator = await callerClient.rpc().call(route, b("nobody"), { timeoutMs: 250 });
+        const caught = await expectRpcIteratorFailure(iterator);
         const elapsed = Date.now() - start;
-        expect(caught).toBeTruthy();
         evidence.push(`rpc threw after ~${elapsed}ms`);
         evidence.push(`error class: ${(caught as Error).constructor.name}`);
 
@@ -439,11 +458,16 @@ describe(`Fitz conformance â€” fitz-ts [transport=${TRANSPORT}, auth=${AUTH
 
         // Connection still healthy
         const kvRoute = uniqueRoute("kv");
-        const tx = await client.kv().begin(kvRoute, { durability: "Sync" });
+        const tx = await callerClient.kv().begin(kvRoute, { durability: "Sync" });
         await tx.put(b("post-timeout"), b("ok"));
         await tx.commit();
         evidence.push("connection healthy after timeout");
-      });
+
+        await sub.unsubscribe().catch(() => undefined);
+      } finally {
+        await workerClient.close().catch(() => undefined);
+        await callerClient.close().catch(() => undefined);
+      }
 
       return { verdict: "pass", evidence };
     });

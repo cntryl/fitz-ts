@@ -19,9 +19,11 @@ export const EnvBrokerAnonTCPAddr = "FITZ_BROKER_ANON_TCP_ADDR";
 export const EnvBrokerAnonWSAddr = "FITZ_BROKER_ANON_WS_ADDR";
 export const EnvBrokerJWTHMACSecret = "FITZ_BROKER_JWT_HMAC_SECRET";
 export const EnvBrokerJWTAudience = "FITZ_BROKER_JWT_AUDIENCE";
+export const EnvBrokerJWTTenant = "FITZ_BROKER_JWT_TENANT";
 
-const DEFAULT_SECRET = "test-secret-key";
+const DEFAULT_SECRET = "dev-test-secret";
 const DEFAULT_AUDIENCE = "fitz";
+const DEFAULT_TENANT = "dev";
 
 function env(name: string): string | undefined {
   const value = process.env[name];
@@ -70,16 +72,17 @@ export function brokerAddrFor(transport: TransportType, authMode: AuthMode): str
 function tokenProviderForMode(authMode: AuthMode): () => string | Promise<string> {
   const secret = env(EnvBrokerJWTHMACSecret) ?? DEFAULT_SECRET;
   const audience = env(EnvBrokerJWTAudience) ?? DEFAULT_AUDIENCE;
+  const tenant = env(EnvBrokerJWTTenant) ?? DEFAULT_TENANT;
 
   switch (authMode) {
     case "anonymous":
       return () => "";
     case "valid_jwt":
-      return () => generateValidTestJwt(secret, audience);
+      return () => generateValidTestJwt(secret, audience, tenant);
     case "expired_jwt":
-      return () => generateExpiredTestJwt(secret, audience);
+      return () => generateExpiredTestJwt(secret, audience, tenant);
     case "invalid_signature":
-      return () => generateInvalidSignatureTestJwt(secret, audience);
+      return () => generateInvalidSignatureTestJwt(secret, audience, tenant);
     default:
       throw new Error("unsupported auth mode");
   }

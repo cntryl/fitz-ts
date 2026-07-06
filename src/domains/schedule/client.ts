@@ -3,7 +3,13 @@
  */
 
 import { createDomainClient } from "../base";
-import type { Connection } from "../../client/connection";
+import type {
+  AsyncDispatchPort,
+  NotificationPort,
+  ReconnectListenerPort,
+  ReconnectRestoreRequestPort,
+  RequestPort,
+} from "../base";
 import {
   MSG_SCHEDULE_CANCEL,
   MSG_SCHEDULE_CREATE,
@@ -30,9 +36,15 @@ type ScheduleSubscriptionState = {
   handlers: Map<number, ScheduleHandler>;
 };
 
+type ScheduleConnectionPort = RequestPort &
+  ReconnectListenerPort &
+  NotificationPort &
+  AsyncDispatchPort &
+  Partial<ReconnectRestoreRequestPort>;
+
 export type ScheduleClient = ReturnType<typeof createScheduleClient>;
 
-export function createScheduleClient(connection: Connection) {
+export function createScheduleClient(connection: ScheduleConnectionPort) {
   const { requestFrame, requestReconnectFrame } = createDomainClient(connection);
   const subscriptionsByPattern = new Map<string, ScheduleSubscriptionState>();
   const patternsBySubId = new Map<bigint, string>();
@@ -304,11 +316,13 @@ export function createScheduleClient(connection: Connection) {
 }
 
 type ScheduleClientConstructor = {
-  new (connection: Connection): ScheduleClient;
-  (connection: Connection): ScheduleClient;
+  new (connection: ScheduleConnectionPort): ScheduleClient;
+  (connection: ScheduleConnectionPort): ScheduleClient;
 };
 
-export const ScheduleClient: ScheduleClientConstructor = function (connection: Connection) {
+export const ScheduleClient: ScheduleClientConstructor = function (
+  connection: ScheduleConnectionPort,
+) {
   return createScheduleClient(connection);
 } as unknown as ScheduleClientConstructor;
 

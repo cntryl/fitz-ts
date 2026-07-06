@@ -1,4 +1,4 @@
-import { bench, describe } from "vitest";
+import { describe } from "vitest";
 
 import { Multiplexer } from "../../src/client/multiplexer";
 import { FrameCodec, FrameParser } from "../../src/frame/codec";
@@ -9,12 +9,27 @@ import { RpcCodec } from "../../src/domains/rpc/codec";
 import { QueueCodec } from "../../src/domains/queue/codec";
 import { ScheduleCodec } from "../../src/domains/schedule/codec";
 import { StreamCodec } from "../../src/domains/stream/codec";
+import {
+  ASYNC_ROUND_TRIP_BATCH_SIZE,
+  FIFO_DRAIN_BATCH_SIZE,
+  SYNC_CODEC_BATCH_SIZE,
+  benchAsync,
+  benchBatch,
+  benchMacro,
+  consume,
+} from "../_bench";
+import {
+  buildCorrelationIds,
+  buildFrameBatch,
+  buildResponseFrame,
+  chunkBuffer,
+  cycleFixture,
+} from "../_shared";
 
 const encoder = new TextEncoder();
 const route = "kv://bench/area/resource";
 const noticeRoute = "notice://bench/area/resource";
 const rpcRoute = "rpc://bench/area/resource";
-const replyRoute = "rpc://bench/area/reply";
 const queueRoute = "queue://bench/area/resource";
 const scheduleRoute = "schedule://bench/area/resource";
 const body = encoder.encode("benchmark-payload");
@@ -22,93 +37,99 @@ const key = encoder.encode("bench-key");
 const txId = 42n;
 const leaseTtlSecs = 30;
 const scheduleCron = "*/5 * * * *";
-
-function buildResponseFrame(index: number): Uint8Array {
-  return encoder.encode(`response-${index}`);
-}
+const rpcCorrelationIds = buildCorrelationIds(SYNC_CODEC_BATCH_SIZE);
+const responseFrames = Array.from({ length: 1_000 }, (_, index) => buildResponseFrame(index));
+const encodedFrame = FrameCodec.encodeFrame(101, body);
+const parserFrameA = FrameCodec.encodeFrame(302, buildResponseFrame(1));
+const parserFrameB = FrameCodec.encodeFrame(303, buildResponseFrame(2));
+const parserChunks = chunkBuffer(buildFrameBatch([parserFrameA, parserFrameB]), 3);
 
 describe("fitz-ts hotpath benchmarks", () => {
-  bench("frame encode (small payload)", () => {
-    FrameCodec.encodeFrame(101, body);
+  benchBatch("frame encode (small payload)", SYNC_CODEC_BATCH_SIZE, () => {
+    return FrameCodec.encodeFrame(101, body);
   });
 
-  const encodedFrame = FrameCodec.encodeFrame(101, body);
-  bench("frame decode (small payload)", () => {
-    FrameCodec.decodeFrame(encodedFrame);
+  benchBatch("frame decode (small payload)", SYNC_CODEC_BATCH_SIZE, () => {
+    return FrameCodec.decodeFrame(encodedFrame);
   });
 
-  bench("notice publish encode", () => {
-    NoticeCodec.encodePublish(noticeRoute, body);
+  benchBatch("notice publish encode", SYNC_CODEC_BATCH_SIZE, () => {
+    return NoticeCodec.encodePublish(noticeRoute, body);
   });
 
-  bench("kv get encode", () => {
-    KvCodec.encodeGet(txId, route, key);
+  benchBatch("kv get encode", SYNC_CODEC_BATCH_SIZE, () => {
+    return KvCodec.encodeGet(txId, route, key);
   });
 
-  bench("lease acquire encode", () => {
-    LeaseCodec.encodeAcquire(route, leaseTtlSecs);
+  benchBatch("lease acquire encode", SYNC_CODEC_BATCH_SIZE, () => {
+    return LeaseCodec.encodeAcquire(route, leaseTtlSecs);
   });
 
-  bench("queue enqueue encode", () => {
-    QueueCodec.encodeEnqueue(queueRoute, body, { delayMs: 1500 });
+  benchBatch("queue enqueue encode", SYNC_CODEC_BATCH_SIZE, () => {
+    return QueueCodec.encodeEnqueue(queueRoute, body, { delayMs: 1500 });
   });
 
-  bench("schedule create encode", () => {
-    ScheduleCodec.encodeCreate(scheduleRoute, scheduleCron, body);
+  benchBatch("schedule create encode", SYNC_CODEC_BATCH_SIZE, () => {
+    return ScheduleCodec.encodeCreate(scheduleRoute, scheduleCron, body);
   });
 
-  bench("stream append encode", () => {
-    StreamCodec.encodeAppend(1n, 0n, body, undefined, "tag");
+  benchBatch("stream append encode", SYNC_CODEC_BATCH_SIZE, () => {
+    return StreamCodec.encodeAppend(1n, 0n, body, undefined, "tag");
   });
 
-  bench("rpc call encode", () => {
-    RpcCodec.encodeRequest(RpcCodec.generateCorrelationId(), rpcRoute, replyRoute, body);
+  benchBatch("rpc call encode", SYNC_CODEC_BATCH_SIZE, (index) => {
+    return RpcCodec.encodeRequest(cycleFixture(rpcCorrelationIds, index), rpcRoute, body);
   });
 
-  bench("rpc correlation id generation", () => {
-    RpcCodec.generateCorrelationId();
+  benchBatch("rpc correlation id generation", SYNC_CODEC_BATCH_SIZE, () => {
+    return RpcCodec.generateCorrelationId();
   });
 
-  bench("multiplexer request/response round-trip", async () => {
+  benchAsync("multiplexer request/response round-trip", async () => {
     const multiplexer = new Multiplexer();
     multiplexer.setConnected();
 
-    const pending = multiplexer.request(302, body, async () => undefined, 1000);
-    multiplexer.dispatch(302, body);
-    await pending;
+    for (let index = 0; index < ASYNC_ROUND_TRIP_BATCH_SIZE; index += 1) {
+      const frame = cycleFixture(responseFrames, index);
+      const pending = multiplexer.request(302, frame, async () => undefined, 1000);
+      multiplexer.dispatch(302, frame);
+      consume(await pending);
+    }
   });
 
-  bench("multiplexer 1k in-flight FIFO drain", async () => {
-    const multiplexer = new Multiplexer();
-    multiplexer.setConnected();
+  benchMacro("multiplexer 1k in-flight FIFO drain", async () => {
+    let drained: unknown;
+    for (let batch = 0; batch < FIFO_DRAIN_BATCH_SIZE; batch += 1) {
+      const multiplexer = new Multiplexer();
+      multiplexer.setConnected();
 
-    const pending = Array.from({ length: 1000 }, (_, index) =>
-      multiplexer.request(302, buildResponseFrame(index), async () => undefined, 5000),
-    );
+      const pending = Array.from({ length: 1000 }, (_, index) =>
+        multiplexer.request(302, responseFrames[index], async () => undefined, 5000),
+      );
 
-    for (let index = 0; index < 1000; index += 1) {
-      multiplexer.dispatch(302, buildResponseFrame(index));
+      for (let index = 0; index < 1000; index += 1) {
+        multiplexer.dispatch(302, responseFrames[index]);
+      }
+
+      drained = await Promise.all(pending);
     }
 
-    await Promise.all(pending);
+    consume(drained);
   });
 
-  bench("frame parser fragmented stream", () => {
-    const frameA = FrameCodec.encodeFrame(302, buildResponseFrame(1));
-    const frameB = FrameCodec.encodeFrame(303, buildResponseFrame(2));
-    const combined = new Uint8Array(frameA.length + frameB.length);
-    combined.set(frameA);
-    combined.set(frameB, frameA.length);
-
+  benchBatch("frame parser fragmented stream", SYNC_CODEC_BATCH_SIZE, () => {
     const parser = new FrameParser();
+    let parsed: unknown;
 
-    for (let index = 0; index < combined.length; index += 3) {
-      parser.parseFrames(combined.subarray(index, Math.min(combined.length, index + 3)));
+    for (const chunk of parserChunks) {
+      parsed = parser.parseFrames(chunk);
     }
+
+    return parsed;
   });
 
-  bench("notice publish frame encode throughput", () => {
+  benchBatch("notice publish frame encode throughput", SYNC_CODEC_BATCH_SIZE, () => {
     const payload = NoticeCodec.encodePublish(noticeRoute, body);
-    FrameCodec.encodeFrame(401, payload);
+    return FrameCodec.encodeFrame(401, payload);
   });
 });

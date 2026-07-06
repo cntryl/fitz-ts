@@ -16,7 +16,6 @@ export interface ResponseFrame {
  */
 export interface InboundRequest {
   route: string;
-  replyRoute: string;
   body: Uint8Array;
 }
 
@@ -31,6 +30,10 @@ export interface ResponseWriter {
  * Handler for incoming RPC requests (worker mode)
  */
 export type RpcHandler = (req: InboundRequest, writer: ResponseWriter) => Promise<void>;
+
+export interface RegisterWorkerOptions {
+  maxConcurrency?: number;
+}
 
 /**
  * Active worker registration
