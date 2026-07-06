@@ -64,12 +64,19 @@ export function createReconnectScheduler(options: ReconnectSchedulerOptions) {
     listeners: Iterable<() => void | Promise<void>>,
     onError: (error: unknown) => void,
   ) => {
+    let firstError: unknown;
+
     for (const listener of listeners) {
       try {
         await listener();
       } catch (error) {
         onError(error);
+        firstError ??= error;
       }
+    }
+
+    if (firstError !== undefined) {
+      throw firstError;
     }
   };
 

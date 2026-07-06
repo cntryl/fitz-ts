@@ -34,17 +34,22 @@ import {
 import {
   ConnectionError,
   ErrCodeRpcBackpressure,
+  ErrCodeRpcBackendError,
   ErrCodeRpcCorrelationNotFound,
+  ErrCodeRpcDuplicateCorrelation,
+  ErrCodeRpcInvalidSequence,
   ErrCodeRpcRouteNotRegistered,
   ErrCodeRpcTimeout,
   ErrCodeRpcUnauthorized,
   ErrCodeRpcWorkerNotFound,
+  ErrCodeRpcWrongWorker,
   RpcError,
   TransportError,
 } from "../../core/errors";
 import { ConnectionState } from "../../core/types";
 import { BufferWriter, readU128BEAt, utf8Encoder } from "../../core/buffer";
 import { isConcreteRouteShape } from "../_routes";
+import { restoreMapEntriesAtomically } from "../internal/restore";
 
 type RpcConnectionPort = RequestPort &
   SendPort &
@@ -348,16 +353,15 @@ export function createRpcClient(connection: RpcConnectionPort) {
       return;
     }
 
-    const registeredWorkers = Array.from(workers.entries());
-    workers.clear();
-    for (const [route, registration] of registeredWorkers) {
+    await restoreMapEntriesAtomically(workers, async (route, registration) => {
       await registerWorkerInternal(
         route,
         registration.handler,
         registration.options,
         requestReconnectFrame,
       );
-    }
+      return registration;
+    });
   });
 
   const call = async (
@@ -488,7 +492,7 @@ export function createRpcClient(connection: RpcConnectionPort) {
     }
     const iterator = entry.iterator;
 
-    const terminalError = streamEnd ? RpcCodec.decodeErrorBody(body) : null;
+    const terminalError = streamEnd ? RpcCodec.tryDecodeTerminalErrorBody(body) : null;
     if (terminalError) {
       iterator.fail(
         new RpcError(
@@ -632,10 +636,16 @@ function rpcErrorCodeName(domainCode: number): string {
       return "ROUTE_NOT_REGISTERED";
     case ErrCodeRpcCorrelationNotFound:
       return "CORRELATION_NOT_FOUND";
+    case ErrCodeRpcDuplicateCorrelation:
+      return "DUPLICATE_CORRELATION";
+    case ErrCodeRpcInvalidSequence:
+      return "INVALID_SEQUENCE";
+    case ErrCodeRpcWrongWorker:
+      return "WRONG_WORKER";
     case ErrCodeRpcUnauthorized:
       return "UNAUTHORIZED";
-    case 6007:
-      return "DUPLICATE_CORRELATION";
+    case ErrCodeRpcBackendError:
+      return "BACKEND_ERROR";
     default:
       return "DOMAIN_ERROR";
   }

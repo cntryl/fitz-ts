@@ -2,7 +2,13 @@ import { describe, expect, it } from "vite-plus/test";
 
 import { BufferReader, BufferWriter } from "../../../src/core/buffer";
 import { ConnectionError } from "../../../src/core/errors";
-import { MSG_STREAM_APPEND, MSG_STREAM_BEGIN, MSG_STREAM_READ } from "../../../src/frame/types";
+import {
+  MSG_STREAM_APPEND,
+  MSG_STREAM_BEGIN,
+  MSG_STREAM_COMMIT,
+  MSG_STREAM_READ,
+  MSG_STREAM_ROLLBACK,
+} from "../../../src/frame/types";
 import { StreamClient } from "../../../src/domains/stream/client";
 import type { Connection } from "../../../src/client/connection";
 import type { StreamFilterSet } from "../../../src/domains/stream/types";
@@ -10,6 +16,7 @@ import type { StreamFilterSet } from "../../../src/domains/stream/types";
 class FakeStreamConnection {
   public lastSignal: AbortSignal | undefined;
   public lastPayload: Uint8Array | undefined;
+  public responses = new Map<number, Uint8Array[]>();
   private disconnectListeners = new Set<() => void>();
 
   constructor(
@@ -33,6 +40,11 @@ class FakeStreamConnection {
 
     if (messageType === MSG_STREAM_BEGIN) {
       return new Uint8Array([0, 1, 0, 0, 0, 0, 0, 0, 0, 1]);
+    }
+
+    const queuedResponse = this.responses.get(messageType)?.shift();
+    if (queuedResponse) {
+      return queuedResponse;
     }
 
     if (messageType === MSG_STREAM_APPEND) {
@@ -73,6 +85,16 @@ class FakeStreamConnection {
     for (const listener of this.disconnectListeners) {
       listener();
     }
+  }
+
+  respond(messageType: number, response: Uint8Array): void {
+    const responses = this.responses.get(messageType);
+    if (responses) {
+      responses.push(response);
+      return;
+    }
+
+    this.responses.set(messageType, [response]);
   }
 }
 
@@ -123,6 +145,22 @@ describe("StreamClient", () => {
     expect(reader.readU8()).toBe(1);
     expect(reader.readString()).toBe("proj.alpha");
     expect(reader.isEOF()).toBe(true);
+  });
+
+  it("leaves a stream session usable after a failed commit", async () => {
+    const connection = new FakeStreamConnection("success");
+    const client = new StreamClient(connection as unknown as Connection);
+
+    const session = await client.begin("stream://realm/area/resource");
+    connection.respond(MSG_STREAM_COMMIT, new Uint8Array([7]));
+    connection.respond(MSG_STREAM_ROLLBACK, new Uint8Array([0]));
+
+    await expect(session.commit("Sync")).rejects.toMatchObject({
+      domainCode: 7,
+    });
+    expect(session.isOpen()).toBe(true);
+    await expect(session.rollback()).resolves.toBeUndefined();
+    expect(session.isOpen()).toBe(false);
   });
 
   it("encodes read filter options", async () => {

@@ -44,6 +44,8 @@ import {
   MSG_STREAM_NOTIFY,
 } from "../../frame/types";
 import { isRouteShape, isSelectorRouteShape } from "../_routes";
+import { restoreMapEntriesAtomically } from "../internal/restore";
+import { formatStatusName } from "../internal/status";
 
 type StreamSubscriptionState = {
   subId: bigint;
@@ -64,6 +66,7 @@ export function createStreamClient(connection: StreamConnectionPort) {
   const { requestFrame, requestReconnectFrame, runWithRetry } = createDomainClient(connection);
   const subscriptionsByPattern = new Map<string, StreamSubscriptionState>();
   const patternsBySubId = new Map<bigint, string>();
+  const pendingNotificationsBySubId = new Map<bigint, StreamCommitNotification[]>();
   let initialized = false;
   let nextHandlerId = 1;
 
@@ -72,20 +75,18 @@ export function createStreamClient(connection: StreamConnectionPort) {
       return;
     }
 
-    const snapshot = Array.from(subscriptionsByPattern.entries(), ([pattern, state]) => ({
-      pattern,
-      handlers: Array.from(state.handlers.entries()),
-    }));
-    subscriptionsByPattern.clear();
-    patternsBySubId.clear();
-
-    for (const subscription of snapshot) {
-      const subId = await subscribeWire(subscription.pattern, requestReconnectFrame);
-      subscriptionsByPattern.set(subscription.pattern, {
+    await restoreMapEntriesAtomically(subscriptionsByPattern, async (pattern, state) => {
+      const subId = await subscribeWire(pattern, requestReconnectFrame);
+      return {
         subId,
-        handlers: new Map(subscription.handlers),
-      });
-      patternsBySubId.set(subId, subscription.pattern);
+        handlers: new Map(state.handlers),
+      };
+    });
+
+    patternsBySubId.clear();
+    for (const [pattern, state] of subscriptionsByPattern) {
+      patternsBySubId.set(state.subId, pattern);
+      flushPendingNotifications(state.subId);
     }
   });
 
@@ -297,6 +298,7 @@ export function createStreamClient(connection: StreamConnectionPort) {
     }
 
     subscription.handlers.set(handlerId, handler);
+    flushPendingNotifications(subId);
     return createStreamSubscription(subId, pattern, async () => {
       await unsubscribe(pattern, handlerId);
     });
@@ -315,6 +317,7 @@ export function createStreamClient(connection: StreamConnectionPort) {
 
     subscriptionsByPattern.delete(pattern);
     patternsBySubId.delete(subscription.subId);
+    pendingNotificationsBySubId.delete(subscription.subId);
     const payload = StreamCodec.encodeUnsubscribe(pattern);
     const response = await requestFrame(MSG_STREAM_UNSUBSCRIBE, payload);
     const decoded = StreamCodec.decodeUnsubscribeResponse(response);
@@ -330,58 +333,101 @@ export function createStreamClient(connection: StreamConnectionPort) {
     connection.registerNotificationHandler(MSG_STREAM_NOTIFY, (payload) => {
       try {
         const decoded = StreamCodec.decodeNotification(payload);
+        const notification = toCommitNotification(decoded);
         const pattern = patternsBySubId.get(decoded.subId);
         if (!pattern) {
+          queuePendingNotification(decoded.subId, notification);
           return;
         }
 
         const subscription = subscriptionsByPattern.get(pattern);
         if (!subscription) {
+          queuePendingNotification(decoded.subId, notification);
           return;
         }
 
-        const parsedPayload = decoded.parsedPayload;
-
-        const notification: StreamCommitNotification = {
-          route: decoded.route,
-          event: parsedPayload?.event,
-          firstResourceOffset:
-            parsedPayload?.first_resource_offset !== undefined
-              ? BigInt(parsedPayload.first_resource_offset)
-              : undefined,
-          lastResourceOffset:
-            parsedPayload?.last_resource_offset !== undefined
-              ? BigInt(parsedPayload.last_resource_offset)
-              : undefined,
-          firstAreaOffset:
-            parsedPayload?.first_area_offset !== undefined
-              ? BigInt(parsedPayload.first_area_offset)
-              : undefined,
-          lastAreaOffset:
-            parsedPayload?.last_area_offset !== undefined
-              ? BigInt(parsedPayload.last_area_offset)
-              : undefined,
-          firstRealmOffset:
-            parsedPayload?.first_realm_offset !== undefined
-              ? BigInt(parsedPayload.first_realm_offset)
-              : undefined,
-          lastRealmOffset:
-            parsedPayload?.last_realm_offset !== undefined
-              ? BigInt(parsedPayload.last_realm_offset)
-              : undefined,
-          batchSize: parsedPayload?.batch_size,
-          payload: parsedPayload,
-        };
-
-        for (const handler of subscription.handlers.values()) {
-          connection.dispatchAsyncHandler(async () => {
-            await handler(notification);
-          });
-        }
+        dispatchNotification(subscription, notification);
       } catch {
         // Best-effort notification dispatch.
       }
     });
+  };
+
+  const toCommitNotification = (decoded: ReturnType<typeof StreamCodec.decodeNotification>) => {
+    const parsedPayload = decoded.parsedPayload;
+
+    return {
+      route: decoded.route,
+      event: parsedPayload?.event,
+      firstResourceOffset:
+        parsedPayload?.first_resource_offset !== undefined
+          ? BigInt(parsedPayload.first_resource_offset)
+          : undefined,
+      lastResourceOffset:
+        parsedPayload?.last_resource_offset !== undefined
+          ? BigInt(parsedPayload.last_resource_offset)
+          : undefined,
+      firstAreaOffset:
+        parsedPayload?.first_area_offset !== undefined
+          ? BigInt(parsedPayload.first_area_offset)
+          : undefined,
+      lastAreaOffset:
+        parsedPayload?.last_area_offset !== undefined
+          ? BigInt(parsedPayload.last_area_offset)
+          : undefined,
+      firstRealmOffset:
+        parsedPayload?.first_realm_offset !== undefined
+          ? BigInt(parsedPayload.first_realm_offset)
+          : undefined,
+      lastRealmOffset:
+        parsedPayload?.last_realm_offset !== undefined
+          ? BigInt(parsedPayload.last_realm_offset)
+          : undefined,
+      batchSize: parsedPayload?.batch_size,
+      payload: parsedPayload,
+    };
+  };
+
+  const queuePendingNotification = (
+    subId: bigint,
+    notification: StreamCommitNotification,
+  ): void => {
+    const pending = pendingNotificationsBySubId.get(subId);
+    if (pending) {
+      pending.push(notification);
+      return;
+    }
+
+    pendingNotificationsBySubId.set(subId, [notification]);
+  };
+
+  const flushPendingNotifications = (subId: bigint): void => {
+    const pending = pendingNotificationsBySubId.get(subId);
+    if (!pending || pending.length === 0) {
+      return;
+    }
+
+    const pattern = patternsBySubId.get(subId);
+    const subscription = pattern === undefined ? undefined : subscriptionsByPattern.get(pattern);
+    if (!subscription) {
+      return;
+    }
+
+    pendingNotificationsBySubId.delete(subId);
+    for (const notification of pending) {
+      dispatchNotification(subscription, notification);
+    }
+  };
+
+  const dispatchNotification = (
+    subscription: StreamSubscriptionState,
+    notification: StreamCommitNotification,
+  ): void => {
+    for (const handler of subscription.handlers.values()) {
+      connection.dispatchAsyncHandler(async () => {
+        await handler(notification);
+      });
+    }
   };
 
   const checkStatus = (status: number, operation: string): void => {
@@ -399,7 +445,7 @@ export function createStreamClient(connection: StreamConnectionPort) {
       [StreamStatus.ExpectedOffsetMismatch]: "ExpectedOffsetMismatch",
     };
 
-    const statusName = statusNames[status] || `Unknown(${status})`;
+    const statusName = formatStatusName(status, statusNames);
     throw new StreamError(`${operation} failed: ${statusName}`, statusName, status);
   };
 

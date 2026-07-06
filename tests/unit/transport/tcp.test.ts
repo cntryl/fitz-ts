@@ -59,4 +59,29 @@ describe("tcp transport", () => {
 
     await expect(transport.receive()).rejects.toThrow("Connection closed");
   });
+
+  it("preserves terminal socket errors for pending and future receives", async () => {
+    const server = createServer((socket) => {
+      sockets.push(socket);
+      socket.on("error", () => undefined);
+      socket.destroy(new Error("server exploded"));
+    });
+    servers.push(server);
+
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
+
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("expected tcp server address");
+    }
+
+    const transport = createTcpTransport(`localhost:${address.port}`, { timeout: 100 });
+    await transport.connect();
+
+    const pending = transport.receive();
+    await expect(pending).rejects.toThrow(/TCP error|Connection closed|reset/i);
+    await expect(transport.receive()).rejects.toThrow(/TCP error|Connection closed|reset/i);
+  });
 });

@@ -30,6 +30,7 @@ import {
   createScheduleSubscription,
 } from "./types";
 import { isRouteShape } from "../_routes";
+import { restoreMapEntriesAtomically } from "../internal/restore";
 
 type ScheduleSubscriptionState = {
   subId: bigint;
@@ -57,21 +58,18 @@ export function createScheduleClient(connection: ScheduleConnectionPort) {
       return;
     }
 
-    const subscriptions = Array.from(subscriptionsByPattern.entries(), ([pattern, state]) => ({
-      pattern,
-      handlers: Array.from(state.handlers.entries()),
-    }));
-    subscriptionsByPattern.clear();
-    patternsBySubId.clear();
-    pendingNotificationsBySubId.clear();
-
-    for (const subscription of subscriptions) {
-      const subId = await subscribeWire(subscription.pattern, requestReconnectFrame);
-      subscriptionsByPattern.set(subscription.pattern, {
+    await restoreMapEntriesAtomically(subscriptionsByPattern, async (pattern, state) => {
+      const subId = await subscribeWire(pattern, requestReconnectFrame);
+      return {
         subId,
-        handlers: new Map(subscription.handlers),
-      });
-      patternsBySubId.set(subId, subscription.pattern);
+        handlers: new Map(state.handlers),
+      };
+    });
+
+    patternsBySubId.clear();
+    for (const [pattern, state] of subscriptionsByPattern) {
+      patternsBySubId.set(state.subId, pattern);
+      flushPendingNotifications(state.subId);
     }
   });
 

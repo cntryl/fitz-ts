@@ -288,6 +288,7 @@ describe("KvCodec", () => {
 
       // Assert
       expect(decoded.status).toBe(0);
+      expect(decoded.hasMore).toBe(false);
       expect(decoded.keys).toHaveLength(2);
       const keys = decoded.keys ?? [];
       expect(keys[0]).toEqual(testData("key1"));
@@ -307,10 +308,10 @@ describe("KvCodec", () => {
 
       // Assert
       expect(decoded.keys).toEqual([]);
-      expect(decoded.nextCursor).toBeUndefined();
+      expect(decoded.hasMore).toBe(false);
     });
 
-    it("should_decode_scan_response_with_next_cursor", () => {
+    it("should_decode_scan_response_with_has_more", () => {
       // Arrange
       const writer = new BufferWriter(256);
       writer.writeU8(0); // status
@@ -327,7 +328,7 @@ describe("KvCodec", () => {
 
       // Assert
       expect(decoded.keys).toHaveLength(1);
-      expect(decoded.nextCursor).toEqual(new Uint8Array(0));
+      expect(decoded.hasMore).toBe(true);
     });
   });
 

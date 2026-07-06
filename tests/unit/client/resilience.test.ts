@@ -136,6 +136,12 @@ function encodeLeaseQueryFree(): Uint8Array {
   return Uint8Array.of(0, 0, 0, 0, 0, 0);
 }
 
+async function confirmSession(transport: ScriptedTransport): Promise<void> {
+  transport.pushRead(FrameCodec.encodeFrame(78, new Uint8Array([0xcf])));
+  await Promise.resolve();
+  await Promise.resolve();
+}
+
 describe("Connection resilience", () => {
   it("waits for reconnect before sending a new operation", async () => {
     const first = new ScriptedTransport();
@@ -164,6 +170,7 @@ describe("Connection resilience", () => {
     const lease = new LeaseClient(connection);
 
     await connection.connect();
+    await confirmSession(first);
     first.fail(new Error("boom"));
 
     await vi.waitFor(() => {
@@ -216,6 +223,7 @@ describe("Connection resilience", () => {
     const lease = new LeaseClient(connection);
 
     await connection.connect();
+    await confirmSession(first);
     first.fail(new Error("boom"));
 
     await vi.waitFor(() => {
@@ -250,6 +258,7 @@ describe("Connection resilience", () => {
     const lease = new LeaseClient(connection);
 
     await connection.connect();
+    await confirmSession(transport);
     transport.fail(new Error("boom"));
 
     await vi.waitFor(() => {
@@ -297,6 +306,7 @@ describe("Connection resilience", () => {
     const lease = new LeaseClient(connection);
 
     await connection.connect();
+    await confirmSession(first);
 
     await expect(lease.query("lease://realm/area/resource")).resolves.toMatchObject({
       isHeld: false,
@@ -382,6 +392,7 @@ describe("Connection resilience", () => {
     const queue = new QueueClient(connection);
 
     await connection.connect();
+    await confirmSession(transport);
 
     await expect(
       queue.enqueue("queue://realm/area/resource", new Uint8Array([1])),
@@ -420,6 +431,7 @@ describe("Connection resilience", () => {
     const queue = new QueueClient(connection);
 
     await connection.connect();
+    await confirmSession(transport);
 
     await expect(
       queue.enqueue("queue://realm/area/resource", new Uint8Array([1])),

@@ -132,6 +132,22 @@ describe("RpcCodec", () => {
         code: 6002,
         message: "Worker disconnected or unregistered",
       });
+      expect(RpcCodec.tryDecodeTerminalErrorBody(writer.getBuffer())).toEqual({
+        code: 6002,
+        message: "Worker disconnected or unregistered",
+      });
+    });
+
+    it("does not classify malformed or unknown terminal bodies as rpc errors", () => {
+      const unknownCode = new BufferWriter(64);
+      unknownCode.writeU8(1);
+      unknownCode.writeU32BE(7000);
+      unknownCode.writeString("application payload");
+
+      const malformed = new Uint8Array([1, 0, 0, 0, 0x17, 0xff]);
+
+      expect(RpcCodec.tryDecodeTerminalErrorBody(unknownCode.getBuffer())).toBeNull();
+      expect(RpcCodec.tryDecodeTerminalErrorBody(malformed)).toBeNull();
     });
   });
 

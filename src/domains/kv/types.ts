@@ -19,6 +19,11 @@ export interface KvScanOptions {
 
 export type KvGetResult = { type: "found"; value: Uint8Array } | { type: "not-found" };
 
+export interface KvScanPage {
+  keys: Uint8Array[];
+  hasMore: boolean;
+}
+
 export interface KvBeginResponse {
   status: number;
   txId?: bigint;
@@ -37,7 +42,7 @@ export interface KvGetResponse {
 export interface KvScanResponse {
   status: number;
   keys: Uint8Array[];
-  nextCursor?: Uint8Array;
+  hasMore: boolean;
 }
 
 export enum KvStatus {

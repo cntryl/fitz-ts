@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vite-plus/test";
 import { FrameCodec } from "../../src/frame/codec";
 import { AuthenticationError, ConnectionError } from "../../src/core/errors";
 import { MSG_KV_BEGIN } from "../../src/frame/types";
-import { createTransport } from "../../src/transport/factory";
+import { createTransport } from "../../src/transport/factory.node";
 import { sleep } from "./helpers";
 import { brokerAddrFor, TestFixture } from "./fixture/fixture";
 import { runWithTransportsOnly } from "./fixture/transport";

@@ -1,9 +1,9 @@
 /**
  * Connection manager for Fitz protocol.
  *
- * CONNECT is a silent-success handshake. A newly opened transport is treated as
- * authenticated only if it remains open for a short settle window after the
- * CONNECT frame is sent.
+ * CONNECT is a silent-success handshake. A newly opened transport becomes
+ * usable after the settle window, but reconnect eligibility is not confirmed
+ * until the server sends a frame on that authenticated session.
  */
 
 import { Transport } from "../transport/types";
@@ -23,6 +23,7 @@ import { MSG_CONNECT } from "../frame/types";
 import {
   AuthenticationError,
   ConnectionError,
+  ProtocolError,
   RequestQueueFullError,
   TransportError,
 } from "../core/errors";
@@ -118,8 +119,10 @@ export function createConnection(
   let reconnectRestoreActive = false;
   let authOutcome: Deferred<void> | null = null;
   let authRejected = false;
+  let sessionConfirmed = false;
   let hasEstablishedSession = false;
   let reconnectExhausted = false;
+  let partialFrameTimeout: ReturnType<typeof setTimeout> | undefined;
   const closeAbortController = new AbortController();
   const connectionScope = createScope("connection");
   const { log, describeError, describeErrorFields, describeConnectionLoss, emitLifecycleEvent } =
@@ -240,6 +243,7 @@ export function createConnection(
     closeRequested = true;
     receiveLoopAbort = true;
     stopHeartbeat();
+    clearPartialFrameTimeout();
     closeAbortController.abort();
     asyncHandlerDispatcher.close();
     const scopeDisposePromise = connectionScope.dispose();
@@ -489,12 +493,12 @@ export function createConnection(
       return null;
     }
 
-    if (closeRequested || state === ConnectionState.Closed) {
-      return connectionClosedError();
-    }
-
     if (authRejected) {
       return new AuthenticationError("Authentication rejected", { state });
+    }
+
+    if (closeRequested || state === ConnectionState.Closed) {
+      return connectionClosedError();
     }
 
     if (
@@ -670,7 +674,10 @@ export function createConnection(
   const openAndAuthenticate = async (isReconnect: boolean, signal?: AbortSignal): Promise<void> => {
     throwIfAborted(signal);
     receiveLoopAbort = false;
-    frameParser.parseFrames(new Uint8Array(0));
+    frameParser.reset();
+    clearPartialFrameTimeout();
+    sessionConfirmed = false;
+    hasEstablishedSession = false;
     requestGate = createRequestGate(maxInFlightRequests, maxRequestQueueSize);
     const activeTransport = transportFactory();
     transport = activeTransport;
@@ -721,7 +728,6 @@ export function createConnection(
           reconnectRestoreActive = false;
         }
       }
-      hasEstablishedSession = true;
       reconnectExhausted = false;
       setState(ConnectionState.Authenticated);
       startHeartbeat(activeTransport);
@@ -770,6 +776,11 @@ export function createConnection(
         const data = await activeTransport.receive();
         markRemoteActivity();
         const frames = frameParser.parseFrames(data);
+        updatePartialFrameTimeout();
+
+        if (frames.length > 0) {
+          confirmSession();
+        }
 
         for (const frame of frames) {
           multiplexer.dispatch(frame.messageType, frame.payload);
@@ -799,6 +810,14 @@ export function createConnection(
 
   const handleConnectionLossOnce = async (error: unknown): Promise<void> => {
     stopHeartbeat();
+    clearPartialFrameTimeout();
+    const inferredAuthFailure = isUnconfirmedSessionLoss();
+    const authFailureError = inferredAuthFailure
+      ? createInferredAuthenticationError(error)
+      : undefined;
+    if (inferredAuthFailure) {
+      authRejected = true;
+    }
     multiplexer.setDisconnected();
     requestGate.close();
     emitDisconnect();
@@ -808,11 +827,11 @@ export function createConnection(
     });
 
     if (state === ConnectionState.Authenticating && authOutcome) {
-      authRejected = true;
       authOutcome.reject(
-        new AuthenticationError(describeConnectionLoss(error), {
-          state,
-        }),
+        authFailureError ??
+          new ConnectionError(describeConnectionLoss(error), {
+            state,
+          }),
       );
     }
 
@@ -823,7 +842,7 @@ export function createConnection(
 
     if (authRejected) {
       setState(ConnectionState.Closed);
-      emitLifecycleEvent("auth_rejected", error);
+      emitLifecycleEvent("auth_rejected", authFailureError ?? error);
       return;
     }
 
@@ -883,6 +902,29 @@ export function createConnection(
     });
   };
 
+  const confirmSession = (): void => {
+    if (sessionConfirmed) {
+      return;
+    }
+
+    sessionConfirmed = true;
+    hasEstablishedSession = true;
+  };
+
+  const isUnconfirmedSessionLoss = (): boolean => {
+    return (
+      !sessionConfirmed &&
+      (state === ConnectionState.Authenticating || state === ConnectionState.Authenticated)
+    );
+  };
+
+  const createInferredAuthenticationError = (error: unknown): AuthenticationError => {
+    return new AuthenticationError(describeConnectionLoss(error), {
+      state,
+      inferred: true,
+    });
+  };
+
   const ensureTransport = (): Transport => {
     if (!transport) {
       throw new ConnectionError("No active transport", { state });
@@ -908,6 +950,45 @@ export function createConnection(
       await transport.send(data);
       markOutboundActivity();
     });
+  };
+
+  const clearPartialFrameTimeout = (): void => {
+    if (partialFrameTimeout !== undefined) {
+      clearTimeout(partialFrameTimeout);
+      partialFrameTimeout = undefined;
+    }
+  };
+
+  const updatePartialFrameTimeout = (): void => {
+    const pendingFrame = frameParser.getPendingFrameInfo();
+    if (!pendingFrame.hasPending) {
+      clearPartialFrameTimeout();
+      return;
+    }
+
+    clearPartialFrameTimeout();
+    partialFrameTimeout = setTimeout(() => {
+      partialFrameTimeout = undefined;
+      const currentPendingFrame = frameParser.getPendingFrameInfo();
+      if (!currentPendingFrame.hasPending || closeRequested || receiveLoopAbort) {
+        return;
+      }
+
+      const error = new ProtocolError(
+        `Timed out waiting for complete frame after ${heartbeatTimeoutMs}ms`,
+        undefined,
+        {
+          timeoutMs: heartbeatTimeoutMs,
+          ...currentPendingFrame,
+        },
+      );
+      void failPartialFrame(error);
+    }, heartbeatTimeoutMs);
+  };
+
+  const failPartialFrame = async (error: ProtocolError): Promise<void> => {
+    await transport?.close().catch(() => undefined);
+    await handleConnectionLoss(error);
   };
 
   const emitDisconnect = (): void => {

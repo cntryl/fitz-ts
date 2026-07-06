@@ -20,6 +20,7 @@ import {
   MSG_NOTICE_UNSUBSCRIBE,
 } from "../../frame/types";
 import { isRouteShape, isSelectorRouteShape } from "../_routes";
+import { restoreMapEntriesAtomically } from "../internal/restore";
 import { NoticeCodec } from "./codec";
 import { createNoticeSubscription, NoticeHandler, NoticeMsg, NoticeSubscription } from "./types";
 
@@ -43,6 +44,7 @@ export function createNoticeClient(connection: NoticeConnectionPort) {
     createDomainClient(connection);
   const subscriptionsByPattern = new Map<string, NoticeSubscriptionState>();
   const patternsBySubId = new Map<bigint, string>();
+  const pendingNotificationsBySubId = new Map<bigint, NoticeMsg[]>();
   let initialized = false;
   let nextHandlerId = 1;
 
@@ -51,20 +53,18 @@ export function createNoticeClient(connection: NoticeConnectionPort) {
       return;
     }
 
-    const subscriptions = Array.from(subscriptionsByPattern.entries(), ([pattern, state]) => ({
-      pattern,
-      handlers: Array.from(state.handlers.entries()),
-    }));
-    subscriptionsByPattern.clear();
-    patternsBySubId.clear();
-
-    for (const subscription of subscriptions) {
-      const subId = await subscribeWire(subscription.pattern, requestReconnectFrame);
-      subscriptionsByPattern.set(subscription.pattern, {
+    await restoreMapEntriesAtomically(subscriptionsByPattern, async (pattern, state) => {
+      const subId = await subscribeWire(pattern, requestReconnectFrame);
+      return {
         subId,
-        handlers: new Map(subscription.handlers),
-      });
-      patternsBySubId.set(subId, subscription.pattern);
+        handlers: new Map(state.handlers),
+      };
+    });
+
+    patternsBySubId.clear();
+    for (const [pattern, state] of subscriptionsByPattern) {
+      patternsBySubId.set(state.subId, pattern);
+      flushPendingNotifications(state.subId);
     }
   });
 
@@ -121,6 +121,7 @@ export function createNoticeClient(connection: NoticeConnectionPort) {
     }
 
     subscription.handlers.set(handlerId, handler);
+    flushPendingNotifications(subId);
     return createNoticeSubscription(subId, pattern, async (_subId: bigint) => {
       await unsubscribe(pattern, handlerId);
     });
@@ -139,6 +140,7 @@ export function createNoticeClient(connection: NoticeConnectionPort) {
 
     subscriptionsByPattern.delete(pattern);
     patternsBySubId.delete(subscription.subId);
+    pendingNotificationsBySubId.delete(subscription.subId);
     const payload = NoticeCodec.encodeUnsubscribe(subscription.subId);
     await requestFrame(MSG_NOTICE_UNSUBSCRIBE, payload);
   };
@@ -154,24 +156,60 @@ export function createNoticeClient(connection: NoticeConnectionPort) {
         const { subId, route, body } = NoticeCodec.decodeNotification(payload);
         const pattern = patternsBySubId.get(subId);
         if (!pattern) {
+          queuePendingNotification(subId, { route, body });
           return;
         }
 
         const subscription = subscriptionsByPattern.get(pattern);
         if (!subscription) {
+          queuePendingNotification(subId, { route, body });
           return;
         }
 
-        const msg: NoticeMsg = { route, body };
-        for (const handler of subscription.handlers.values()) {
-          connection.dispatchAsyncHandler(async () => {
-            await handler(msg);
-          });
-        }
+        dispatchNotification(subscription, { route, body });
       } catch {
         // Best-effort notification dispatch.
       }
     });
+  };
+
+  const queuePendingNotification = (subId: bigint, notification: NoticeMsg): void => {
+    const pending = pendingNotificationsBySubId.get(subId);
+    if (pending) {
+      pending.push(notification);
+      return;
+    }
+
+    pendingNotificationsBySubId.set(subId, [notification]);
+  };
+
+  const flushPendingNotifications = (subId: bigint): void => {
+    const pending = pendingNotificationsBySubId.get(subId);
+    if (!pending || pending.length === 0) {
+      return;
+    }
+
+    const pattern = patternsBySubId.get(subId);
+    const subscription = pattern === undefined ? undefined : subscriptionsByPattern.get(pattern);
+    if (!subscription) {
+      return;
+    }
+
+    pendingNotificationsBySubId.delete(subId);
+    for (const notification of pending) {
+      dispatchNotification(subscription, notification);
+    }
+  };
+
+  const dispatchNotification = (
+    subscription: NoticeSubscriptionState,
+    notification: NoticeMsg,
+  ): void => {
+    for (const handler of subscription.handlers.values()) {
+      connection.dispatchAsyncHandler(async () => {
+        await handler(notification);
+      });
+    }
   };
 
   return {

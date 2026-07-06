@@ -11,6 +11,16 @@ export interface Frame {
   payload: Uint8Array;
 }
 
+export interface PendingFrameInfo {
+  hasPending: boolean;
+  bufferedBytes: number;
+  state: "type" | "length" | "payload";
+  messageType?: number;
+  payloadLength?: number;
+  payloadBytesRead?: number;
+  payloadBytesRemaining?: number;
+}
+
 const encodeFrame = (messageType: number, payload: Uint8Array): Uint8Array => {
   if (messageType < 0) {
     throw new CodecError(`Invalid message type: ${messageType}`);
@@ -251,9 +261,51 @@ export function createFrameParser() {
     return state === 2 && payloadLength >= 0 && offset + payloadLength <= end;
   };
 
+  const getPendingFrameInfo = (): PendingFrameInfo => {
+    const bufferedBytes = end - offset;
+
+    if (state === 2 && payloadLength >= 0) {
+      const payloadBytesRead = Math.max(0, bufferedBytes);
+      return {
+        hasPending: true,
+        bufferedBytes,
+        state: "payload",
+        messageType,
+        payloadLength,
+        payloadBytesRead,
+        payloadBytesRemaining: Math.max(0, payloadLength - payloadBytesRead),
+      };
+    }
+
+    if (state === 1) {
+      return {
+        hasPending: true,
+        bufferedBytes,
+        state: "length",
+        messageType,
+      };
+    }
+
+    return {
+      hasPending: bufferedBytes > 0,
+      bufferedBytes,
+      state: "type",
+    };
+  };
+
+  const reset = (): void => {
+    offset = 0;
+    end = 0;
+    messageType = -1;
+    payloadLength = -1;
+    state = 0;
+  };
+
   return {
     parseFrames,
     hasCompleteFrame,
+    getPendingFrameInfo,
+    reset,
   };
 }
 

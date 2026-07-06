@@ -5,7 +5,7 @@
 import type { DisconnectListenerPort, RequestPort, RetryExecutionPort } from "../base";
 import type { RetryOperation } from "../../client/resilience";
 import { KvCodec } from "./codec";
-import { KvGetResult, KvScanOptions, KvStatus } from "./types";
+import { KvGetResult, KvScanOptions, KvScanPage, KvStatus } from "./types";
 import {
   MSG_KV_PUT,
   MSG_KV_INSERT,
@@ -18,6 +18,7 @@ import {
 } from "../../frame/types";
 import { KvError } from "../../core/errors";
 import { createSliceIterator, createAsyncIterableIterator } from "../../core/iterator";
+import { formatStatusName } from "../internal/status";
 
 export type KvTransaction = ReturnType<typeof createKvTransaction>;
 
@@ -54,11 +55,8 @@ export function createKvTransaction(
       [KvStatus.OperationNotAllowed]: "OperationNotAllowed",
     };
 
-    throw new KvError(
-      `${operation} failed: ${statusNames[status] ?? `Unknown(${status})`}`,
-      operation,
-      status,
-    );
+    const statusName = formatStatusName(status, statusNames);
+    throw new KvError(`${operation} failed: ${statusName}`, operation, status);
   };
 
   const runWithRetry = async <T>(operation: RetryOperation, task: () => Promise<T>): Promise<T> => {
@@ -127,15 +125,15 @@ export function createKvTransaction(
     checkStatus(KvCodec.decodeStatusResponse(response).status, "DELETE_RANGE");
   };
 
-  const scan = async (
+  const scanPage = async (
     options: KvScanOptions = {},
     signal?: AbortSignal,
-  ): Promise<AsyncIterable<Uint8Array>> => {
+  ): Promise<KvScanPage> => {
     ensureOpen();
     return runWithRetry(
       {
         domain: "kv",
-        operation: "scan",
+        operation: "scanPage",
         retryClass: "replayable_read",
         signal,
       },
@@ -144,18 +142,33 @@ export function createKvTransaction(
         const response = await connection.request(MSG_KV_SCAN, payload, signal);
         const decoded = KvCodec.decodeScanResponse(response);
         checkStatus(decoded.status, "SCAN");
-        return createAsyncIterableIterator(createSliceIterator(decoded.keys));
+        return { keys: decoded.keys, hasMore: decoded.hasMore };
       },
     );
   };
 
+  const scan = async (
+    options: KvScanOptions = {},
+    signal?: AbortSignal,
+  ): Promise<AsyncIterable<Uint8Array>> => {
+    const page = await scanPage(options, signal);
+    if (page.hasMore) {
+      throw new KvError(
+        "SCAN truncated: response has more keys but no continuation cursor",
+        "SCAN_TRUNCATED",
+      );
+    }
+
+    return createAsyncIterableIterator(createSliceIterator(page.keys));
+  };
+
   const commit = async (signal?: AbortSignal): Promise<void> => {
     ensureOpen();
-    closed = true;
-    unsubscribeDisconnect();
     const payload = KvCodec.encodeCommit(txId, route);
     const response = await connection.request(MSG_KV_COMMIT, payload, signal);
     checkStatus(KvCodec.decodeStatusResponse(response).status, "COMMIT");
+    closed = true;
+    unsubscribeDisconnect();
   };
 
   const rollback = async (signal?: AbortSignal): Promise<void> => {
@@ -184,6 +197,7 @@ export function createKvTransaction(
     get,
     delete: deleteItem,
     deleteRange,
+    scanPage,
     scan,
     commit,
     rollback,

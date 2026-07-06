@@ -176,7 +176,7 @@ export const KvCodec = {
     const status = reader.readU8();
 
     if (reader.isEOF()) {
-      return { status, keys: [] };
+      return { status, keys: [], hasMore: false };
     }
 
     const count = reader.readU32BE();
@@ -189,10 +189,9 @@ export const KvCodec = {
       reader.readBytes(valueLen);
     }
 
-    const hasMore = !reader.isEOF() ? reader.readU8() : 0;
-    const nextCursor = hasMore === 1 ? new Uint8Array(0) : undefined;
+    const hasMore = !reader.isEOF() && reader.readU8() === 1;
 
-    return { status, keys, nextCursor };
+    return { status, keys, hasMore };
   },
 
   encodeDurability(durability: DurabilityMode): number {

@@ -10,6 +10,7 @@ import type {
   BrowserTransportType,
   BrowserWebSocketOptions,
 } from "../../src/client/browser-client";
+import type { Client as BrowserFacadeClient } from "../../src/index.browser";
 
 function collectExportNames(source: string): string[] {
   const names: string[] = [];
@@ -80,16 +81,16 @@ describe("public surface", () => {
       "ErrQueueFull",
       "ErrQueueInvalidDelay",
       "ErrCodeQueueFull",
-      "ErrRpcTimeout",
-      "ErrRpcHandlerNotFound",
-      "ErrRpcHandlerError",
-      "ErrRpcInvalidRequest",
       "ErrCodeRpcTimeout",
       "ErrCodeRpcWorkerNotFound",
       "ErrCodeRpcBackpressure",
       "ErrCodeRpcRouteNotRegistered",
       "ErrCodeRpcCorrelationNotFound",
+      "ErrCodeRpcInvalidSequence",
+      "ErrCodeRpcDuplicateCorrelation",
+      "ErrCodeRpcWrongWorker",
       "ErrCodeRpcUnauthorized",
+      "ErrCodeRpcBackendError",
       "ErrLeaseHeld",
       "ErrLeaseNotFound",
       "ErrLeaseInvalidToken",
@@ -135,6 +136,7 @@ describe("public surface", () => {
       "DurabilityMode",
       "KvBeginOptions",
       "KvGetResult",
+      "KvScanPage",
       "KvScanOptions",
       "QueueClient",
       "EnqueueOptions",
@@ -234,6 +236,7 @@ describe("public surface", () => {
   });
 
   it("keeps browser client config browser-safe", () => {
+    expectTypeOf<BrowserFacadeClient>().toEqualTypeOf<BrowserClient>();
     expectTypeOf<BrowserClient["config"]["transport"]>().toEqualTypeOf<BrowserTransportType>();
     expectTypeOf<BrowserClient["config"]["webSocket"]>().toEqualTypeOf<BrowserWebSocketOptions>();
   });

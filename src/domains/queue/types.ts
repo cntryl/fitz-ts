@@ -7,6 +7,7 @@ import type { DisconnectListenerPort, RequestPort } from "../base";
 import { QueueCodec } from "./codec";
 import { QueueError } from "../../core/errors";
 import { MSG_QUEUE_EXTEND, MSG_QUEUE_COMPLETE } from "../../frame/types";
+import { formatStatusName } from "../internal/status";
 
 /**
  * Queue item represents a reserved queue message.
@@ -42,7 +43,7 @@ export function createQueueItem(
 
     if (decoded.status !== QueueStatus.Ok) {
       const errorCode = decoded.errorCode ?? decoded.status;
-      const statusName = QueueStatus[errorCode] || `Unknown(${errorCode})`;
+      const statusName = formatStatusName(errorCode, QueueStatusNames);
       const reason = decoded.errorMessage ?? statusName;
       throw new QueueError(`EXTEND failed: ${reason}`, statusName, errorCode);
     }
@@ -56,29 +57,7 @@ export function createQueueItem(
 
     if (decoded.status !== QueueStatus.Ok) {
       const errorCode = decoded.errorCode ?? decoded.status;
-      const statusName = QueueStatus[errorCode] || `Unknown(${errorCode})`;
-      const reason = decoded.errorMessage ?? statusName;
-      throw new QueueError(`COMPLETE failed: ${reason}`, statusName, errorCode);
-    }
-
-    closed = true;
-    unsubscribeDisconnect();
-  };
-
-  const testOnlyInvalidToken = (): bigint => id + 1n;
-
-  const testOnlyCompleteWithToken = async (
-    tokenToUse: bigint,
-    signal?: AbortSignal,
-  ): Promise<void> => {
-    ensureOpen();
-    const requestPayload = QueueCodec.encodeComplete(route, id, tokenToUse);
-    const response = await connection.request(MSG_QUEUE_COMPLETE, requestPayload, signal);
-    const decoded = QueueCodec.decodeCompleteResponse(response);
-
-    if (decoded.status !== QueueStatus.Ok) {
-      const errorCode = decoded.errorCode ?? decoded.status;
-      const statusName = QueueStatus[errorCode] || `Unknown(${errorCode})`;
+      const statusName = formatStatusName(errorCode, QueueStatusNames);
       const reason = decoded.errorMessage ?? statusName;
       throw new QueueError(`COMPLETE failed: ${reason}`, statusName, errorCode);
     }
@@ -91,8 +70,6 @@ export function createQueueItem(
     body,
     extend,
     complete,
-    testOnlyInvalidToken,
-    testOnlyCompleteWithToken,
   };
 }
 
@@ -140,6 +117,14 @@ export enum QueueStatus {
   QueueFull = 4,
   InvalidDelay = 5,
 }
+
+const QueueStatusNames: Record<number, string> = {
+  [QueueStatus.QueueNotFound]: "QueueNotFound",
+  [QueueStatus.MessageNotFound]: "MessageNotFound",
+  [QueueStatus.InvalidToken]: "InvalidToken",
+  [QueueStatus.QueueFull]: "QueueFull",
+  [QueueStatus.InvalidDelay]: "InvalidDelay",
+};
 
 /**
  * Options for enqueue operations.

@@ -3,9 +3,10 @@
  */
 
 // Core exports
-export { Client, createClient } from "./client/browser-client";
+export { createClient } from "./client/browser-client";
 export type {
   BrowserClient,
+  BrowserClient as Client,
   BrowserClientConfig,
   BrowserClientConfig as ClientConfig,
   BrowserTransportType,
@@ -47,16 +48,16 @@ export {
   ErrQueueFull,
   ErrQueueInvalidDelay,
   ErrCodeQueueFull,
-  ErrRpcTimeout,
-  ErrRpcHandlerNotFound,
-  ErrRpcHandlerError,
-  ErrRpcInvalidRequest,
   ErrCodeRpcTimeout,
   ErrCodeRpcWorkerNotFound,
   ErrCodeRpcBackpressure,
   ErrCodeRpcRouteNotRegistered,
   ErrCodeRpcCorrelationNotFound,
+  ErrCodeRpcInvalidSequence,
+  ErrCodeRpcDuplicateCorrelation,
+  ErrCodeRpcWrongWorker,
   ErrCodeRpcUnauthorized,
+  ErrCodeRpcBackendError,
   ErrLeaseHeld,
   ErrLeaseNotFound,
   ErrLeaseInvalidToken,
@@ -108,6 +109,7 @@ export type {
   DurabilityMode,
   KvBeginOptions,
   KvGetResult,
+  KvScanPage,
   KvScanOptions,
 } from "./domains/kv/types";
 

@@ -1,13 +1,20 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { BufferReader } from "../../../src/core/buffer";
+import { BufferReader, BufferWriter } from "../../../src/core/buffer";
 import { ConnectionError } from "../../../src/core/errors";
-import { MSG_KV_BEGIN, MSG_KV_GET } from "../../../src/frame/types";
+import {
+  MSG_KV_BEGIN,
+  MSG_KV_COMMIT,
+  MSG_KV_GET,
+  MSG_KV_ROLLBACK,
+  MSG_KV_SCAN,
+} from "../../../src/frame/types";
 import { KvClient } from "../../../src/domains/kv/client";
 
 class FakeKvConnection {
   public lastRequest: { messageType: number; payload: Uint8Array } | null = null;
   public lastSignal: AbortSignal | undefined;
+  public responses = new Map<number, Uint8Array[]>();
   private disconnectListeners = new Set<() => void>();
 
   async request(
@@ -26,6 +33,11 @@ class FakeKvConnection {
 
     if (messageType === MSG_KV_BEGIN) {
       return new Uint8Array([0, 0, 0, 0, 0, 0, 0, 0, 1]);
+    }
+
+    const queuedResponse = this.responses.get(messageType)?.shift();
+    if (queuedResponse) {
+      return queuedResponse;
     }
 
     if (messageType === MSG_KV_GET) {
@@ -55,6 +67,16 @@ class FakeKvConnection {
       listener();
     }
   }
+
+  respond(messageType: number, response: Uint8Array): void {
+    const responses = this.responses.get(messageType);
+    if (responses) {
+      responses.push(response);
+      return;
+    }
+
+    this.responses.set(messageType, [response]);
+  }
 }
 
 function expectBeginRoute(connection: FakeKvConnection, route: string): void {
@@ -65,6 +87,21 @@ function expectBeginRoute(connection: FakeKvConnection, route: string): void {
 
   const reader = new BufferReader(lastRequest.payload);
   expect(reader.readString()).toBe(route);
+}
+
+function encodeScanResponse(keys: Uint8Array[], hasMore: boolean): Uint8Array {
+  const writer = new BufferWriter();
+  writer.writeU8(0);
+  writer.writeU32BE(keys.length);
+
+  for (const key of keys) {
+    writer.writeU32BE(key.length);
+    writer.writeBytes(key);
+    writer.writeU32BE(0);
+  }
+
+  writer.writeU8(hasMore ? 1 : 0);
+  return writer.getBuffer();
 }
 
 describe("KvClient", () => {
@@ -173,5 +210,43 @@ describe("KvClient", () => {
 
     await expect(pending).rejects.toHaveProperty("name", "AbortError");
     expect(connection.lastSignal).toBe(controller.signal);
+  });
+
+  it("exposes scanPage hasMore and rejects truncated scan convenience results", async () => {
+    const connection = new FakeKvConnection();
+    const client = new KvClient(connection);
+
+    const tx = await client.begin("kv://realm/area/resource", {
+      durability: "Sync",
+    });
+    connection.respond(MSG_KV_SCAN, encodeScanResponse([new Uint8Array([1])], true));
+
+    await expect(tx.scanPage()).resolves.toEqual({
+      keys: [new Uint8Array([1])],
+      hasMore: true,
+    });
+
+    connection.respond(MSG_KV_SCAN, encodeScanResponse([new Uint8Array([2])], true));
+    await expect(tx.scan()).rejects.toMatchObject({
+      code: "KV_SCAN_TRUNCATED",
+    });
+  });
+
+  it("leaves a transaction usable after a failed commit", async () => {
+    const connection = new FakeKvConnection();
+    const client = new KvClient(connection);
+
+    const tx = await client.begin("kv://realm/area/resource", {
+      durability: "Sync",
+    });
+    connection.respond(MSG_KV_COMMIT, new Uint8Array([3]));
+    connection.respond(MSG_KV_ROLLBACK, new Uint8Array([0]));
+
+    await expect(tx.commit()).rejects.toMatchObject({
+      code: "KV_COMMIT",
+    });
+    expect(tx.isOpen()).toBe(true);
+    await expect(tx.rollback()).resolves.toBeUndefined();
+    expect(tx.isOpen()).toBe(false);
   });
 });

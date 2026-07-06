@@ -41,13 +41,30 @@ describe("Lease integration", () => {
     });
 
     it("should reject renew when token does not match", async () => {
-      const f = new TestFixture(transport, authMode);
-      await f.connectOrFail();
+      const f1 = new TestFixture(transport, authMode);
+      const f2 = new TestFixture(transport, authMode);
+      await f1.connectOrFail();
+      await f2.connectOrFail();
 
-      const lease = await f.client().lease().acquire(f.uniqueRoute("lease"), 30);
-      await expect(
-        lease.testOnlyExtendWithToken(lease.testOnlyInvalidToken(), 60),
-      ).rejects.toBeTruthy();
+      const route = f1.uniqueRoute("lease");
+      const staleLease = await f1.client().lease().acquire(route, 1);
+      await waitFor(
+        async () => {
+          try {
+            await f2.client().lease().acquire(route, 30);
+            return true;
+          } catch {
+            return false;
+          }
+        },
+        {
+          timeoutMs: 3000,
+          intervalMs: 100,
+          timeoutMessage: "lease was not reacquired after ttl expiry",
+        },
+      );
+
+      await expect(staleLease.extend(60)).rejects.toBeTruthy();
     });
 
     it("should release lease when token is valid", async () => {
@@ -63,13 +80,30 @@ describe("Lease integration", () => {
     });
 
     it("should reject release when token does not match", async () => {
-      const f = new TestFixture(transport, authMode);
-      await f.connectOrFail();
+      const f1 = new TestFixture(transport, authMode);
+      const f2 = new TestFixture(transport, authMode);
+      await f1.connectOrFail();
+      await f2.connectOrFail();
 
-      const lease = await f.client().lease().acquire(f.uniqueRoute("lease"), 30);
-      await expect(
-        lease.testOnlyReleaseWithToken(lease.testOnlyInvalidToken()),
-      ).rejects.toBeTruthy();
+      const route = f1.uniqueRoute("lease");
+      const staleLease = await f1.client().lease().acquire(route, 1);
+      await waitFor(
+        async () => {
+          try {
+            await f2.client().lease().acquire(route, 30);
+            return true;
+          } catch {
+            return false;
+          }
+        },
+        {
+          timeoutMs: 3000,
+          intervalMs: 100,
+          timeoutMessage: "lease was not reacquired after ttl expiry",
+        },
+      );
+
+      await expect(staleLease.release()).rejects.toBeTruthy();
     });
 
     it("should allow re-acquire after ttl expires", async () => {

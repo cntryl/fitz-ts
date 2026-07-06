@@ -118,10 +118,7 @@ export function createBufferWriter(capacity: number = 4096) {
 
   const writeU32BE = (value: number): void => {
     ensureCapacity(4);
-    buffer[offset++] = (value >> 24) & 0xff;
-    buffer[offset++] = (value >> 16) & 0xff;
-    buffer[offset++] = (value >> 8) & 0xff;
-    buffer[offset++] = value & 0xff;
+    offset = writeU32BEAt(buffer, offset, value);
   };
 
   const writeU32LE = (value: number): void => {
@@ -171,10 +168,7 @@ export function createBufferWriter(capacity: number = 4096) {
     if (position + 4 > buffer.length) {
       throw new Error("Buffer overwrite out of bounds");
     }
-    buffer[position] = (value >> 24) & 0xff;
-    buffer[position + 1] = (value >> 16) & 0xff;
-    buffer[position + 2] = (value >> 8) & 0xff;
-    buffer[position + 3] = value & 0xff;
+    writeU32BEAt(buffer, position, value);
   };
 
   const writeString = (str: string): void => {
@@ -356,13 +350,9 @@ export function createBufferReader(buffer: Uint8Array) {
     if (offset + 4 > internalBuffer.length) {
       throw new Error("Buffer overflow: cannot read U32BE");
     }
-    const value =
-      (internalBuffer[offset] << 24) |
-      (internalBuffer[offset + 1] << 16) |
-      (internalBuffer[offset + 2] << 8) |
-      internalBuffer[offset + 3];
+    const value = readU32BEAt(internalBuffer, offset);
     offset += 4;
-    return value >>> 0;
+    return value;
   };
 
   const readU64BE = (): bigint => {

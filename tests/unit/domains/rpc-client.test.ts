@@ -404,6 +404,35 @@ describe("RpcClient", () => {
     });
   });
 
+  it("delivers ambiguous terminal RPC bodies as successful data", async () => {
+    const connection = new FakeRpcConnection();
+    const client = new RpcClient(connection);
+
+    const iterator = await client.call("rpc://realm/area/method", new Uint8Array([1]));
+
+    const request = connection.lastRequest;
+    if (!request) {
+      throw new Error("Expected RPC request payload to be recorded");
+    }
+
+    const decoded = RpcCodec.decodeInboundRequest(request.payload);
+    const responseHandler = connection.notificationHandlers.get(MSG_RPC_RESPONSE);
+    expect(responseHandler).toBeTypeOf("function");
+
+    if (!responseHandler) {
+      throw new Error("Expected RPC response handler to be registered");
+    }
+
+    const ambiguousBody = encodeRpcErrorBody(7000, "application payload");
+    responseHandler(RpcCodec.encodeResponse(decoded.correlationId, 0n, ambiguousBody, true));
+
+    await expect(iterator.next()).resolves.toMatchObject({
+      done: false,
+      value: { body: ambiguousBody, sequence: 0n },
+    });
+    await expect(iterator.next()).resolves.toMatchObject({ done: true });
+  });
+
   it("maps terminal RPC error frames by domain code", async () => {
     const connection = new FakeRpcConnection();
     const client = new RpcClient(connection);

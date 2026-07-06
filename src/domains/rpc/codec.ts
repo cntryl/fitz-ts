@@ -16,6 +16,8 @@ import { SubscribeResponse, UnsubscribeResponse } from "./types";
 const CORRELATION_ID_LENGTH = 16;
 const RPC_RESPONSE_FLAG_STREAM_END = 0x01;
 const RPC_RESPONSE_FLAGS_SUPPORTED = RPC_RESPONSE_FLAG_STREAM_END;
+const RPC_ERROR_CODE_MIN = 6001;
+const RPC_ERROR_CODE_MAX = 6010;
 const getCryptoProvider = (): Crypto | undefined => globalThis.crypto as Crypto | undefined;
 const correlationIdPool: Uint8Array[] = [];
 const maxCorrelationIdPoolSize = 64;
@@ -58,13 +60,7 @@ const readU32BE = (payload: Uint8Array, offset: number): number | undefined => {
     return undefined;
   }
 
-  return (
-    ((payload[offset] << 24) |
-      (payload[offset + 1] << 16) |
-      (payload[offset + 2] << 8) |
-      payload[offset + 3]) >>>
-    0
-  );
+  return readU32BEAt(payload, offset);
 };
 
 const readLengthPrefixedEnd = (payload: Uint8Array, offset: number): number | undefined => {
@@ -408,27 +404,39 @@ export const RpcCodec = {
     return { status };
   },
 
+  tryDecodeTerminalErrorBody(payload: Uint8Array): { code: number; message: string } | null {
+    if (payload.length < 5) {
+      return null;
+    }
+
+    try {
+      const reader = new BufferReader(payload);
+      if (reader.readU8() !== 1) {
+        return null;
+      }
+
+      const code = reader.readU32BE();
+      if (code < RPC_ERROR_CODE_MIN || code > RPC_ERROR_CODE_MAX) {
+        return null;
+      }
+
+      const message = reader.readString();
+      if (!reader.isEOF()) {
+        return null;
+      }
+
+      return { code, message };
+    } catch {
+      return null;
+    }
+  },
+
   /**
    * Decode a standard RPC error body.
    * Format: [u8 status=1][u32 error_code][string message]
    */
   decodeErrorBody(payload: Uint8Array): { code: number; message: string } | null {
-    if (payload.length < 5) {
-      return null;
-    }
-
-    const reader = new BufferReader(payload);
-    if (reader.readU8() !== 1) {
-      return null;
-    }
-
-    const code = reader.readU32BE();
-    const message = reader.readString();
-    if (!reader.isEOF()) {
-      return null;
-    }
-
-    return { code, message };
+    return this.tryDecodeTerminalErrorBody(payload);
   },
 
   /**

@@ -136,6 +136,29 @@ describe("protocol primitives", () => {
     ]);
   });
 
+  it("reports pending partial frame state", () => {
+    const parser = new FrameParser();
+    const encoded = FrameCodec.encodeFrame(MSG_KV_BEGIN, new Uint8Array([1, 2, 3]));
+
+    expect(parser.parseFrames(encoded.slice(0, 4))).toEqual([]);
+    expect(parser.getPendingFrameInfo()).toMatchObject({
+      hasPending: true,
+      bufferedBytes: 1,
+      state: "payload",
+      messageType: MSG_KV_BEGIN,
+      payloadLength: 3,
+      payloadBytesRemaining: 2,
+    });
+
+    expect(parser.parseFrames(encoded.slice(4))).toEqual([
+      { messageType: MSG_KV_BEGIN, payload: new Uint8Array([1, 2, 3]) },
+    ]);
+    expect(parser.getPendingFrameInfo()).toMatchObject({
+      hasPending: false,
+      bufferedBytes: 0,
+    });
+  });
+
   it("round-trips primitive buffer types and optionals", () => {
     const writer = new BufferWriter();
     writer.writeU8(7);

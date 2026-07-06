@@ -15,17 +15,16 @@ export const ErrQueueInvalidDelay = 5;
 
 export const ErrCodeQueueFull = 4005;
 
-export const ErrRpcTimeout = 1;
-export const ErrRpcHandlerNotFound = 2;
-export const ErrRpcHandlerError = 3;
-export const ErrRpcInvalidRequest = 4;
-
 export const ErrCodeRpcTimeout = 6001;
 export const ErrCodeRpcWorkerNotFound = 6002;
 export const ErrCodeRpcBackpressure = 6003;
 export const ErrCodeRpcRouteNotRegistered = 6004;
 export const ErrCodeRpcCorrelationNotFound = 6005;
+export const ErrCodeRpcInvalidSequence = 6006;
+export const ErrCodeRpcDuplicateCorrelation = 6007;
+export const ErrCodeRpcWrongWorker = 6008;
 export const ErrCodeRpcUnauthorized = 6009;
+export const ErrCodeRpcBackendError = 6010;
 
 export const ErrLeaseHeld = 1;
 export const ErrLeaseNotFound = 2;
@@ -57,8 +56,6 @@ const retryableErrorCodes = new Set([
   `QUEUE_${ErrCodeQueueFull}`,
   "LEASE_1",
   `LEASE_${ErrCodeLeaseHeld}`,
-  "RPC_1",
-  "RPC_2",
   `RPC_${ErrCodeRpcTimeout}`,
   `RPC_${ErrCodeRpcWorkerNotFound}`,
   `RPC_${ErrCodeRpcBackpressure}`,

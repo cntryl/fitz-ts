@@ -104,7 +104,7 @@ describe("route forwarding", () => {
     expect(readRoute(connection.lastRequest?.payload ?? new Uint8Array())).toBe(
       "lease://example/*",
     );
-    expect(lease.testOnlyInvalidToken()).toBe(43n);
+    expect(lease.getExpiry()).toBeGreaterThan(0n);
     expect(connection.lastRequest?.messageType).toBe(MSG_LEASE_ACQUIRE);
   });
 

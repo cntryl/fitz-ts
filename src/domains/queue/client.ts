@@ -23,6 +23,8 @@ import {
   MSG_QUEUE_UNSUBSCRIBE,
 } from "../../frame/types";
 import { isRouteShape, isSelectorRouteShape } from "../_routes";
+import { restoreMapEntriesAtomically } from "../internal/restore";
+import { formatStatusName } from "../internal/status";
 import { QueueCodec } from "./codec";
 import {
   AvailabilityHandler,
@@ -54,6 +56,7 @@ export function createQueueClient(connection: QueueConnectionPort) {
   const { requestFrame, requestReconnectFrame, runWithRetry } = createDomainClient(connection);
   const subscriptionsByPattern = new Map<string, QueueSubscriptionState>();
   const patternsBySubId = new Map<bigint, string>();
+  const pendingNotificationsBySubId = new Map<bigint, AvailabilityNotification[]>();
   let notificationHandlerRegistered = false;
   let nextHandlerId = 1;
 
@@ -62,20 +65,18 @@ export function createQueueClient(connection: QueueConnectionPort) {
       return;
     }
 
-    const subscriptions = Array.from(subscriptionsByPattern.entries(), ([pattern, state]) => ({
-      pattern,
-      handlers: Array.from(state.handlers.entries()),
-    }));
-    subscriptionsByPattern.clear();
-    patternsBySubId.clear();
-
-    for (const subscription of subscriptions) {
-      const subId = await subscribeWire(subscription.pattern, requestReconnectFrame);
-      subscriptionsByPattern.set(subscription.pattern, {
+    await restoreMapEntriesAtomically(subscriptionsByPattern, async (pattern, state) => {
+      const subId = await subscribeWire(pattern, requestReconnectFrame);
+      return {
         subId,
-        handlers: new Map(subscription.handlers),
-      });
-      patternsBySubId.set(subId, subscription.pattern);
+        handlers: new Map(state.handlers),
+      };
+    });
+
+    patternsBySubId.clear();
+    for (const [pattern, state] of subscriptionsByPattern) {
+      patternsBySubId.set(state.subId, pattern);
+      flushPendingNotifications(state.subId);
     }
   });
 
@@ -267,6 +268,7 @@ export function createQueueClient(connection: QueueConnectionPort) {
     }
 
     subscription.handlers.set(handlerId, handler);
+    flushPendingNotifications(subId);
 
     return createQueueSubscription(subId, pattern, async () => {
       await unsubscribe(pattern, handlerId);
@@ -286,6 +288,7 @@ export function createQueueClient(connection: QueueConnectionPort) {
 
     subscriptionsByPattern.delete(pattern);
     patternsBySubId.delete(subscription.subId);
+    pendingNotificationsBySubId.delete(subscription.subId);
     const payload = QueueCodec.encodeUnsubscribe(wireWatchPattern(pattern));
     const response = await requestFrame(MSG_QUEUE_UNSUBSCRIBE, payload);
     const decoded = QueueCodec.decodeUnsubscribeResponse(response);
@@ -301,26 +304,66 @@ export function createQueueClient(connection: QueueConnectionPort) {
     connection.registerNotificationHandler(MSG_QUEUE_NOTIFY, (payload) => {
       try {
         const { subId, route } = QueueCodec.decodeNotification(payload);
+        const notification: AvailabilityNotification = { route: publicQueueRoute(route) };
         const pattern = patternsBySubId.get(subId);
         if (!pattern) {
+          queuePendingNotification(subId, notification);
           return;
         }
 
         const subscription = subscriptionsByPattern.get(pattern);
         if (!subscription) {
+          queuePendingNotification(subId, notification);
           return;
         }
 
-        const notification: AvailabilityNotification = { route: publicQueueRoute(route) };
-        for (const handler of subscription.handlers.values()) {
-          connection.dispatchAsyncHandler(async () => {
-            await handler(notification);
-          });
-        }
+        dispatchNotification(subscription, notification);
       } catch {
         // Best-effort notification dispatch.
       }
     });
+  };
+
+  const queuePendingNotification = (
+    subId: bigint,
+    notification: AvailabilityNotification,
+  ): void => {
+    const pending = pendingNotificationsBySubId.get(subId);
+    if (pending) {
+      pending.push(notification);
+      return;
+    }
+
+    pendingNotificationsBySubId.set(subId, [notification]);
+  };
+
+  const flushPendingNotifications = (subId: bigint): void => {
+    const pending = pendingNotificationsBySubId.get(subId);
+    if (!pending || pending.length === 0) {
+      return;
+    }
+
+    const pattern = patternsBySubId.get(subId);
+    const subscription = pattern === undefined ? undefined : subscriptionsByPattern.get(pattern);
+    if (!subscription) {
+      return;
+    }
+
+    pendingNotificationsBySubId.delete(subId);
+    for (const notification of pending) {
+      dispatchNotification(subscription, notification);
+    }
+  };
+
+  const dispatchNotification = (
+    subscription: QueueSubscriptionState,
+    notification: AvailabilityNotification,
+  ): void => {
+    for (const handler of subscription.handlers.values()) {
+      connection.dispatchAsyncHandler(async () => {
+        await handler(notification);
+      });
+    }
   };
 
   const wireWatchPattern = (pattern: string): string => {
@@ -356,7 +399,7 @@ export function createQueueClient(connection: QueueConnectionPort) {
       [QueueStatus.InvalidDelay]: "InvalidDelay",
     };
 
-    const statusName = statusNames[errorCode] ?? `Unknown(${errorCode})`;
+    const statusName = formatStatusName(errorCode, statusNames);
     const reason = response.errorMessage ?? statusName;
 
     throw attachResilienceMeta(

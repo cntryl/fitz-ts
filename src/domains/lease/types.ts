@@ -92,46 +92,10 @@ export function createLease(
 
   const getExpiry = (): bigint => currentExpiry;
 
-  const testOnlyInvalidToken = (): bigint => currentToken + 1n;
-
-  const testOnlyExtendWithToken = async (
-    tokenToUse: bigint,
-    ttlSecs: number,
-    signal?: AbortSignal,
-  ): Promise<bigint> => {
-    ensureOpen();
-    const requestPayload = LeaseCodec.encodeExtend(route, tokenToUse, ttlSecs);
-    const response = await connection.request(MSG_LEASE_RENEW, requestPayload, signal);
-    const data = assertSuccess(response, "EXTEND");
-
-    if (data && data.length >= 8) {
-      const reader = new BufferReader(data);
-      currentToken = reader.readU64BE();
-    }
-
-    currentExpiry = BigInt(Math.floor(Date.now() / 1000)) + BigInt(ttlSecs);
-    return currentExpiry;
-  };
-
-  const testOnlyReleaseWithToken = async (
-    tokenToUse: bigint,
-    signal?: AbortSignal,
-  ): Promise<void> => {
-    ensureOpen();
-    const payload = LeaseCodec.encodeRelease(route, tokenToUse);
-    const response = await connection.request(MSG_LEASE_RELEASE, payload, signal);
-    assertSuccess(response, "RELEASE");
-    closed = true;
-    unsubscribeDisconnect();
-  };
-
   return {
     extend,
     release,
     getExpiry,
-    testOnlyInvalidToken,
-    testOnlyExtendWithToken,
-    testOnlyReleaseWithToken,
   };
 }
 

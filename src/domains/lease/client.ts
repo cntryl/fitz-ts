@@ -21,6 +21,7 @@ import {
   MSG_LEASE_UNSUBSCRIBE,
 } from "../../frame/types";
 import { isRouteShape } from "../_routes";
+import { restoreMapEntriesAtomically } from "../internal/restore";
 import { LeaseCodec } from "./codec";
 import {
   ChangeHandler,
@@ -58,19 +59,13 @@ export function createLeaseClient(connection: LeaseConnectionPort) {
       return;
     }
 
-    const subscriptions = Array.from(subscriptionsByPattern.entries(), ([pattern, state]) => ({
-      pattern,
-      handlers: Array.from(state.handlers.entries()),
-    }));
-    subscriptionsByPattern.clear();
-
-    for (const subscription of subscriptions) {
-      const subId = await subscribeWire(subscription.pattern, requestReconnectFrame);
-      subscriptionsByPattern.set(subscription.pattern, {
+    await restoreMapEntriesAtomically(subscriptionsByPattern, async (pattern, state) => {
+      const subId = await subscribeWire(pattern, requestReconnectFrame);
+      return {
         subId,
-        handlers: new Map(subscription.handlers),
-      });
-    }
+        handlers: new Map(state.handlers),
+      };
+    });
   });
 
   const acquire = async (route: string, ttlSecs: number): Promise<Lease> => {

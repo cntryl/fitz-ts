@@ -8,6 +8,7 @@ import { StreamCodec } from "./codec";
 import { StreamAppendOptions, StreamCommitMode, StreamSession, StreamStatus } from "./types";
 import { StreamError } from "../../core/errors";
 import { MSG_STREAM_APPEND, MSG_STREAM_COMMIT, MSG_STREAM_ROLLBACK } from "../../frame/types";
+import { formatStatusName } from "../internal/status";
 
 export function createStreamSession(
   connection: RequestPort & DisconnectListenerPort,
@@ -42,7 +43,7 @@ export function createStreamSession(
       [StreamStatus.ExpectedOffsetMismatch]: "ExpectedOffsetMismatch",
     };
 
-    const statusName = statusNames[status] || `Unknown(${status})`;
+    const statusName = formatStatusName(status, statusNames);
     throw new StreamError(`${operation} failed: ${statusName}`, statusName, status);
   };
 
@@ -72,14 +73,14 @@ export function createStreamSession(
 
   const commit = async (mode: StreamCommitMode, signal?: AbortSignal): Promise<void> => {
     ensureOpen();
-    closed = true;
-    unsubscribeDisconnect();
 
     const payload = StreamCodec.encodeCommit(sessionId, mode);
     const response = await connection.request(MSG_STREAM_COMMIT, payload, signal);
     const decoded = StreamCodec.decodeCommitResponse(response);
 
     checkStatus(decoded.status, "COMMIT");
+    closed = true;
+    unsubscribeDisconnect();
   };
 
   const rollback = async (signal?: AbortSignal): Promise<void> => {

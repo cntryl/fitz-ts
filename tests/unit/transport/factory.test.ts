@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import { createBrowserTransport } from "../../../src/transport/factory.browser";
-import { createNodeTransport, createTransport } from "../../../src/transport/factory";
+import { createNodeTransport, createTransport } from "../../../src/transport/factory.node";
 
 describe("transport factory", () => {
   it("normalizes http and https URLs to Node websocket transports", () => {

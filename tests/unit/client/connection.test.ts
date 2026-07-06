@@ -216,6 +216,24 @@ async function connectWithFakeTimers(connection: Connection): Promise<void> {
   await pendingConnect;
 }
 
+async function confirmSession(connection: Connection, transport: FakeTransport): Promise<void> {
+  const sentBefore = transport.sent.length;
+  const response = new Uint8Array([0xce]);
+  const pending = connection.request(77, new Uint8Array([0xca]));
+
+  await vi.waitFor(() => {
+    expect(transport.sent.length).toBeGreaterThan(sentBefore);
+  });
+  transport.pushRead(FrameCodec.encodeFrame(77, response));
+  await expect(pending).resolves.toEqual(response);
+}
+
+async function confirmSessionWithServerFrame(transport: FakeTransport): Promise<void> {
+  transport.pushRead(FrameCodec.encodeFrame(78, new Uint8Array([0xcf])));
+  await Promise.resolve();
+  await Promise.resolve();
+}
+
 describe("Connection", () => {
   it("authenticates using the token provider and sends CONNECT first", async () => {
     const tokenProvider = vi.fn(async () => "jwt-token");
@@ -322,11 +340,52 @@ describe("Connection", () => {
     connection.onReconnect(restore);
 
     await connection.connect();
+    await confirmSession(connection, first);
     first.fail(new Error("boom"));
     await vi.waitFor(() => {
       expect(connection.isConnected()).toBe(true);
       expect(factory).toHaveBeenCalledTimes(2);
       expect(restore).toHaveBeenCalledTimes(1);
+    });
+
+    await connection.close();
+  });
+
+  it("retries reconnect when a restore listener fails", async () => {
+    const first = new FakeTransport();
+    const second = new FakeTransport();
+    const third = new FakeTransport();
+    const factory = vi
+      .fn<() => Transport>()
+      .mockReturnValueOnce(first)
+      .mockReturnValueOnce(second)
+      .mockReturnValueOnce(third);
+    let restoreAttempts = 0;
+
+    const connection = new Connection(factory, async () => "jwt-token", {
+      authSettleDelayMs: 0,
+      reconnect: {
+        enabled: true,
+        maxAttempts: 2,
+        backoffMs: 0,
+        maxBackoffMs: 0,
+      },
+    });
+    connection.onReconnect(async () => {
+      restoreAttempts += 1;
+      if (restoreAttempts === 1) {
+        throw new Error("restore failed");
+      }
+    });
+
+    await connection.connect();
+    await confirmSession(connection, first);
+    first.fail(new Error("boom"));
+
+    await vi.waitFor(() => {
+      expect(connection.isConnected()).toBe(true);
+      expect(factory).toHaveBeenCalledTimes(3);
+      expect(restoreAttempts).toBe(2);
     });
 
     await connection.close();
@@ -348,6 +407,7 @@ describe("Connection", () => {
     });
 
     await connection.connect();
+    await confirmSession(connection, first);
     first.fail(new Error("boom"));
 
     await vi.waitFor(() => {
@@ -383,6 +443,7 @@ describe("Connection", () => {
     });
 
     await connection.connect();
+    await confirmSession(connection, first);
     first.fail(new Error("boom"));
 
     await vi.waitFor(() => {
@@ -427,6 +488,7 @@ describe("Connection", () => {
     });
 
     await connection.connect();
+    await confirmSession(connection, first);
     first.fail(new Error("boom"));
 
     await vi.waitFor(() => {
@@ -694,6 +756,7 @@ describe("Connection", () => {
     });
 
     await connection.connect();
+    await confirmSession(connection, first);
     first.fail(new Error("boom"));
 
     await vi.waitFor(() => {
@@ -702,6 +765,37 @@ describe("Connection", () => {
     });
 
     expect(stateDuringRestore).toBe("AUTHENTICATING");
+
+    await connection.close();
+  });
+
+  it("treats a stalled partial frame as connection loss and reconnects", async () => {
+    const first = new FakeTransport();
+    const second = new FakeTransport();
+    const factory = vi.fn<() => Transport>().mockReturnValueOnce(first).mockReturnValueOnce(second);
+    const connection = new Connection(factory, async () => "", {
+      authSettleDelayMs: 0,
+      heartbeat: {
+        enabled: false,
+        timeoutMs: 5,
+      },
+      reconnect: {
+        enabled: true,
+        maxAttempts: 1,
+        backoffMs: 0,
+        maxBackoffMs: 0,
+      },
+    });
+
+    await connection.connect();
+    await confirmSession(connection, first);
+    first.pushRead(FrameCodec.encodeFrame(77, new Uint8Array([1, 2, 3])).slice(0, 4));
+
+    await vi.waitFor(() => {
+      expect(factory).toHaveBeenCalledTimes(2);
+      expect(second.connected).toBe(true);
+      expect(connection.isConnected()).toBe(true);
+    });
 
     await connection.close();
   });
@@ -722,6 +816,67 @@ describe("Connection", () => {
     await expect(connection.connect()).rejects.toBeInstanceOf(AuthenticationError);
     expect(connection.getState()).toBe("CLOSED");
     expect(factory).toHaveBeenCalledTimes(1);
+  });
+
+  it("treats a late close before the first server frame as inferred auth rejection", async () => {
+    const first = new FakeTransport();
+    const second = new FakeTransport();
+    const events: FitzLifecycleEvent[] = [];
+    const factory = vi.fn<() => Transport>().mockReturnValueOnce(first).mockReturnValueOnce(second);
+    const connection = new Connection(factory, async () => "jwt-token", {
+      authSettleDelayMs: 0,
+      reconnect: {
+        enabled: true,
+        maxAttempts: 3,
+        backoffMs: 0,
+        maxBackoffMs: 0,
+      },
+      observability: {
+        onLifecycleEvent: (event) => {
+          events.push(event);
+        },
+      },
+    });
+
+    await connection.connect();
+    first.fail(new Error("server closed during silent auth"));
+
+    await vi.waitFor(() => {
+      expect(connection.getState()).toBe("CLOSED");
+      expect(factory).toHaveBeenCalledTimes(1);
+    });
+
+    await expect(connection.waitUntilReady(undefined, 1)).rejects.toBeInstanceOf(
+      AuthenticationError,
+    );
+    expect(second.connected).toBe(false);
+    expect(events.some((event) => event.event === "auth_rejected")).toBe(true);
+  });
+
+  it("uses the normal reconnect path after a server frame confirms the session", async () => {
+    const first = new FakeTransport();
+    const second = new FakeTransport();
+    const factory = vi.fn<() => Transport>().mockReturnValueOnce(first).mockReturnValueOnce(second);
+    const connection = new Connection(factory, async () => "jwt-token", {
+      authSettleDelayMs: 0,
+      reconnect: {
+        enabled: true,
+        maxAttempts: 1,
+        backoffMs: 0,
+        maxBackoffMs: 0,
+      },
+    });
+
+    await connection.connect();
+    await confirmSession(connection, first);
+    first.fail(new Error("network lost after confirmation"));
+
+    await vi.waitFor(() => {
+      expect(factory).toHaveBeenCalledTimes(2);
+      expect(connection.isConnected()).toBe(true);
+    });
+
+    await connection.close();
   });
 
   it("emits lifecycle events and logs for connect and close", async () => {
@@ -784,6 +939,7 @@ describe("Connection", () => {
     });
 
     await connection.connect();
+    await confirmSession(connection, first);
     first.fail(new Error("boom"));
 
     await vi.waitFor(() => {
@@ -1060,6 +1216,7 @@ describe("Connection", () => {
       });
 
       await connectWithFakeTimers(connection);
+      await confirmSessionWithServerFrame(first);
       await vi.advanceTimersByTimeAsync(10000);
       expect(first.heartbeatCount).toBe(1);
 

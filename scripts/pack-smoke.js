@@ -123,11 +123,12 @@ writeSmokeFile(
 writeSmokeFile(
   "typecheck-browser-subpath.ts",
   `
-    import { createClient } from "@cntryl/fitz/browser";
+    import { createClient, type Client } from "@cntryl/fitz/browser";
 
     const client = createClient({ url: "ws://example.test/ws", transport: "ws" });
+    const typedClient: Client = client;
 
-    client.config.transport satisfies "ws" | "auto";
+    typedClient.config.transport satisfies "ws" | "auto";
 
     // @ts-expect-error Browser subpath must reject TCP transport.
     createClient({ url: "tcp://example.test:4090", transport: "tcp" });

@@ -67,12 +67,25 @@ describe("Queue integration", () => {
 
       const route = f.uniqueRoute("queue");
       await f.client().queue().enqueue(route, b("token-check"));
-      const items = await f.client().queue().reserve(route, 30, 1);
+      const staleItems = await f.client().queue().reserve(route, 1, 1);
 
-      expect(items).toHaveLength(1);
-      await expect(
-        items[0].testOnlyCompleteWithToken(items[0].testOnlyInvalidToken()),
-      ).rejects.toBeTruthy();
+      expect(staleItems).toHaveLength(1);
+      await waitFor(
+        async () => {
+          const refreshedItems = await f.client().queue().reserve(route, 30, 1);
+          if (refreshedItems.length === 0) {
+            return false;
+          }
+          return Buffer.from(refreshedItems[0].body).toString() === "token-check";
+        },
+        {
+          timeoutMs: 3000,
+          intervalMs: 100,
+          timeoutMessage: "message was not re-reserved after lease expiry",
+        },
+      );
+
+      await expect(staleItems[0].complete()).rejects.toBeTruthy();
     });
 
     it("should reserve up to the requested batch size", async () => {
