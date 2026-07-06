@@ -336,6 +336,40 @@ describe("Client lifecycle ownership", () => {
     expect(client.isConnected()).toBe(true);
   });
 
+  it("sleeps between startup retries when backoff options are zero", async () => {
+    vi.useFakeTimers();
+    try {
+      const connection = new FakeOwnedConnection();
+      connection.setConnectImpl(async () => {
+        throw new TransportError("dial failed");
+      });
+      createConnectionMock.mockReturnValue(connection);
+
+      const client = createClient({ url: "ws://example.test" });
+      const ready = client
+        .connectWhenReady({
+          timeoutMs: 10,
+          backoffMs: 0,
+          maxBackoffMs: 0,
+        })
+        .catch((error: unknown) => error);
+
+      await vi.advanceTimersByTimeAsync(0);
+      expect(connection.connectCalls).toBe(1);
+
+      await Promise.resolve();
+      expect(connection.connectCalls).toBe(1);
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(connection.connectCalls).toBe(2);
+
+      await vi.advanceTimersByTimeAsync(20);
+      expect(await ready).toBeInstanceOf(TimeoutError);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("enforces connectWhenReady timeout against an in-flight startup attempt", async () => {
     const connection = new FakeOwnedConnection();
     let receivedSignal: AbortSignal | undefined;

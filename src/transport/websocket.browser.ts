@@ -172,6 +172,11 @@ export function createWebSocketTransport(url: string, options: TransportOptions 
 
         ws.onclose = () => {
           connected = false;
+          if (!settled) {
+            settle(() => reject(new TransportError("WebSocket closed during connect")));
+            return;
+          }
+
           if (receiverResolve) {
             receiverResolve(null);
           }

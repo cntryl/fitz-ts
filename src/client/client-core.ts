@@ -59,6 +59,10 @@ function resolveWaitOption(value: number | undefined, fallback: number): number 
   return Math.max(0, value);
 }
 
+function resolveBackoffOption(value: number | undefined, fallback: number): number {
+  return Math.max(1, resolveWaitOption(value, fallback));
+}
+
 function createConnectWhenReadyDeadline(timeoutMs: number, callerSignal?: AbortSignal) {
   const controller = new AbortController();
   const deadlineMs = Date.now() + timeoutMs;
@@ -329,11 +333,11 @@ export function createClientWithTransport<TConfig extends ClientConfig>(
     }
 
     const timeoutMs = resolveWaitOption(options.timeoutMs, resolvedConfig.timeout);
-    const maxBackoffMs = resolveWaitOption(
+    const maxBackoffMs = resolveBackoffOption(
       options.maxBackoffMs,
       DEFAULT_CONNECT_WHEN_READY_MAX_BACKOFF_MS,
     );
-    let backoffMs = resolveWaitOption(options.backoffMs, DEFAULT_CONNECT_WHEN_READY_BACKOFF_MS);
+    let backoffMs = resolveBackoffOption(options.backoffMs, DEFAULT_CONNECT_WHEN_READY_BACKOFF_MS);
     const deadline = createConnectWhenReadyDeadline(timeoutMs, options.signal);
 
     try {
