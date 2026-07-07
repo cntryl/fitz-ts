@@ -91,6 +91,28 @@ async function listenWithWebSocketServer(): Promise<{ close: () => Promise<void>
   };
 }
 
+async function listenWithHangingUpgradeServer(): Promise<{ url: string }> {
+  const server = createServer();
+  servers.push(server);
+
+  server.on("upgrade", (_req, socket) => {
+    sockets.push(socket);
+  });
+
+  await new Promise<void>((resolve) => {
+    server.listen(0, "127.0.0.1", resolve);
+  });
+
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("expected websocket server address");
+  }
+
+  return {
+    url: `ws://127.0.0.1:${address.port}/ws`,
+  };
+}
+
 afterEach(async () => {
   for (const socket of sockets.splice(0)) {
     socket.destroy();
@@ -170,6 +192,30 @@ describe("websocket transport", () => {
 
     await transport.close();
   });
+
+  it("rejects Node sends once graceful close begins", async () => {
+    const { url } = await listenWithWebSocketServer();
+    const transport = createWebSocketTransport(url, { timeout: 100 });
+
+    await transport.connect();
+
+    const closing = transport.close();
+    await expect(transport.send(new Uint8Array([1, 2, 3]))).rejects.toThrow("not connected");
+    await closing;
+  });
+
+  it("rejects Node connect when close happens before open", async () => {
+    const { url } = await listenWithHangingUpgradeServer();
+    const transport = createWebSocketTransport(url, { timeout: 1000 });
+
+    const connect = transport.connect();
+    await vi.waitFor(() => {
+      expect(sockets.length).toBeGreaterThan(0);
+    });
+
+    await transport.close();
+    await expect(connect).rejects.toThrow(/closed during connect|WebSocket error/i);
+  });
 });
 
 describe("browser websocket transport", () => {
@@ -207,6 +253,83 @@ describe("browser websocket transport", () => {
       await transport.connect();
 
       await expect(transport.send(new Uint8Array([1, 2, 3]))).resolves.toBeUndefined();
+    } finally {
+      vi.stubGlobal("WebSocket", originalWebSocket);
+    }
+  });
+
+  it("rejects browser sends once graceful close begins", async () => {
+    const originalWebSocket = globalThis.WebSocket;
+
+    class BrowserWebSocket {
+      static instances: BrowserWebSocket[] = [];
+
+      binaryType = "";
+      onopen: (() => void) | null = null;
+      onmessage: ((event: { data: ArrayBuffer | Uint8Array | Blob }) => void) | null = null;
+      onerror: ((event: { message?: string }) => void) | null = null;
+      onclose: (() => void) | null = null;
+
+      constructor(_url: string) {
+        BrowserWebSocket.instances.push(this);
+        setTimeout(() => this.onopen?.(), 0);
+      }
+
+      send(_data: Uint8Array): void {}
+
+      close(): void {}
+    }
+
+    vi.stubGlobal("WebSocket", BrowserWebSocket);
+
+    try {
+      const { createWebSocketTransport: createBrowserTransport } =
+        await import("../../../src/transport/websocket.browser");
+      const transport = createBrowserTransport("ws://example.test/ws", { timeout: 20 });
+
+      await transport.connect();
+      const socket = BrowserWebSocket.instances[0];
+
+      const closing = transport.close();
+      await expect(transport.send(new Uint8Array([1, 2, 3]))).rejects.toThrow("not connected");
+
+      socket.onclose?.();
+      await closing;
+    } finally {
+      vi.stubGlobal("WebSocket", originalWebSocket);
+    }
+  });
+
+  it("rejects browser connect when close happens before open", async () => {
+    const originalWebSocket = globalThis.WebSocket;
+
+    class BrowserWebSocket {
+      binaryType = "";
+      onopen: (() => void) | null = null;
+      onmessage: ((event: { data: ArrayBuffer | Uint8Array | Blob }) => void) | null = null;
+      onerror: ((event: { message?: string }) => void) | null = null;
+      onclose: (() => void) | null = null;
+
+      constructor(_url: string) {}
+
+      send(_data: Uint8Array): void {}
+
+      close(): void {
+        this.onclose?.();
+      }
+    }
+
+    vi.stubGlobal("WebSocket", BrowserWebSocket);
+
+    try {
+      const { createWebSocketTransport: createBrowserTransport } =
+        await import("../../../src/transport/websocket.browser");
+      const transport = createBrowserTransport("ws://example.test/ws", { timeout: 1000 });
+
+      const connect = transport.connect();
+      await transport.close();
+
+      await expect(connect).rejects.toThrow("closed during connect");
     } finally {
       vi.stubGlobal("WebSocket", originalWebSocket);
     }

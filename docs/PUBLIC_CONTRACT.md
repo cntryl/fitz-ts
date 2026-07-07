@@ -15,12 +15,17 @@ contractual.
   cancellation.
 - Aborting `connect()` fails the attempt without treating the client as auth
   rejected.
+- `connectWhenReady({ signal, timeoutMs, backoffMs, maxBackoffMs })` retries
+  initial startup-readiness failures only. It stops on the first successful
+  session, caller abort, total timeout, auth rejection, closed-client errors, or
+  unexpected failures.
 - `close()` is idempotent and permanently transitions the client to `CLOSED`.
 
 ## Reconnect
 
 - Automatic reconnect is enabled by default after the client has established at least one authenticated session. Set `reconnect.enabled` to `false` to disable it.
-- The initial `connect()` attempt is single-shot unless the caller explicitly retries it.
+- The initial `connect()` attempt is single-shot unless the caller explicitly
+  retries it or opts into `connectWhenReady()`.
 - Calling `connect()` while the client is already connecting or reconnecting
   waits for that in-flight lifecycle. It does not create a second transport or
   replace cached domain clients.

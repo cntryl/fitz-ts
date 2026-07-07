@@ -54,6 +54,12 @@ function getWebSocketConstructor(): WebSocketConstructor {
   return WebSocket as unknown as WebSocketConstructor;
 }
 
+function abortError(): Error {
+  const error = new Error("The operation was aborted");
+  error.name = "AbortError";
+  return error;
+}
+
 export function createWebSocketTransport(url: string, options: TransportOptions = {}): Transport {
   let ws: WebSocketLike | null = null;
   let connected = false;
@@ -73,9 +79,14 @@ export function createWebSocketTransport(url: string, options: TransportOptions 
     }
   };
 
-  const connect = async (): Promise<void> => {
+  const connect = async (options: { signal?: AbortSignal } = {}): Promise<void> => {
     return new Promise((resolve, reject) => {
       try {
+        if (options.signal?.aborted) {
+          reject(abortError());
+          return;
+        }
+
         let wsUrl = url;
         if (!wsUrl.startsWith("ws://") && !wsUrl.startsWith("wss://")) {
           if (wsUrl.startsWith("https://")) {
@@ -91,13 +102,8 @@ export function createWebSocketTransport(url: string, options: TransportOptions 
         ws.binaryType = "arraybuffer";
 
         let settled = false;
-        const connectTimeout = setTimeout(() => {
-          settle(() => {
-            connected = false;
-            ws?.close?.();
-            reject(new TimeoutError(`WebSocket connection timeout after ${timeout}ms`));
-          });
-        }, timeout);
+        let connectTimeout: ReturnType<typeof setTimeout> | null = null;
+        let onAbort: (() => void) | null = null;
 
         const settle = (callback: () => void): void => {
           if (settled) {
@@ -105,9 +111,36 @@ export function createWebSocketTransport(url: string, options: TransportOptions 
           }
 
           settled = true;
-          clearTimeout(connectTimeout);
+          if (connectTimeout) {
+            clearTimeout(connectTimeout);
+            connectTimeout = null;
+          }
+          if (onAbort) {
+            options.signal?.removeEventListener("abort", onAbort);
+          }
           callback();
         };
+
+        onAbort = () => {
+          settle(() => {
+            connected = false;
+            if (typeof ws?.terminate === "function") {
+              ws.terminate();
+            } else {
+              ws?.close?.();
+            }
+            reject(abortError());
+          });
+        };
+
+        options.signal?.addEventListener("abort", onAbort, { once: true });
+        connectTimeout = setTimeout(() => {
+          settle(() => {
+            connected = false;
+            ws?.close?.();
+            reject(new TimeoutError(`WebSocket connection timeout after ${timeout}ms`));
+          });
+        }, timeout);
 
         ws.onopen = () => {
           settle(() => {
@@ -144,6 +177,11 @@ export function createWebSocketTransport(url: string, options: TransportOptions 
 
         ws.onclose = () => {
           connected = false;
+          if (!settled) {
+            settle(() => reject(new TransportError("WebSocket closed during connect")));
+            return;
+          }
+
           if (receiverResolve) {
             receiverResolve(null);
           }
@@ -159,7 +197,7 @@ export function createWebSocketTransport(url: string, options: TransportOptions 
   };
 
   const send = async (data: Uint8Array): Promise<void> => {
-    if (!connected) {
+    if (!connected || !ws) {
       throw new TransportError("WebSocket is not connected");
     }
 
@@ -332,16 +370,31 @@ export function createWebSocketTransport(url: string, options: TransportOptions 
   const close = async (): Promise<void> => {
     if (ws) {
       const activeWs = ws;
+      if (!connected) {
+        ws = null;
+        if (typeof activeWs.terminate === "function") {
+          activeWs.terminate();
+        } else {
+          activeWs.close(1000, "Normal closure");
+        }
+        return;
+      }
+
+      connected = false;
       return new Promise<void>((resolve) => {
         const timeoutId = setTimeout(() => {
           activeWs.terminate?.();
-          connected = false;
+          if (ws === activeWs) {
+            ws = null;
+          }
           resolve();
         }, 5000);
 
         activeWs.onclose = () => {
           clearTimeout(timeoutId);
-          connected = false;
+          if (ws === activeWs) {
+            ws = null;
+          }
           resolve();
         };
 

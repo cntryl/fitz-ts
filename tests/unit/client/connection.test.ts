@@ -9,7 +9,12 @@ import type {
   FitzTracer,
 } from "../../../src/core/types";
 import { createBufferWriter } from "../../../src/core/buffer";
-import { AuthenticationError, RequestQueueFullError } from "../../../src/core/errors";
+import {
+  AuthenticationError,
+  ConnectionError,
+  RequestQueueFullError,
+  TransportError,
+} from "../../../src/core/errors";
 import { createNoticeClient } from "../../../src/domains/notice/client";
 import { FrameCodec } from "../../../src/frame/codec";
 import { MSG_CONNECT, MSG_NOTICE_NOTIFY, MSG_NOTICE_SUBSCRIBE } from "../../../src/frame/types";
@@ -24,6 +29,7 @@ class FakeTransport implements Transport {
   public concurrentSends = 0;
   public maxConcurrentSends = 0;
   public sendGate: Promise<void> | null = null;
+  public connectError: Error | null = null;
   public gateAfterSends = 0;
   public heartbeatMode: "resolve" | "timeout" = "resolve";
   private reads: Array<Uint8Array | Error> = [];
@@ -38,6 +44,9 @@ class FakeTransport implements Transport {
 
   async connect(): Promise<void> {
     this.connectStarted = true;
+    if (this.connectError) {
+      throw this.connectError;
+    }
     if (this.connectGate) {
       await this.connectGate;
     }
@@ -293,6 +302,40 @@ describe("Connection", () => {
     expect(connection.isConnected()).toBe(true);
 
     await connection.close();
+  });
+
+  it("does not emit connect_failed when close races an in-flight initial connect", async () => {
+    const transport = new FakeTransport();
+    let releaseConnect: () => void = () => undefined;
+    transport.connectGate = new Promise<void>((resolve) => {
+      releaseConnect = resolve;
+    });
+    const events: FitzLifecycleEvent[] = [];
+    const connection = createConnection(
+      () => transport,
+      async () => "jwt-token",
+      {
+        authSettleDelayMs: 0,
+        observability: {
+          onLifecycleEvent: (event) => {
+            events.push(event);
+          },
+        },
+      },
+    );
+
+    const connect = connection.connect();
+
+    await vi.waitFor(() => {
+      expect(transport.connectStarted).toBe(true);
+    });
+
+    await connection.close();
+    releaseConnect();
+
+    await expect(connect).rejects.toBeInstanceOf(ConnectionError);
+    expect(events.filter((event) => event.event === "closed")).toHaveLength(1);
+    expect(events.some((event) => event.event === "connect_failed")).toBe(false);
   });
 
   it("does not let an aborted secondary waiter cancel a shared initial connect", async () => {
@@ -851,6 +894,35 @@ describe("Connection", () => {
     );
     expect(second.connected).toBe(false);
     expect(events.some((event) => event.event === "auth_rejected")).toBe(true);
+  });
+
+  it("returns to DISCONNECTED after a transport dial failure so callers can retry", async () => {
+    const first = new FakeTransport();
+    const second = new FakeTransport();
+    first.connectError = new TransportError("dial failed");
+    const events: FitzLifecycleEvent[] = [];
+    const factory = vi.fn<() => Transport>().mockReturnValueOnce(first).mockReturnValueOnce(second);
+    const connection = createConnection(factory, async () => "", {
+      authSettleDelayMs: 0,
+      observability: {
+        onLifecycleEvent: (event) => {
+          events.push(event);
+        },
+      },
+    });
+
+    await expect(connection.connect()).rejects.toBeInstanceOf(TransportError);
+    expect(connection.getState()).toBe("DISCONNECTED");
+
+    await expect(connection.connect()).resolves.toBeUndefined();
+
+    expect(factory).toHaveBeenCalledTimes(2);
+    expect(first.connected).toBe(false);
+    expect(second.connected).toBe(true);
+    expect(connection.isConnected()).toBe(true);
+    expect(events.filter((event) => event.event === "connect_failed")).toHaveLength(1);
+
+    await connection.close();
   });
 
   it("uses the normal reconnect path after a server frame confirms the session", async () => {

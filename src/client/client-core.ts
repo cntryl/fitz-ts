@@ -7,6 +7,7 @@ import type {
   AsyncHandlerOptions,
   ClientConfig,
   ClientConnectOptions,
+  ConnectWhenReadyOptions,
   HeartbeatOptions,
   ReconnectOptions,
   RetryOptions,
@@ -15,7 +16,7 @@ import type {
 } from "../core/types";
 import { createConnection, type Connection } from "./connection";
 import type { Transport, TransportOptions } from "../transport/types";
-import { ConnectionError } from "../core/errors";
+import { ConnectionError, TimeoutError, TransportError } from "../core/errors";
 import { createKvClient, type KvClient } from "../domains/kv/client";
 import { createQueueClient, type QueueClient } from "../domains/queue/client";
 import { createRpcClient, type RpcClient } from "../domains/rpc/client";
@@ -23,7 +24,75 @@ import { createLeaseClient, type LeaseClient } from "../domains/lease/client";
 import { createNoticeClient, type NoticeClient } from "../domains/notice/client";
 import { createStreamClient, type StreamClient } from "../domains/stream/client";
 import { createScheduleClient, type ScheduleClient } from "../domains/schedule/client";
-import { throwIfAborted, waitForSharedPromise } from "./internal/async";
+import {
+  isAbortError,
+  sleepWithAbort,
+  throwIfAborted,
+  waitForSharedPromise,
+} from "./internal/async";
+import { jitteredBackoffMs } from "./internal/backoff";
+
+const DEFAULT_CONNECT_WHEN_READY_BACKOFF_MS = 250;
+const DEFAULT_CONNECT_WHEN_READY_MAX_BACKOFF_MS = 2000;
+
+function closedConnectionError(error: unknown): boolean {
+  return error instanceof ConnectionError && error.getContext()?.state === ConnectionState.Closed;
+}
+
+function startupReadinessError(error: unknown): boolean {
+  return (
+    error instanceof TransportError ||
+    error instanceof ConnectionError ||
+    error instanceof TimeoutError
+  );
+}
+
+function timeoutWaitingForReady(timeoutMs: number): TimeoutError {
+  return new TimeoutError("Timed out waiting for Fitz to become ready", { timeoutMs });
+}
+
+function resolveWaitOption(value: number | undefined, fallback: number): number {
+  if (value === undefined || !Number.isFinite(value)) {
+    return fallback;
+  }
+
+  return Math.max(0, value);
+}
+
+function resolveBackoffOption(value: number | undefined, fallback: number): number {
+  return Math.max(1, resolveWaitOption(value, fallback));
+}
+
+function createConnectWhenReadyDeadline(timeoutMs: number, callerSignal?: AbortSignal) {
+  const controller = new AbortController();
+  const deadlineMs = Date.now() + timeoutMs;
+  let timedOut = false;
+
+  const onCallerAbort = (): void => {
+    controller.abort();
+  };
+
+  const timeoutId = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, timeoutMs);
+
+  if (callerSignal?.aborted) {
+    controller.abort();
+  } else {
+    callerSignal?.addEventListener("abort", onCallerAbort, { once: true });
+  }
+
+  return {
+    signal: controller.signal,
+    hasExpired: (): boolean => timedOut || Date.now() >= deadlineMs,
+    remainingMs: (): number => Math.max(0, deadlineMs - Date.now()),
+    dispose: (): void => {
+      clearTimeout(timeoutId);
+      callerSignal?.removeEventListener("abort", onCallerAbort);
+    },
+  };
+}
 
 type DefaultedClientConfigKeys =
   | "asyncHandlers"
@@ -47,6 +116,7 @@ export type ResolvedClientConfig<TConfig extends ClientConfig> = DefinedConfigSh
 export type Client<TConfig extends ClientConfig = ClientConfig> = {
   config: ResolvedClientConfig<TConfig>;
   connect: (options?: ClientConnectOptions) => Promise<void>;
+  connectWhenReady: (options?: ConnectWhenReadyOptions) => Promise<void>;
   close: () => Promise<void>;
   isConnected: () => boolean;
   kv: () => KvClient;
@@ -257,6 +327,69 @@ export function createClientWithTransport<TConfig extends ClientConfig>(
     throwIfClientClosed();
   };
 
+  const connectWhenReady = async (options: ConnectWhenReadyOptions = {}): Promise<void> => {
+    if (clientClosed) {
+      throw clientClosedError();
+    }
+
+    const timeoutMs = resolveWaitOption(options.timeoutMs, resolvedConfig.timeout);
+    const maxBackoffMs = resolveBackoffOption(
+      options.maxBackoffMs,
+      DEFAULT_CONNECT_WHEN_READY_MAX_BACKOFF_MS,
+    );
+    let backoffMs = resolveBackoffOption(options.backoffMs, DEFAULT_CONNECT_WHEN_READY_BACKOFF_MS);
+    const deadline = createConnectWhenReadyDeadline(timeoutMs, options.signal);
+
+    try {
+      while (true) {
+        throwIfClientClosed();
+        throwIfAborted(options.signal);
+
+        try {
+          await connect({ signal: deadline.signal });
+          return;
+        } catch (error) {
+          if (isAbortError(error)) {
+            if (!options.signal?.aborted && deadline.hasExpired()) {
+              throw timeoutWaitingForReady(timeoutMs);
+            }
+
+            throw error;
+          }
+
+          if (clientClosed || closedConnectionError(error)) {
+            throw error;
+          }
+
+          if (!startupReadinessError(error)) {
+            throw error;
+          }
+
+          if (deadline.hasExpired()) {
+            throw timeoutWaitingForReady(timeoutMs);
+          }
+
+          const delayMs = Math.min(
+            jitteredBackoffMs(backoffMs, maxBackoffMs),
+            deadline.remainingMs(),
+          );
+          try {
+            await sleepWithAbort(delayMs, deadline.signal);
+          } catch (sleepError) {
+            if (isAbortError(sleepError) && !options.signal?.aborted && deadline.hasExpired()) {
+              throw timeoutWaitingForReady(timeoutMs);
+            }
+
+            throw sleepError;
+          }
+          backoffMs = Math.min(backoffMs * 2, maxBackoffMs);
+        }
+      }
+    } finally {
+      deadline.dispose();
+    }
+  };
+
   const close = async (): Promise<void> => {
     if (clientClosed && !connection) {
       domainCache.clear();
@@ -343,6 +476,7 @@ export function createClientWithTransport<TConfig extends ClientConfig>(
   return {
     config: resolvedConfig,
     connect,
+    connectWhenReady,
     close,
     isConnected,
     kv,

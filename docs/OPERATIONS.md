@@ -14,7 +14,7 @@ The client transitions through these states:
 - `RECONNECTING`
 - `CLOSED`
 
-`connect()` opens the selected transport, sends `CONNECT`, and treats the connection as authenticated only after the auth settle window passes without the broker closing the socket.
+`connect()` opens the selected transport, sends `CONNECT`, and treats the connection as authenticated only after the auth settle window passes without the broker closing the socket. The initial `connect()` attempt is one-shot; it does not retry a broker that is not listening yet.
 
 On a live client, `connect()` is idempotent. Concurrent callers share the same
 initial connect or reconnect lifecycle instead of creating replacement
@@ -30,7 +30,25 @@ If application code calls `connect()` during that recovery window, the call
 waits for the active reconnect path to finish. It does not start a second dial,
 swap out cached domain clients, or replace the owned connection object.
 
-The initial `connect()` call is still one-shot by default. If startup should keep waiting for Fitz to come back, add that outer loop in the application process manager or bootstrap code.
+Use `connectWhenReady()` when service startup should keep waiting for Fitz to
+become reachable:
+
+```typescript
+const controller = new AbortController();
+
+await client.connectWhenReady({
+  signal: controller.signal,
+  timeoutMs: 30_000,
+  backoffMs: 250,
+  maxBackoffMs: 2_000,
+});
+```
+
+`connectWhenReady()` retries startup transport and connection-readiness failures
+until the first successful session, the total timeout expires, or the caller
+aborts. Authentication failures, closed-client errors, and unexpected failures
+are returned without retry. After the first successful session, the existing
+post-success reconnect behavior remains responsible for recovery.
 
 ## Domain Recovery Semantics
 

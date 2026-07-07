@@ -406,6 +406,41 @@ describe("Connection hardening integration", () => {
 
 describe("Client ownership integration", () => {
   runWithTransportsOnly(({ transport }) => {
+    it("should wait for Fitz to become reachable during initial connect", async () => {
+      const proxy = await createTransportProxy(transport, brokerAddrFor(transport, "anonymous"));
+      await proxy.goDown();
+      const client = createClient({
+        url: proxy.url,
+        transport,
+        tokenProvider: () => "",
+        timeout: 500,
+      });
+
+      try {
+        let settled = false;
+        const ready = client
+          .connectWhenReady({
+            timeoutMs: 5000,
+            backoffMs: 25,
+            maxBackoffMs: 50,
+          })
+          .finally(() => {
+            settled = true;
+          });
+
+        await sleep(100);
+        expect(settled).toBe(false);
+
+        await proxy.goUp();
+        await ready;
+
+        expect(client.isConnected()).toBe(true);
+      } finally {
+        await client.close().catch(() => undefined);
+        await proxy.close();
+      }
+    });
+
     it("should wait on the active reconnect when connect is called mid-recovery", async () => {
       const publisher = new TestFixture(transport, "anonymous");
       await publisher.connectOrFail();

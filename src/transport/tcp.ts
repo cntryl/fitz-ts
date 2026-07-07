@@ -50,6 +50,12 @@ if (isNode()) {
   netModule = require("net") as NetModule;
 }
 
+function abortError(): Error {
+  const error = new Error("The operation was aborted");
+  error.name = "AbortError";
+  return error;
+}
+
 export function createTcpTransport(url: string, options: TransportOptions = {}): Transport {
   if (!isNode()) {
     throw new Error("TCP transport is only available in Node.js");
@@ -144,9 +150,14 @@ export function createTcpTransport(url: string, options: TransportOptions = {}):
     }
   };
 
-  const connect = async (): Promise<void> => {
+  const connect = async (options: { signal?: AbortSignal } = {}): Promise<void> => {
     return new Promise((resolve, reject) => {
       try {
+        if (options.signal?.aborted) {
+          reject(abortError());
+          return;
+        }
+
         if (!netModule) {
           reject(new TransportError("TCP transport module unavailable"));
           return;
@@ -158,21 +169,54 @@ export function createTcpTransport(url: string, options: TransportOptions = {}):
           timeout,
         });
 
-        const connectTimeout = setTimeout(() => {
-          socket?.destroy();
-          reject(new TimeoutError(`TCP connection timeout after ${timeout}ms`));
-        }, timeout);
-
         const activeSocket = socket;
         let connectSettled = false;
+        let connectTimeout: ReturnType<typeof setTimeout> | null = null;
+        let onAbort: (() => void) | null = null;
+
+        const cleanupConnectListeners = (): void => {
+          if (onAbort) {
+            options.signal?.removeEventListener("abort", onAbort);
+          }
+        };
+
+        const settleConnect = (callback: () => void): void => {
+          if (connectSettled) {
+            return;
+          }
+
+          connectSettled = true;
+          if (connectTimeout) {
+            clearTimeout(connectTimeout);
+            connectTimeout = null;
+          }
+          cleanupConnectListeners();
+          callback();
+        };
+
+        onAbort = (): void => {
+          settleConnect(() => {
+            connected = false;
+            activeSocket.destroy();
+            reject(abortError());
+          });
+        };
+
+        options.signal?.addEventListener("abort", onAbort, { once: true });
+        connectTimeout = setTimeout(() => {
+          settleConnect(() => {
+            activeSocket.destroy();
+            reject(new TimeoutError(`TCP connection timeout after ${timeout}ms`));
+          });
+        }, timeout);
 
         activeSocket.on("connect", () => {
-          clearTimeout(connectTimeout);
-          connectSettled = true;
-          connected = true;
-          activeSocket.setNoDelay(true);
-          activeSocket.setTimeout(receiveTimeoutEnabled ? timeout : 0);
-          resolve();
+          settleConnect(() => {
+            connected = true;
+            activeSocket.setNoDelay(true);
+            activeSocket.setTimeout(receiveTimeoutEnabled ? timeout : 0);
+            resolve();
+          });
         });
 
         activeSocket.on("data", (chunk: Uint8Array | Buffer) => {
@@ -180,14 +224,12 @@ export function createTcpTransport(url: string, options: TransportOptions = {}):
         });
 
         activeSocket.on("error", (err: Error) => {
-          clearTimeout(connectTimeout);
           connected = false;
           const error = new TransportError(`TCP error: ${err.message || "unknown error"}`);
           failReceive(error);
-          if (!connectSettled) {
-            connectSettled = true;
+          settleConnect(() => {
             reject(error);
-          }
+          });
         });
 
         activeSocket.on("close", () => {
@@ -195,10 +237,9 @@ export function createTcpTransport(url: string, options: TransportOptions = {}):
           if (!terminalError) {
             failReceive(new TransportError("Connection closed"));
           }
-          if (!connectSettled) {
-            connectSettled = true;
+          settleConnect(() => {
             reject(terminalError ?? new TransportError("Connection closed"));
-          }
+          });
         });
 
         activeSocket.on("timeout", () => {
@@ -337,17 +378,32 @@ export function createTcpTransport(url: string, options: TransportOptions = {}):
   const close = async (): Promise<void> => {
     if (socket) {
       const activeSocket = socket;
+      if (!connected) {
+        if (socket === activeSocket) {
+          socket = null;
+        }
+        terminalError ??= new TransportError("Connection closed");
+        failReceive(terminalError);
+        activeSocket.destroy();
+        return;
+      }
+
+      connected = false;
       return new Promise<void>((resolve) => {
         const timeoutId = setTimeout(() => {
           activeSocket.destroy();
-          connected = false;
+          if (socket === activeSocket) {
+            socket = null;
+          }
           failReceive(new TransportError("Connection closed"));
           resolve();
         }, 5000);
 
         activeSocket.on("close", () => {
           clearTimeout(timeoutId);
-          connected = false;
+          if (socket === activeSocket) {
+            socket = null;
+          }
           terminalError ??= new TransportError("Connection closed");
           resolve();
         });

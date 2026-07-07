@@ -3,7 +3,7 @@
  */
 
 export interface Transport {
-  connect(): Promise<void>;
+  connect(options?: TransportConnectOptions): Promise<void>;
   send(data: Uint8Array): Promise<void>;
   receive(): Promise<Uint8Array>;
   sendHeartbeat?(options: TransportHeartbeatOptions): Promise<void>;
@@ -12,6 +12,10 @@ export interface Transport {
   close(): Promise<void>;
   getUrl(): string;
   isConnected(): boolean;
+}
+
+export interface TransportConnectOptions {
+  signal?: AbortSignal;
 }
 
 export type TransportConstructor = new (url: string, options?: TransportOptions) => Transport;

@@ -46,6 +46,7 @@ import {
   waitForSharedPromise,
 } from "./internal/async";
 import { createAsyncHandlerDispatcher } from "./internal/async-handler-dispatcher";
+import { jitteredBackoffMs } from "./internal/backoff";
 import { createRequestGate } from "./internal/request-gate";
 import { createReadinessWaiter } from "./internal/readiness";
 import { createHeartbeatLoop } from "./internal/heartbeat";
@@ -546,11 +547,6 @@ export function createConnection(
     );
   };
 
-  const getRetryDelayMs = (baseDelayMs: number): number => {
-    const jitter = Math.floor(Math.random() * baseDelayMs * 0.5);
-    return Math.min(Math.max(baseDelayMs + jitter, 1), retryMaxBackoffMs);
-  };
-
   const recordRetry = (
     operation: RetryOperation,
     attempt: number,
@@ -629,7 +625,7 @@ export function createConnection(
           throw error;
         }
 
-        const actualDelayMs = getRetryDelayMs(delayMs);
+        const actualDelayMs = jitteredBackoffMs(delayMs, retryMaxBackoffMs);
         recordRetry(operation, attempt, actualDelayMs, error);
         await sleepWithAbort(actualDelayMs, operation.signal);
         delayMs = Math.min(delayMs * 2, retryMaxBackoffMs);
@@ -678,7 +674,9 @@ export function createConnection(
     frameParser.reset();
     clearPartialFrameTimeout();
     sessionConfirmed = false;
-    hasEstablishedSession = false;
+    if (!isReconnect) {
+      hasEstablishedSession = false;
+    }
     requestGate = createRequestGate(maxInFlightRequests, maxRequestQueueSize);
     const activeTransport = transportFactory();
     transport = activeTransport;
@@ -686,26 +684,26 @@ export function createConnection(
     setState(isReconnect ? ConnectionState.Reconnecting : ConnectionState.Connecting);
     emitLifecycleEvent(isReconnect ? "reconnect_start" : "connect_start");
 
-    await activeTransport.connect();
-    markRemoteActivity();
-    if (closeRequested) {
-      stopHeartbeat();
-      await activeTransport.close().catch(() => undefined);
-      if (transport === activeTransport) {
-        transport = null;
-      }
-      throw connectionClosedError();
-    }
-    throwIfAborted(signal);
-    receiveLoop = startReceiveLoop();
-
-    setState(ConnectionState.Connected);
-    setState(ConnectionState.Authenticating);
-    emitLifecycleEvent("auth_start");
-    authOutcome = createDeferred<void>();
-
     try {
-      await sendConnect();
+      await activeTransport.connect({ signal });
+      markRemoteActivity();
+      if (closeRequested) {
+        throw connectionClosedError();
+      }
+      throwIfAborted(signal);
+      receiveLoop = startReceiveLoop();
+
+      setState(ConnectionState.Connected);
+      setState(ConnectionState.Authenticating);
+      emitLifecycleEvent("auth_start");
+      authOutcome = createDeferred<void>();
+      if (!isReconnect && authRejected) {
+        throw new AuthenticationError("Authentication rejected", { state });
+      }
+
+      const sendConnectPromise = sendConnect();
+      void sendConnectPromise.catch(() => undefined);
+      await Promise.race([sendConnectPromise, authOutcome.promise]);
       if (closeRequested) {
         throw connectionClosedError();
       }
@@ -713,6 +711,9 @@ export function createConnection(
       await Promise.race([authOutcome.promise, sleep(authSettleDelayMs)]);
       if (closeRequested) {
         throw connectionClosedError();
+      }
+      if (!isReconnect && authRejected) {
+        throw new AuthenticationError("Authentication rejected", { state });
       }
       throwIfAborted(signal);
       authOutcome?.resolve();
@@ -739,8 +740,6 @@ export function createConnection(
     } catch (error) {
       authOutcome = null;
       reconnectRestoreActive = false;
-      multiplexer.setDisconnected();
-      emitDisconnect();
       stopHeartbeat();
       if (activeTransport) {
         await activeTransport.close().catch(() => undefined);
@@ -748,18 +747,26 @@ export function createConnection(
       if (transport === activeTransport) {
         transport = null;
       }
-      const rejectedAuth = error instanceof AuthenticationError;
+      const inferredAuthFailure =
+        !closeRequested &&
+        !isAbortError(error) &&
+        !reconnectRestoreActive &&
+        isUnconfirmedSessionLoss();
+      const failure = inferredAuthFailure ? createInferredAuthenticationError(error) : error;
+      const rejectedAuth = failure instanceof AuthenticationError;
       authRejected = rejectedAuth;
       if (closeRequested) {
         setState(ConnectionState.Closed);
       } else {
+        multiplexer.setDisconnected();
+        emitDisconnect();
         setState(rejectedAuth ? ConnectionState.Closed : ConnectionState.Disconnected);
+        emitLifecycleEvent(isReconnect ? "reconnect_failed" : "connect_failed", failure);
       }
-      emitLifecycleEvent(isReconnect ? "reconnect_failed" : "connect_failed", error);
       if (isAbortError(error)) {
         throw abortError();
       }
-      throw error;
+      throw failure;
     }
   };
 

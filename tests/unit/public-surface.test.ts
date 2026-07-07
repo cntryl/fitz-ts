@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, expectTypeOf, it } from "vite-plus/test";
 
 import { Client } from "../../src/client/client";
+import type { ConnectWhenReadyOptions } from "../../src/index";
 import type {
   BrowserClient,
   BrowserTransportType,
@@ -24,7 +25,10 @@ import { QueueClient } from "../../src/domains/queue/client";
 import { RpcClient } from "../../src/domains/rpc/client";
 import { ScheduleClient } from "../../src/domains/schedule/client";
 import { StreamClient } from "../../src/domains/stream/client";
-import type { Client as BrowserFacadeClient } from "../../src/index.browser";
+import type {
+  Client as BrowserFacadeClient,
+  ConnectWhenReadyOptions as BrowserConnectWhenReadyOptions,
+} from "../../src/index.browser";
 
 type IsCallable<T> = T extends (...args: never[]) => unknown ? true : false;
 type IsNewable<T> = T extends abstract new (...args: never[]) => unknown ? true : false;
@@ -70,6 +74,7 @@ describe("public surface", () => {
       "AsyncHandlerOptions",
       "ClientConfig",
       "ClientConnectOptions",
+      "ConnectWhenReadyOptions",
       "HeartbeatOptions",
       "WebSocketOptions",
       "FitzLifecycleEvent",
@@ -258,6 +263,15 @@ describe("public surface", () => {
     expectTypeOf<BrowserFacadeClient>().toEqualTypeOf<BrowserClient>();
     expectTypeOf<BrowserClient["config"]["transport"]>().toEqualTypeOf<BrowserTransportType>();
     expectTypeOf<BrowserClient["config"]["webSocket"]>().toEqualTypeOf<BrowserWebSocketOptions>();
+  });
+
+  it("exports connectWhenReady from root and browser public surfaces", () => {
+    expectTypeOf<Client["connectWhenReady"]>().toEqualTypeOf<
+      (options?: ConnectWhenReadyOptions) => Promise<void>
+    >();
+    expectTypeOf<BrowserFacadeClient["connectWhenReady"]>().toEqualTypeOf<
+      (options?: BrowserConnectWhenReadyOptions) => Promise<void>
+    >();
   });
 
   it("exports callable factory aliases without constructor signatures", () => {

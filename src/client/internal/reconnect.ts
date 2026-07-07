@@ -1,5 +1,6 @@
 import { ConnectionState } from "../../core/types";
 import { isAbortError, sleepWithAbort } from "./async";
+import { jitteredBackoffMs } from "./backoff";
 
 export type ReconnectLoopResult = "connected" | "closed" | "exhausted";
 
@@ -16,11 +17,6 @@ export interface ReconnectSchedulerOptions {
 }
 
 export function createReconnectScheduler(options: ReconnectSchedulerOptions) {
-  const getReconnectDelayMs = (baseDelayMs: number): number => {
-    const jitter = Math.floor(Math.random() * baseDelayMs * 0.5);
-    return Math.min(Math.max(baseDelayMs + jitter, 1), options.maxBackoffMs);
-  };
-
   const runLoop = async (): Promise<ReconnectLoopResult> => {
     let attempts = 0;
     let delayMs = options.backoffMs;
@@ -30,7 +26,7 @@ export function createReconnectScheduler(options: ReconnectSchedulerOptions) {
       options.setState(ConnectionState.Reconnecting);
       options.emitLifecycleEvent("reconnect_scheduled", undefined, attempts);
 
-      const actualDelayMs = getReconnectDelayMs(delayMs);
+      const actualDelayMs = jitteredBackoffMs(delayMs, options.maxBackoffMs);
       try {
         await sleepWithAbort(actualDelayMs, options.closeSignal);
         if (options.isCloseRequested()) {
