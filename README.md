@@ -214,6 +214,12 @@ Benchmark tiers:
 
 The conformance harness writes JSON results to `artifacts/conformance-results.json` by default.
 
+Current conformance scope:
+
+- `tests/conformance/conformance.test.ts` covers `CS-001` through `CS-017`.
+- `.github/workflows/ci.yml` runs the full `ws|tcp` x `anonymous|valid_jwt` conformance matrix and uploads one JSON artifact per combination.
+- `npm run pack:smoke` is enforced in CI alongside the unit, integration, and conformance gates.
+
 Tooling is direct:
 
 - `vp check` for combined format, lint, and type checks
@@ -233,7 +239,7 @@ CommonJS consumer fixtures before release.
 - `src/domains`: domain clients and codecs
 - `tests/unit`: fast unit coverage
 - `tests/integration`: broker-backed integration coverage
-- `tests/conformance`: release-gate conformance suite
+- `tests/conformance`: release-gate cross-language conformance suite and artifact writer
 
 Broker-backed connection hardening coverage now includes automatic reconnect subscription replay and token-provider replay checks in `tests/integration/connection.test.ts`.
 

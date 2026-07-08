@@ -1,7 +1,7 @@
 /**
  * Fitz cross-language conformance harness â€” TypeScript / fitz-ts
  *
- * Implements the shared 001..015 scenarios plus the bounded-load check for:
+ * Implements the shared CS-001..CS-017 scenarios for:
  *   fitz/docs/clients/cross-language-conformance-suite.yaml
  *
  * Configuration via environment variables:
@@ -17,7 +17,7 @@
  *   CONFORMANCE_TRANSPORT=tcp CONFORMANCE_AUTH_MODE=valid_jwt npm run test:conformance
  */
 import { afterAll, describe, expect, it } from "vite-plus/test";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 
 import { createClient, type Client } from "../../src/client/client.js";
@@ -46,6 +46,10 @@ const CLIENT_NAME = "fitz-ts";
 const SECRET = process.env["FITZ_BROKER_JWT_HMAC_SECRET"] ?? "dev-test-secret";
 const AUDIENCE = process.env["FITZ_BROKER_JWT_AUDIENCE"] ?? "fitz";
 const TENANT = process.env["FITZ_BROKER_JWT_TENANT"] ?? "dev";
+const SHARED_SUITE_PATH = resolve(
+  process.cwd(),
+  "../../fitz/docs/clients/cross-language-conformance-suite.yaml",
+);
 
 const BROKER_ADDR = brokerAddrFor(TRANSPORT, AUTH_MODE);
 // ---------------------------------------------------------------------------
@@ -148,12 +152,44 @@ async function runScenario(
 // ---------------------------------------------------------------------------
 
 const collector = new ResultCollector();
+const IMPLEMENTED_SCENARIO_IDS = [
+  "CS-001",
+  "CS-002",
+  "CS-003",
+  "CS-004",
+  "CS-005",
+  "CS-006",
+  "CS-007",
+  "CS-008",
+  "CS-009",
+  "CS-010",
+  "CS-011",
+  "CS-012",
+  "CS-013",
+  "CS-014",
+  "CS-015",
+  "CS-016",
+  "CS-017",
+];
+
+function loadSharedSuiteScenarioIds(): string[] {
+  const source = readFileSync(SHARED_SUITE_PATH, "utf-8");
+  return source
+    .split(/\r?\n/u)
+    .map((line) => line.trim())
+    .filter((line) => line.startsWith("- id:"))
+    .map((line) => line.slice("- id:".length).trim().replace(/^"|"$/gu, ""));
+}
 
 // ---------------------------------------------------------------------------
 // Scenarios
 // ---------------------------------------------------------------------------
 
 describe(`Fitz conformance â€” fitz-ts [transport=${TRANSPORT}, auth=${AUTH_MODE}]`, () => {
+  it("implements every shared conformance scenario id", () => {
+    expect(IMPLEMENTED_SCENARIO_IDS).toEqual(loadSharedSuiteScenarioIds());
+  });
+
   // CS-001 â”€ connect success
   it("CS-001 connect success", async () => {
     const result = await runScenario("CS-001", "connect success", "P0", async () => {
@@ -890,6 +926,62 @@ describe(`Fitz conformance â€” fitz-ts [transport=${TRANSPORT}, auth=${AUTH
       } finally {
         await client.close().catch(() => undefined);
       }
+
+      return { verdict: "pass", evidence };
+    });
+
+    collector.record(result);
+    expect(result.verdict).toBe("pass");
+  });
+
+  // CS-016 - filtered stream replay
+  it("CS-016 filtered stream replay", async () => {
+    const result = await runScenario("CS-016", "filtered stream replay", "P1", async () => {
+      const evidence: string[] = [];
+
+      await withClient({}, async (client) => {
+        const route = uniqueRoute("stream");
+        const session = await client.stream().begin(route);
+        const firstOffset = await session.append(0n, b("alpha"), {
+          discriminator: "proj.alpha",
+        });
+        const secondOffset = await session.append(1n, b("beta"), {
+          discriminator: "audit.beta",
+        });
+        await session.commit("Sync");
+        evidence.push(`appended records at offsets ${firstOffset} and ${secondOffset}`);
+
+        const filter = {
+          clauses: [{ kind: "Equals" as const, value: "proj.alpha" }],
+        };
+
+        const records = await client.stream().read(route, 0n, 10, { filter });
+        expect(records).toHaveLength(1);
+        expect(records[0].offset).toBe(firstOffset);
+        expect(Buffer.from(records[0].body).toString()).toBe("alpha");
+        evidence.push("compatibility read returned only the matching discriminator record");
+
+        const page = await client.stream().readPage(route, 0n, 10, { filter });
+        expect(page.items).toHaveLength(2);
+        expect(page.items[0].kind).toBe("event");
+        if (page.items[0].kind !== "event") {
+          throw new Error("expected first page item to be an event");
+        }
+        expect(page.items[0].record.offset).toBe(firstOffset);
+        expect(Buffer.from(page.items[0].record.body).toString()).toBe("alpha");
+        expect(page.items[1]).toEqual({
+          kind: "filtered",
+          offset: secondOffset,
+          reason: "server_filter",
+        });
+        expect(page.cursor).toMatchObject({
+          lastResourceOffset: secondOffset,
+          hasMore: false,
+        });
+        evidence.push(
+          "filtered replay returned the matching record plus synthetic filtered metadata in order",
+        );
+      });
 
       return { verdict: "pass", evidence };
     });

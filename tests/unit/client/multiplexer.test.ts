@@ -358,4 +358,64 @@ describe("Multiplexer", () => {
     await expect(pending).resolves.toEqual(response);
     expect(handler).not.toHaveBeenCalled();
   });
+
+  it("does not cross same-type responses when dispatch order matches request order", async () => {
+    const multiplexer = createMultiplexer();
+    multiplexer.setConnected();
+
+    const first = multiplexer.request(901, new Uint8Array([1]), async () => undefined, 100);
+    const second = multiplexer.request(901, new Uint8Array([2]), async () => undefined, 100);
+
+    multiplexer.dispatch(901, new Uint8Array([0xaa]));
+    multiplexer.dispatch(901, new Uint8Array([0xbb]));
+
+    await expect(first).resolves.toEqual(new Uint8Array([0xaa]));
+    await expect(second).resolves.toEqual(new Uint8Array([0xbb]));
+  });
+
+  it("does not cross same-type responses when dispatch order differs from request order", async () => {
+    const multiplexer = createMultiplexer();
+    multiplexer.setConnected();
+
+    const first = multiplexer.request(901, new Uint8Array([1]), async () => undefined, 100);
+    const second = multiplexer.request(901, new Uint8Array([2]), async () => undefined, 100);
+
+    multiplexer.dispatch(901, new Uint8Array([0xaa]));
+    multiplexer.dispatch(901, new Uint8Array([0xbb]));
+
+    await expect(first).resolves.toEqual(new Uint8Array([0xaa]));
+    await expect(second).resolves.toEqual(new Uint8Array([0xbb]));
+  });
+
+  it("does not consume stale response after timeout for the earlier request", async () => {
+    const multiplexer = createMultiplexer();
+    multiplexer.setConnected();
+
+    const first = multiplexer.request(902, new Uint8Array([1]), async () => undefined, 20);
+    await expect(first).rejects.toBeInstanceOf(TimeoutError);
+
+    const second = multiplexer.request(902, new Uint8Array([2]), async () => undefined, 200);
+
+    multiplexer.dispatch(902, new Uint8Array([0xaa]));
+    multiplexer.dispatch(902, new Uint8Array([0xbb]));
+
+    await expect(second).resolves.toEqual(new Uint8Array([0xbb]));
+  });
+
+  it("does not leak stale response across disconnect/connect cycles", async () => {
+    const multiplexer = createMultiplexer();
+    multiplexer.setConnected();
+
+    const first = multiplexer.request(903, new Uint8Array([1]), async () => undefined, 20);
+    await expect(first).rejects.toBeInstanceOf(TimeoutError);
+
+    multiplexer.setDisconnected();
+    multiplexer.dispatch(903, new Uint8Array([0xaa]));
+
+    multiplexer.setConnected();
+    const second = multiplexer.request(903, new Uint8Array([2]), async () => undefined, 200);
+
+    multiplexer.dispatch(903, new Uint8Array([0xbb]));
+    await expect(second).resolves.toEqual(new Uint8Array([0xbb]));
+  });
 });
