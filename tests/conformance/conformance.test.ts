@@ -48,7 +48,7 @@ const AUDIENCE = process.env["FITZ_BROKER_JWT_AUDIENCE"] ?? "fitz";
 const TENANT = process.env["FITZ_BROKER_JWT_TENANT"] ?? "dev";
 const SHARED_SUITE_PATH = resolve(
   process.cwd(),
-  "../../fitz/docs/clients/cross-language-conformance-suite.yaml",
+  "docs/clients/cross-language-conformance-suite.yaml",
 );
 
 const BROKER_ADDR = brokerAddrFor(TRANSPORT, AUTH_MODE);

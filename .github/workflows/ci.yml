@@ -3,6 +3,8 @@ name: CI
 on:
   workflow_call:
   workflow_dispatch:
+  schedule:
+    - cron: "0 0 * * *" # Runs daily at midnight UTC
   push:
   pull_request:
 
@@ -12,6 +14,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       FITZ_BROKER_JWT_HMAC_SECRET: dev-test-secret
+
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
