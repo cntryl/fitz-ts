@@ -1,6 +1,6 @@
 {
   "name": "@cntryl/fitz",
-  "version": "0.0.7",
+  "version": "0.0.8",
   "description": "TypeScript client library for Fitz distributed system",
   "keywords": [
     "distributed-systems",
@@ -84,7 +84,7 @@
     "bench:stable:tier4": "cross-env NODE_ENV=production node scripts/bench-artifacts.js stable --tiers tier4",
     "bench:compare": "node scripts/bench-artifacts.js compare",
     "lint": "vp lint . --deny-warnings",
-    "fmt": "vp fmt .",
+    "fmt": "vp fmt",
     "fmt:check": "vp fmt --check",
     "prepare": "vp config"
   },
@@ -92,7 +92,7 @@
     "ws": "^8.21.0"
   },
   "devDependencies": {
-    "@types/node": "^26.1.0",
+    "@types/node": "^26.1.1",
     "@types/ws": "^8.18.1",
     "cross-env": "^10.1.0",
     "typescript": "^6.0.3",

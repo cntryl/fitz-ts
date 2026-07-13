@@ -25,10 +25,11 @@ export interface MultiplexerObservability {
 export interface PendingRequest {
   deferred: Deferred<Uint8Array>;
   deadline: number;
+  discardResponse: boolean;
   timeoutIndex: number;
   queueIndex: number;
   sentAt: number | undefined;
-  rejectRequest: (error: Error) => void;
+  rejectRequest: (error: Error, retainQueueSlot?: boolean) => void;
   onComplete?: () => void;
 }
 
@@ -166,6 +167,13 @@ export function createMultiplexer(observability: MultiplexerObservability = {}) 
     return created;
   };
 
+  const recordRequestFinished = (messageType: number): void => {
+    requestsInFlight--;
+    meter?.gauge?.("fitz.requests.in_flight", requestsInFlight, {
+      messageType,
+    });
+  };
+
   const growPendingQueue = (queueEntry: PendingQueue): void => {
     const newCapacity = Math.max(queueEntry.queue.length * 2, 16);
     const newQueue = Array.from({ length: newCapacity }) as Array<PendingRequest | undefined>;
@@ -246,6 +254,7 @@ export function createMultiplexer(observability: MultiplexerObservability = {}) 
       meter?.counter("fitz.request.timeout", 1);
       request.rejectRequest(
         new TimeoutError(`Request timeout after ${nowMs - (request.sentAt ?? nowMs)}ms`, undefined),
+        true,
       );
     }
 
@@ -355,16 +364,22 @@ export function createMultiplexer(observability: MultiplexerObservability = {}) 
     requestEntry = {
       deferred,
       deadline: nowMs + timeoutMs,
+      discardResponse: false,
       timeoutIndex: timeoutEntries.length,
       sentAt: nowMs,
       queueIndex: -1,
-      rejectRequest: (error: Error) => {
+      rejectRequest: (error: Error, retainQueueSlot = false) => {
         if (!finalize()) {
           return;
         }
 
         removeTimeoutEntry(requestEntry);
-        unregisterRequest(messageType, requestEntry);
+        if (retainQueueSlot) {
+          requestEntry.discardResponse = true;
+          recordRequestFinished(messageType);
+        } else {
+          unregisterRequest(messageType, requestEntry);
+        }
         meter?.counter("fitz.request.failed", 1, {
           ...attributes,
           error: error.name,
@@ -492,10 +507,7 @@ export function createMultiplexer(observability: MultiplexerObservability = {}) 
       delete pending[messageType];
     }
 
-    requestsInFlight--;
-    meter?.gauge?.("fitz.requests.in_flight", requestsInFlight, {
-      messageType,
-    });
+    recordRequestFinished(messageType);
   };
 
   const dispatch = (messageType: number, payload: Uint8Array): void => {
@@ -517,16 +529,20 @@ export function createMultiplexer(observability: MultiplexerObservability = {}) 
         delete pending[messageType];
       }
 
+      if (request.discardResponse) {
+        responsesIgnored++;
+        meter?.counter("fitz.response.ignored", 1, {
+          messageType,
+        });
+        return;
+      }
+
       request.deadline = -1;
-      requestsInFlight--;
+      recordRequestFinished(messageType);
       responsesTotal++;
       meter?.counter("fitz.response.received", 1, {
         messageType,
       });
-      meter?.gauge?.("fitz.requests.in_flight", requestsInFlight, {
-        messageType,
-      });
-
       request.deferred.resolve(payload);
       request.onComplete?.();
       return;
