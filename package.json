@@ -1,6 +1,6 @@
 {
   "name": "@cntryl/fitz",
-  "version": "0.0.8",
+  "version": "0.0.9",
   "description": "TypeScript client library for Fitz distributed system",
   "keywords": [
     "distributed-systems",
@@ -31,6 +31,7 @@
   "types": "./dist/types/index.node.d.ts",
   "exports": {
     ".": {
+      "types": "./dist/types/index.node.d.ts",
       "browser": {
         "types": "./dist/types/index.browser.d.ts",
         "import": "./dist/browser/index.browser.js",
