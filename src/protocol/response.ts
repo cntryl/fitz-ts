@@ -6,7 +6,7 @@
  * [u8 status][payload...]
  *
  * status=0: success, remaining payload follows
- * status=1: error, followed by [u32 len][error message]
+ * status=1: error, followed by [u32 code][u32 len][UTF-8 error message]
  */
 
 import { createBufferReader } from "../core/buffer";
@@ -16,6 +16,7 @@ export interface ParsedResponse {
   success: boolean;
   data: Uint8Array;
   error?: string;
+  errorCode?: number;
 }
 
 /**
@@ -40,16 +41,14 @@ export function parseStandardResponse(payload: Uint8Array): ParsedResponse {
   }
 
   if (status === 1) {
-    // Error - read error message
-    if (reader.isEOF()) {
-      return {
-        success: false,
-        data: new Uint8Array(0),
-        error: "Unknown error (no message)",
-      };
-    }
+    // Error codes are intentionally not validated here. A newer broker may
+    // allocate a code before this client knows its symbolic name.
+    const errorCode = reader.readU32BE();
     const errorMsg = reader.readString();
-    return { success: false, data: new Uint8Array(0), error: errorMsg };
+    if (!reader.isEOF()) {
+      throw new ProtocolError("Error response has trailing data", errorCode);
+    }
+    return { success: false, data: new Uint8Array(0), error: errorMsg, errorCode };
   }
 
   // Unknown status code
@@ -65,10 +64,15 @@ export function parseStandardResponse(payload: Uint8Array): ParsedResponse {
 export function assertSuccess(payload: Uint8Array, operation: string): Uint8Array {
   const result = parseStandardResponse(payload);
   if (!result.success) {
-    throw new ProtocolError(`${operation} failed: ${result.error || "Unknown error"}`, 1, {
-      operation,
-      error: result.error || "Unknown error",
-    });
+    throw new ProtocolError(
+      `${operation} failed: ${result.error || "Unknown error"}`,
+      result.errorCode,
+      {
+        operation,
+        error: result.error || "Unknown error",
+        errorCode: result.errorCode,
+      },
+    );
   }
   return result.data;
 }

@@ -73,13 +73,10 @@ export type ScheduleUnsubscribeResponse = Record<string, never>;
 /**
  * Schedule domain errors
  */
-export class ScheduleError extends Error {
-  public readonly code?: string;
-
-  constructor(message: string, code?: string) {
-    super(message);
+export class ScheduleError extends FitzError {
+  constructor(message: string, code = "REQUEST_FAILED", domainCode?: number) {
+    super(message, `SCHEDULE_${code}`, domainCode);
     this.name = "ScheduleError";
-    this.code = code;
     Object.setPrototypeOf(this, ScheduleError.prototype);
   }
 }
@@ -95,3 +92,4 @@ export enum ScheduleStatus {
   InvalidDelay = 4,
   InvalidTimestamp = 5,
 }
+import { FitzError } from "../../core/errors";

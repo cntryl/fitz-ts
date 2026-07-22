@@ -26,10 +26,11 @@ describe("response helpers", () => {
   it("throws ProtocolError with operation context for error responses", () => {
     const encoder = new TextEncoder();
     const message = encoder.encode("permission denied");
-    const payload = new Uint8Array(1 + 4 + message.length);
+    const payload = new Uint8Array(1 + 4 + 4 + message.length);
     payload[0] = 1;
-    new DataView(payload.buffer).setUint32(1, message.length, false);
-    payload.set(message, 5);
+    new DataView(payload.buffer).setUint32(1, 9876, false);
+    new DataView(payload.buffer).setUint32(5, message.length, false);
+    payload.set(message, 9);
 
     expect(() => assertSuccess(payload, "KV_GET")).toThrowError(ProtocolError);
     try {
@@ -39,7 +40,25 @@ describe("response helpers", () => {
       expect((error as ProtocolError).getContext()).toMatchObject({
         operation: "KV_GET",
         error: "permission denied",
+        errorCode: 9876,
       });
+      expect((error as ProtocolError).domainCode).toBe(9876);
     }
+  });
+
+  it("preserves unknown broker error codes and messages", () => {
+    const message = new TextEncoder().encode("future broker error");
+    const payload = new Uint8Array(9 + message.length);
+    payload[0] = 1;
+    new DataView(payload.buffer).setUint32(1, 4_000_000_000, false);
+    new DataView(payload.buffer).setUint32(5, message.length, false);
+    payload.set(message, 9);
+
+    expect(parseStandardResponse(payload)).toEqual({
+      success: false,
+      data: new Uint8Array(0),
+      error: "future broker error",
+      errorCode: 4_000_000_000,
+    });
   });
 });

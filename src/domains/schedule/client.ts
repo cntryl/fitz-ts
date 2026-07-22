@@ -287,6 +287,7 @@ export function createScheduleClient(connection: ScheduleConnectionPort) {
     throw new ScheduleError(
       `${operation} failed: ${result.error ?? "Unknown error"}`,
       mapErrorCode(result.error),
+      result.errorCode,
     );
   };
 
