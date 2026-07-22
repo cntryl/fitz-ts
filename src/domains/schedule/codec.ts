@@ -13,6 +13,7 @@ import {
 import {
   DecodedScheduleNotification,
   ScheduleEntry,
+  ScheduleDeliveryMode,
   ScheduleCreateResponse,
   ScheduleCancelResponse,
   ScheduleListResponse,
@@ -23,12 +24,20 @@ import {
 export const ScheduleCodec = {
   /**
    * Encode CREATE request
-   * Payload: [route: string][cron: string][payload: bytes]
+   * Payload: [route: string][cron: string][delivery_mode: u8][payload: bytes]
    */
-  encodeCreate(route: string, cronExpr: string, payload: Uint8Array): Uint8Array {
+  encodeCreate(
+    route: string,
+    cronExpr: string,
+    deliveryMode: ScheduleDeliveryMode,
+    payload: Uint8Array,
+  ): Uint8Array {
     const routeBytes = getRouteEncoding(route);
     const cronBytes = utf8Encoder.encode(cronExpr);
-    const buffer = new Uint8Array(routeBytes.length + 4 + cronBytes.length + 4 + payload.length);
+    const mode = encodeDeliveryMode(deliveryMode);
+    const buffer = new Uint8Array(
+      routeBytes.length + 4 + cronBytes.length + 1 + 4 + payload.length,
+    );
     let offset = 0;
 
     buffer.set(routeBytes, offset);
@@ -36,6 +45,7 @@ export const ScheduleCodec = {
     offset = writeU32BEAt(buffer, offset, cronBytes.length);
     buffer.set(cronBytes, offset);
     offset += cronBytes.length;
+    buffer[offset++] = mode;
     offset = writeU32BEAt(buffer, offset, payload.length);
     buffer.set(payload, offset);
     return buffer;
@@ -88,7 +98,7 @@ export const ScheduleCodec = {
 
   /**
    * Decode LIST response
-   * Success payload: [total_count: u64][has_entry: u8]...[route: string][cron: string][payload: bytes when has_entry=1]
+   * Success payload: [total_count: u64][has_entry: u8]...[route: string][cron: string][delivery_mode: u8][payload: bytes when has_entry=1]
    */
   decodeListResponse(data: Uint8Array): ScheduleListResponse {
     const reader = createBufferReader(data);
@@ -106,12 +116,14 @@ export const ScheduleCodec = {
 
       const route = reader.readString();
       const cron = reader.readString();
+      const deliveryMode = decodeDeliveryMode(reader.readU8());
       const payloadBytes = reader.readBytes(reader.readU32BE());
 
       entries.push({
         id: route, // Route as identity
         route,
         cron,
+        deliveryMode,
         payload: payloadBytes,
       });
     }
@@ -188,3 +200,15 @@ export const ScheduleCodec = {
     return { subId, payload: notificationPayload };
   },
 };
+
+function encodeDeliveryMode(deliveryMode: ScheduleDeliveryMode): number {
+  if (deliveryMode === "broadcast") return 0;
+  if (deliveryMode === "single") return 1;
+  throw new Error(`Invalid schedule delivery mode: ${String(deliveryMode)}`);
+}
+
+function decodeDeliveryMode(value: number): ScheduleDeliveryMode {
+  if (value === 0) return "broadcast";
+  if (value === 1) return "single";
+  throw new Error(`Invalid schedule delivery mode byte: ${value}`);
+}

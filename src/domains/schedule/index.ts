@@ -15,4 +15,4 @@ export type {
   ScheduleUnsubscribeResponse,
   ScheduleSubscription,
 } from "./types";
-export { ScheduleError } from "./types";
+export { ScheduleError } from "../../core/errors";

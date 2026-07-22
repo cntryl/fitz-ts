@@ -167,7 +167,7 @@ Notice and Schedule publish don't expect responses:
 
 ```typescript
 await notice.publish(route, body); // No response awaited
-await schedule.create(route, cronExpr, payload);
+await schedule.create(route, cronExpr, "broadcast", payload);
 ```
 
 ### 6. Notification Handlers

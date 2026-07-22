@@ -19,7 +19,7 @@ import { createNoticeClient } from "../../../src/domains/notice/client";
 import { createQueueClient } from "../../../src/domains/queue/client";
 import { createRpcClient } from "../../../src/domains/rpc/client";
 import { createScheduleClient } from "../../../src/domains/schedule/client";
-import { ScheduleError } from "../../../src/domains/schedule/types";
+import { ScheduleError } from "../../../src/core/errors";
 import { createStreamClient } from "../../../src/domains/stream/client";
 
 class FakeConnection {
@@ -266,9 +266,9 @@ describe("route validation", () => {
     const client = createScheduleClient(connection as unknown as Connection);
 
     await expectRouteValidationFailure(
-      client.create("queue://example/app/jobs/run", "0 0 * * *"),
+      client.create("queue://example/app/jobs/run", "0 0 * * *", "broadcast"),
       ScheduleError,
-      "INVALID_ROUTE",
+      "SCHEDULE_INVALID_ROUTE",
       "expected schedule://",
     );
     expect(connection.lastRequest).toBeNull();

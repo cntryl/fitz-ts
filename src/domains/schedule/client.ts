@@ -23,12 +23,13 @@ import { ScheduleCodec } from "./codec";
 import { createWakeGate } from "../../core/wake-gate";
 import {
   ScheduleEntry,
-  ScheduleError,
+  ScheduleDeliveryMode,
   ScheduleHandler,
   ScheduleNotification,
   ScheduleSubscription,
   createScheduleSubscription,
 } from "./types";
+import { ScheduleError } from "../../core/errors";
 import { isRouteShape } from "../_routes";
 import { restoreMapEntriesAtomically } from "../internal/restore";
 
@@ -76,13 +77,14 @@ export function createScheduleClient(connection: ScheduleConnectionPort) {
   const create = async (
     route: string,
     cronExpr: string,
+    deliveryMode: ScheduleDeliveryMode,
     payload: Uint8Array = new Uint8Array(),
   ): Promise<string> => {
     assertConcreteScheduleRoute(route);
 
     const response = await requestFrame(
       MSG_SCHEDULE_CREATE,
-      ScheduleCodec.encodeCreate(route, cronExpr, payload),
+      ScheduleCodec.encodeCreate(route, cronExpr, deliveryMode, payload),
     );
     const decoded = ScheduleCodec.decodeCreateResponse(assertSuccess(response, "CREATE"));
     return decoded.scheduleId ?? route;

@@ -66,7 +66,7 @@ describe("fitz-ts hotpath benchmarks", () => {
   });
 
   benchBatch("schedule create encode", SYNC_CODEC_BATCH_SIZE, () => {
-    return ScheduleCodec.encodeCreate(routes.schedule, hotpathScheduleCron, body);
+    return ScheduleCodec.encodeCreate(routes.schedule, hotpathScheduleCron, "broadcast", body);
   });
 
   benchBatch("stream append encode", SYNC_CODEC_BATCH_SIZE, () => {

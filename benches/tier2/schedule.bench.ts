@@ -7,7 +7,7 @@ const payload = payloads.schedule;
 
 describe("fitz-ts schedule benchmarks", () => {
   benchBatch("schedule create encode", SYNC_CODEC_BATCH_SIZE, () => {
-    return ScheduleCodec.encodeCreate(routes.schedule, scheduleCronAtFive, payload);
+    return ScheduleCodec.encodeCreate(routes.schedule, scheduleCronAtFive, "broadcast", payload);
   });
 
   benchBatch("schedule list encode", SYNC_CODEC_BATCH_SIZE, () => {

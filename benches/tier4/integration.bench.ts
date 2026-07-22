@@ -22,7 +22,12 @@ describe("fitz-ts integration benchmarks", () => {
     COMPOSITE_SYNC_BATCH_SIZE,
     () => {
       const queuePayload = QueueCodec.encodeEnqueue(routes.queue, body);
-      const schedulePayload = ScheduleCodec.encodeCreate(routes.schedule, scheduleCron, body);
+      const schedulePayload = ScheduleCodec.encodeCreate(
+        routes.schedule,
+        scheduleCron,
+        "broadcast",
+        body,
+      );
       const streamPayload = StreamCodec.encodeBegin(routes.stream, streamMetadata);
       FrameCodec.encodeFrame(502, queuePayload);
       FrameCodec.encodeFrame(503, schedulePayload);

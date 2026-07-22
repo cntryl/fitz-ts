@@ -11,8 +11,11 @@ export interface ScheduleEntry {
   id: string; // Route as identity
   route: string;
   cron: string;
+  deliveryMode: ScheduleDeliveryMode;
   payload: Uint8Array;
 }
+
+export type ScheduleDeliveryMode = "broadcast" | "single";
 
 /**
  * Notification is the payload delivered when a schedule fires (SCHEDULE_NOTIFY 705)
@@ -71,17 +74,6 @@ export interface ScheduleSubscribeResponse {
 export type ScheduleUnsubscribeResponse = Record<string, never>;
 
 /**
- * Schedule domain errors
- */
-export class ScheduleError extends FitzError {
-  constructor(message: string, code = "REQUEST_FAILED", domainCode?: number) {
-    super(message, code, domainCode);
-    this.name = "ScheduleError";
-    Object.setPrototypeOf(this, ScheduleError.prototype);
-  }
-}
-
-/**
  * Schedule operation status codes
  */
 export enum ScheduleStatus {
@@ -92,4 +84,3 @@ export enum ScheduleStatus {
   InvalidDelay = 4,
   InvalidTimestamp = 5,
 }
-import { FitzError } from "../../core/errors";

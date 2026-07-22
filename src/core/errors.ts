@@ -47,6 +47,7 @@ export const ErrScheduleTaskNotFound = 2;
 export const ErrScheduleInvalidCron = 3;
 export const ErrScheduleInvalidDelay = 4;
 export const ErrScheduleInvalidTimestamp = 5;
+export const ErrCodeScheduleInvalidDeliveryMode = 7008;
 
 const retryableErrorCodes = new Set([
   "KV_3",

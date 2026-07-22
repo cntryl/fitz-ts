@@ -14,7 +14,7 @@ describe("Schedule integration", () => {
       const id = await f
         .client()
         .schedule()
-        .create(f.uniqueRoute("schedule"), "*/5 * * * *", b("task-payload"));
+        .create(f.uniqueRoute("schedule"), "*/5 * * * *", "broadcast", b("task-payload"));
 
       expect(id.length).toBeGreaterThan(0);
     });
@@ -24,7 +24,10 @@ describe("Schedule integration", () => {
       await f.connectOrFail();
 
       await expect(
-        f.client().schedule().create(f.uniqueRoute("schedule"), "not a cron", b("payload")),
+        f
+          .client()
+          .schedule()
+          .create(f.uniqueRoute("schedule"), "not a cron", "broadcast", b("payload")),
       ).rejects.toBeTruthy();
     });
 
@@ -33,7 +36,7 @@ describe("Schedule integration", () => {
       await f.connectOrFail();
 
       const route = f.uniqueRoute("schedule");
-      await f.client().schedule().create(route, "0 9 * * 1", b("weekly"));
+      await f.client().schedule().create(route, "0 9 * * 1", "broadcast", b("weekly"));
       await expect(f.client().schedule().cancel(route)).resolves.toBeUndefined();
     });
 
@@ -43,8 +46,8 @@ describe("Schedule integration", () => {
 
       const route = f.uniqueRoute("schedule");
       const secondRoute = route.replace(/\/run$/, "/send");
-      await f.client().schedule().create(route, "0 9 * * 1", b("s1"));
-      await f.client().schedule().create(secondRoute, "0 12 * * *", b("s2"));
+      await f.client().schedule().create(route, "0 9 * * 1", "broadcast", b("s1"));
+      await f.client().schedule().create(secondRoute, "0 12 * * *", "broadcast", b("s2"));
 
       const [entries, totalCount] = await f.client().schedule().list(0n, 100n);
       expect(Array.isArray(entries)).toBe(true);

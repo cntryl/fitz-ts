@@ -65,7 +65,9 @@ describe("fitz-ts subsystem perf thresholds", () => {
     ).toBeLessThan(adjustedThreshold(thresholdsMs.streamAppendEncode));
 
     expect(
-      measureSync(100_000, () => ScheduleCodec.encodeCreate(scheduleRoute, scheduleCron, body)),
+      measureSync(100_000, () =>
+        ScheduleCodec.encodeCreate(scheduleRoute, scheduleCron, "broadcast", body),
+      ),
     ).toBeLessThan(adjustedThreshold(thresholdsMs.scheduleCreateEncode));
   });
 

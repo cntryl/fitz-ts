@@ -76,6 +76,7 @@ export {
   ErrScheduleInvalidCron,
   ErrScheduleInvalidDelay,
   ErrScheduleInvalidTimestamp,
+  ErrCodeScheduleInvalidDeliveryMode,
   FitzError,
   TransportError,
   ConnectionError,
@@ -176,6 +177,7 @@ export type {
 export { ScheduleClient } from "./domains/schedule/client";
 export type {
   ScheduleEntry,
+  ScheduleDeliveryMode,
   ScheduleNotification,
   ScheduleHandler,
   ScheduleSubscription,

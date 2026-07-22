@@ -4,7 +4,7 @@
 
 import { describe, it, expect } from "vite-plus/test";
 import { ScheduleCodec } from "../../../src/domains/schedule/codec";
-import { createBufferWriter } from "../../../src/core/buffer";
+import { createBufferReader, createBufferWriter } from "../../../src/core/buffer";
 import { testData } from "../helpers/test-utils";
 
 describe("ScheduleCodec", () => {
@@ -16,7 +16,7 @@ describe("ScheduleCodec", () => {
       const payload = testData('{"bucket": "s3://backups"}');
 
       // Act
-      const encoded = ScheduleCodec.encodeCreate(route, cronExpr, payload);
+      const encoded = ScheduleCodec.encodeCreate(route, cronExpr, "broadcast", payload);
 
       // Assert
       expect(encoded).toBeInstanceOf(Uint8Array);
@@ -28,11 +28,40 @@ describe("ScheduleCodec", () => {
       const encoded = ScheduleCodec.encodeCreate(
         "schedule://test/jobs/job/run",
         "*/5 * * * *",
+        "single",
         new Uint8Array(0),
       );
 
       // Assert
       expect(encoded).toBeInstanceOf(Uint8Array);
+    });
+
+    it.each([
+      ["broadcast", 0],
+      ["single", 1],
+    ] as const)("should_encode_%s_delivery_mode_as_%i", (mode, expected) => {
+      const encoded = ScheduleCodec.encodeCreate(
+        "schedule://test/jobs/job/run",
+        "* * * * *",
+        mode,
+        testData("body"),
+      );
+      const reader = createBufferReader(encoded);
+      reader.readString();
+      reader.readString();
+      expect(reader.readU8()).toBe(expected);
+      expect(reader.readBytes(reader.readU32BE())).toEqual(testData("body"));
+    });
+
+    it("should_reject_unknown_delivery_mode", () => {
+      expect(() =>
+        ScheduleCodec.encodeCreate(
+          "schedule://test/jobs/job/run",
+          "* * * * *",
+          "unknown" as never,
+          new Uint8Array(),
+        ),
+      ).toThrow("Invalid schedule delivery mode");
     });
   });
 
@@ -103,6 +132,7 @@ describe("ScheduleCodec", () => {
       writer.writeU8(1); // hasEntry = 1
       writer.writeString("schedule://acme/jobs/job1/run");
       writer.writeString("0 0 * * *");
+      writer.writeU8(1);
       writer.writeU32BE(testData("payload1").length);
       writer.writeBytes(testData("payload1"));
       // End marker
@@ -118,6 +148,7 @@ describe("ScheduleCodec", () => {
       expect(decoded.entries).toHaveLength(1);
       expect(decoded.entries[0].route).toBe("schedule://acme/jobs/job1/run");
       expect(decoded.entries[0].cron).toBe("0 0 * * *");
+      expect(decoded.entries[0].deliveryMode).toBe("single");
       expect(decoded.entries[0].payload).toEqual(testData("payload1"));
     });
 
@@ -134,6 +165,21 @@ describe("ScheduleCodec", () => {
       // Assert
       expect(decoded.entries).toHaveLength(0);
       expect(decoded.totalCount).toBe(0n);
+    });
+
+    it("should_reject_unknown_list_delivery_mode", () => {
+      const writer = createBufferWriter(128);
+      writer.writeU64BE(1n);
+      writer.writeU8(1);
+      writer.writeString("schedule://acme/jobs/job1/run");
+      writer.writeString("0 0 * * *");
+      writer.writeU8(2);
+      writer.writeU32BE(0);
+      writer.writeU8(0);
+
+      expect(() => ScheduleCodec.decodeListResponse(writer.getBuffer())).toThrow(
+        "Invalid schedule delivery mode byte: 2",
+      );
     });
   });
 
@@ -223,6 +269,7 @@ describe("ScheduleCodec", () => {
         const encoded = ScheduleCodec.encodeCreate(
           "schedule://test/jobs/job/run",
           cron,
+          "broadcast",
           new Uint8Array(0),
         );
         expect(encoded).toBeInstanceOf(Uint8Array);

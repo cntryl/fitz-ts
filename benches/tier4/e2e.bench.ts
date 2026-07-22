@@ -18,7 +18,10 @@ describe("fitz-ts integration benchmarks", () => {
       FrameCodec.encodeFrame(401, NoticeCodec.encodePublish(routes.notice, body)),
       FrameCodec.encodeFrame(102, KvCodec.encodeBegin(routes.kv, "ReadWrite", "Sync")),
       FrameCodec.encodeFrame(502, QueueCodec.encodeEnqueue(routes.queue, body)),
-      FrameCodec.encodeFrame(503, ScheduleCodec.encodeCreate(routes.schedule, scheduleCron, body)),
+      FrameCodec.encodeFrame(
+        503,
+        ScheduleCodec.encodeCreate(routes.schedule, scheduleCron, "broadcast", body),
+      ),
       FrameCodec.encodeFrame(504, StreamCodec.encodeBegin(routes.stream, streamMetadata)),
     ];
 
