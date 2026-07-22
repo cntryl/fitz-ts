@@ -75,7 +75,7 @@ export type ScheduleUnsubscribeResponse = Record<string, never>;
  */
 export class ScheduleError extends FitzError {
   constructor(message: string, code = "REQUEST_FAILED", domainCode?: number) {
-    super(message, `SCHEDULE_${code}`, domainCode);
+    super(message, code, domainCode);
     this.name = "ScheduleError";
     Object.setPrototypeOf(this, ScheduleError.prototype);
   }

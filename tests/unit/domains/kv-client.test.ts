@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import { createBufferReader, createBufferWriter } from "../../../src/core/buffer";
-import { ConnectionError } from "../../../src/core/errors";
+import { ConnectionError, KvError } from "../../../src/core/errors";
 import {
   MSG_KV_BEGIN,
   MSG_KV_COMMIT,
@@ -94,6 +94,19 @@ function encodeScanResponse(keys: Uint8Array[], hasMore: boolean): Uint8Array {
   return writer.getBuffer();
 }
 
+async function expectKvRouteFailure(action: Promise<unknown>): Promise<void> {
+  let caught: unknown;
+
+  try {
+    await action;
+  } catch (error) {
+    caught = error;
+  }
+
+  expect(caught).toBeInstanceOf(KvError);
+  expect(caught).toMatchObject({ code: "KV_INVALID_ROUTE" });
+}
+
 describe("KvClient", () => {
   it("encodes the explicitly requested Sync durability in BEGIN payload", async () => {
     const connection = new FakeKvConnection();
@@ -132,28 +145,33 @@ describe("KvClient", () => {
     expect(reader.readU8()).toBe(0);
   });
 
-  it("forwards wrong-scheme KV routes to the broker", async () => {
+  it("rejects wrong-scheme KV routes before sending", async () => {
     const connection = new FakeKvConnection();
     const client = createKvClient(connection);
 
-    await client.begin("queue://realm/area/resource", { durability: "Buffered" });
-    expect(connection.lastRequest).not.toBeNull();
+    await expectKvRouteFailure(
+      client.begin("queue://realm/area/resource", { durability: "Buffered" }),
+    );
+
+    expect(connection.lastRequest).toBeNull();
   });
 
-  it("forwards empty-segment KV routes to the broker", async () => {
+  it("rejects empty-segment KV routes before sending", async () => {
     const connection = new FakeKvConnection();
     const client = createKvClient(connection);
 
-    await client.begin("kv://realm//resource", { durability: "Buffered" });
-    expect(connection.lastRequest).not.toBeNull();
+    await expectKvRouteFailure(client.begin("kv://realm//resource", { durability: "Buffered" }));
+
+    expect(connection.lastRequest).toBeNull();
   });
 
-  it("forwards wildcard KV routes to the broker", async () => {
+  it("rejects wildcard KV routes before sending", async () => {
     const connection = new FakeKvConnection();
     const client = createKvClient(connection);
 
-    await client.begin("kv://realm/area/*", { durability: "Buffered" });
-    expect(connection.lastRequest).not.toBeNull();
+    await expectKvRouteFailure(client.begin("kv://realm/area/*", { durability: "Buffered" }));
+
+    expect(connection.lastRequest).toBeNull();
   });
 
   it("rejects BEGIN when durability is omitted", async () => {
