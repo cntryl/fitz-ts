@@ -9,7 +9,7 @@ import {
   writeU64BEAt,
   writeU64BENumberAt,
 } from "../../core/buffer";
-import { ProtocolError } from "../../core/errors";
+import { LeaseError, ProtocolError } from "../../core/errors";
 import { AcquireResponse, QueryResponse, SubscribeResponse, UnsubscribeResponse } from "./types";
 
 export const LeaseCodec = {
@@ -53,12 +53,24 @@ export const LeaseCodec = {
         status,
       });
     }
-    reader.readU8(); // responseType: 0=Acquired, 1=AlreadyHeld
+    const responseType = reader.readU8();
+    if (responseType === 2 || responseType === 3) {
+      throw new LeaseError(
+        responseType === 2 ? "Lease acquisition queued" : "Lease acquisition already queued",
+        responseType === 2 ? "QUEUED" : "ALREADY_QUEUED",
+      );
+    }
+    if (responseType !== 0 && responseType !== 1) {
+      throw new ProtocolError(`Unknown ACQUIRE response type ${responseType}`, undefined, {
+        operation: "LEASE_ACQUIRE",
+        responseType,
+      });
+    }
     const fencingToken = reader.readU64BE();
 
     // response_type: 0=Acquired, 1=AlreadyHeld
     // For now, treat both as success
-    return { token: fencingToken };
+    return { token: fencingToken, responseType };
   },
 
   /**
@@ -125,14 +137,14 @@ export const LeaseCodec = {
 
     if (hasHolder === 0) {
       // Free
-      reader.readU32BE(); // pendingWaiters
-      return { status, isHeld: false };
+      const pendingWaiters = reader.readU32BE();
+      return { status, isHeld: false, pendingWaiters };
     }
 
     // Held
     const owner = reader.readRoute();
     const ttlRemainingSecs = reader.readU64BE();
-    reader.readU32BE(); // pendingWaiters
+    const pendingWaiters = reader.readU32BE();
 
     // Note: token not returned in QUERY response
     return {
@@ -140,6 +152,7 @@ export const LeaseCodec = {
       isHeld: true,
       owner,
       ttlRemainingSecs,
+      pendingWaiters,
       expiresAt: BigInt(Math.floor(Date.now() / 1000)) + ttlRemainingSecs,
     };
   },

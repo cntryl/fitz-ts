@@ -243,6 +243,14 @@ CommonJS consumer fixtures before release.
 
 Broker-backed connection hardening coverage now includes automatic reconnect subscription replay and token-provider replay checks in `tests/integration/connection.test.ts`.
 
+## Managed leases
+
+`client.lease().withLease(route, ttlSecs, async signal => { ... })` acquires, renews, and
+releases a lease around a callback. Pass `{ waitForAvailability: true, signal }` to wait
+through typed contention and link caller cancellation. Callback code must stop promptly
+when `signal` aborts. Low-level `acquire`, `extend`, and `release` remain available; each
+successful extend replaces the fencing token, and an uncertain extend invalidates the handle.
+
 ## Canonical Docs
 
 `fitz-ts` follows the canonical Fitz client docs in the server repo:

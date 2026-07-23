@@ -54,6 +54,7 @@ export function createLease(
   let currentToken = token;
   let currentExpiry = expiresAt;
   let closed = false;
+  let operation = Promise.resolve();
   let unsubscribeDisconnect: () => void = () => undefined;
   unsubscribeDisconnect = connection.onDisconnect(() => {
     closed = true;
@@ -66,29 +67,45 @@ export function createLease(
     }
   };
 
-  const extend = async (ttlSecs: number, signal?: AbortSignal): Promise<bigint> => {
-    ensureOpen();
-    const requestPayload = LeaseCodec.encodeExtend(route, currentToken, ttlSecs);
-    const response = await connection.request(MSG_LEASE_RENEW, requestPayload, signal);
-    const data = assertSuccess(response, "EXTEND");
-
-    if (data && data.length >= 8) {
-      const reader = createBufferReader(data);
-      currentToken = reader.readU64BE();
-    }
-
-    currentExpiry = BigInt(Math.floor(Date.now() / 1000)) + BigInt(ttlSecs);
-    return currentExpiry;
+  const serialize = <T>(fn: () => Promise<T>): Promise<T> => {
+    const result = operation.then(fn, fn);
+    operation = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
   };
 
-  const release = async (signal?: AbortSignal): Promise<void> => {
-    ensureOpen();
-    const payload = LeaseCodec.encodeRelease(route, currentToken);
-    const response = await connection.request(MSG_LEASE_RELEASE, payload, signal);
-    assertSuccess(response, "RELEASE");
-    closed = true;
-    unsubscribeDisconnect();
-  };
+  const extend = (ttlSecs: number, signal?: AbortSignal): Promise<bigint> =>
+    serialize(async () => {
+      ensureOpen();
+      try {
+        const requestPayload = LeaseCodec.encodeExtend(route, currentToken, ttlSecs);
+        const response = await connection.request(MSG_LEASE_RENEW, requestPayload, signal);
+        const data = assertSuccess(response, "EXTEND");
+        if (!data || data.length < 8) {
+          throw new LeaseError("EXTEND response missing fencing token", "EXTEND_INVALID_RESPONSE");
+        }
+        const reader = createBufferReader(data);
+        currentToken = reader.readU64BE();
+        currentExpiry = BigInt(Math.floor(Date.now() / 1000)) + BigInt(ttlSecs);
+        return currentExpiry;
+      } catch (error) {
+        closed = true;
+        unsubscribeDisconnect();
+        throw error;
+      }
+    });
+
+  const release = (signal?: AbortSignal): Promise<void> =>
+    serialize(async () => {
+      ensureOpen();
+      closed = true;
+      unsubscribeDisconnect();
+      const payload = LeaseCodec.encodeRelease(route, currentToken);
+      const response = await connection.request(MSG_LEASE_RELEASE, payload, signal);
+      assertSuccess(response, "RELEASE");
+    });
 
   const getExpiry = (): bigint => currentExpiry;
 
@@ -104,6 +121,7 @@ export function createLease(
  */
 export interface AcquireResponse {
   token: bigint;
+  responseType: 0 | 1;
   expiresAt?: bigint;
 }
 
@@ -115,6 +133,7 @@ export interface LeaseInfo {
   owner?: string;
   token?: bigint;
   ttlRemainingSecs?: bigint;
+  pendingWaiters: number;
   expiresAt?: bigint;
 }
 
@@ -127,6 +146,7 @@ export interface QueryResponse {
   owner?: string;
   token?: bigint;
   ttlRemainingSecs?: bigint;
+  pendingWaiters?: number;
   expiresAt?: bigint;
 }
 
@@ -153,6 +173,22 @@ export enum LeaseStatus {
   LeaseHeld = 1,
   NotFound = 2,
   InvalidToken = 3,
+}
+
+export interface WithLeaseOptions {
+  waitForAvailability?: boolean;
+  signal?: AbortSignal;
+}
+
+export class LeaseLifecycleError extends Error {
+  readonly causes: readonly unknown[];
+
+  constructor(message: string, causes: readonly unknown[]) {
+    super(message);
+    this.name = "LeaseLifecycleError";
+    this.causes = causes;
+    Object.setPrototypeOf(this, LeaseLifecycleError.prototype);
+  }
 }
 
 // Import needed types for Lease class methods

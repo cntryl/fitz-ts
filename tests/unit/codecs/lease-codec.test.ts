@@ -54,6 +54,20 @@ describe("LeaseCodec", () => {
         ProtocolError,
       );
     });
+
+    it.each([
+      [2, "LEASE_QUEUED"],
+      [3, "LEASE_ALREADY_QUEUED"],
+    ])("returns typed contention for response type %i", (responseType, code) => {
+      const writer = createBufferWriter(16);
+      writer.writeU8(0);
+      writer.writeU8(responseType);
+      writer.writeU64BE(0n);
+
+      expect(() => LeaseCodec.decodeAcquireResponse(writer.getBuffer())).toThrowError(
+        expect.objectContaining({ code }),
+      );
+    });
   });
 
   describe("RENEW encoding", () => {

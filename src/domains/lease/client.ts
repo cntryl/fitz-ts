@@ -29,6 +29,8 @@ import {
   Lease,
   LeaseInfo,
   LeaseSubscription,
+  LeaseLifecycleError,
+  WithLeaseOptions,
   createLease,
   createLeaseSubscription,
 } from "./types";
@@ -70,6 +72,7 @@ export function createLeaseClient(connection: LeaseConnectionPort) {
 
   const acquire = async (route: string, ttlSecs: number): Promise<Lease> => {
     assertExactLeaseRoute(route);
+    assertLeaseTtl(ttlSecs);
     const payload = LeaseCodec.encodeAcquire(route, ttlSecs);
     const response = await requestFrame(MSG_LEASE_ACQUIRE, payload);
     const decoded = LeaseCodec.decodeAcquireResponse(response);
@@ -80,6 +83,109 @@ export function createLeaseClient(connection: LeaseConnectionPort) {
 
     const expiresAt = decoded.expiresAt ?? BigInt(Math.floor(Date.now() / 1000)) + BigInt(ttlSecs);
     return createLease(decoded.token, expiresAt, route, connection);
+  };
+
+  const withLease = async <T>(
+    route: string,
+    ttlSecs: number,
+    callback: (signal: AbortSignal) => T | Promise<T>,
+    options: WithLeaseOptions = {},
+  ): Promise<T> => {
+    assertExactLeaseRoute(route);
+    assertLeaseTtl(ttlSecs);
+    if (options.signal?.aborted) {
+      throw options.signal.reason ?? new Error("Lease execution canceled");
+    }
+
+    let lease: Lease;
+    let delayMs = 50;
+    for (;;) {
+      try {
+        lease = await acquire(route, ttlSecs);
+        break;
+      } catch (error) {
+        if (!options.waitForAvailability || !isContention(error)) {
+          throw error;
+        }
+        await abortableDelay(Math.random() * delayMs, options.signal);
+        delayMs = Math.min(delayMs * 2, 1000);
+      }
+    }
+
+    const lifecycle = new AbortController();
+    const stopRenewal = new AbortController();
+    const onParentAbort = (): void => lifecycle.abort(options.signal?.reason);
+    options.signal?.addEventListener("abort", onParentAbort, { once: true });
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let leaseLoss: unknown;
+    let callbackFailure: unknown;
+    let callbackValue!: T;
+    let callbackDone = false;
+
+    const renew = async (): Promise<void> => {
+      while (!callbackDone && leaseLoss === undefined) {
+        await abortableDelay((ttlSecs * 1000) / 3, stopRenewal.signal).catch(() => undefined);
+        if (callbackDone || stopRenewal.signal.aborted) {
+          return;
+        }
+        try {
+          await lease.extend(ttlSecs);
+        } catch (error) {
+          leaseLoss = error;
+          lifecycle.abort(
+            new LeaseError("Lease ownership was lost", "LOST", undefined, {
+              cause: error,
+            }),
+          );
+        }
+      }
+    };
+    const renewal = renew();
+    try {
+      try {
+        callbackValue = await callback(lifecycle.signal);
+      } catch (error) {
+        callbackFailure = error;
+      }
+      callbackDone = true;
+      stopRenewal.abort();
+      lifecycle.abort();
+      await renewal;
+
+      let releaseFailure: unknown;
+      if (leaseLoss === undefined) {
+        const cleanup = new AbortController();
+        timer = setTimeout(() => cleanup.abort(), 5000);
+        try {
+          await lease.release(cleanup.signal);
+        } catch (error) {
+          releaseFailure = error;
+        } finally {
+          clearTimeout(timer);
+        }
+      }
+
+      const failures = [leaseLoss, callbackFailure, releaseFailure].filter(
+        (failure) => failure !== undefined && !isManagedCancellation(failure, lifecycle.signal),
+      );
+      if (failures.length > 1) {
+        throw new LeaseLifecycleError("Multiple lease lifecycle operations failed", failures);
+      }
+      if (failures.length === 1) {
+        throw failures[0];
+      }
+      if (options.signal?.aborted) {
+        throw options.signal.reason;
+      }
+      return callbackValue;
+    } finally {
+      callbackDone = true;
+      stopRenewal.abort();
+      lifecycle.abort();
+      if (timer !== undefined) clearTimeout(timer);
+      options.signal?.removeEventListener("abort", onParentAbort);
+      await renewal.catch(() => undefined);
+    }
   };
 
   const query = async (route: string): Promise<LeaseInfo> => {
@@ -102,6 +208,7 @@ export function createLeaseClient(connection: LeaseConnectionPort) {
           owner: decoded.owner,
           token: decoded.token,
           ttlRemainingSecs: decoded.ttlRemainingSecs,
+          pendingWaiters: decoded.pendingWaiters ?? 0,
           expiresAt: decoded.expiresAt,
         };
       },
@@ -194,6 +301,7 @@ export function createLeaseClient(connection: LeaseConnectionPort) {
 
   return {
     acquire,
+    withLease,
     query,
     subscribe,
   };
@@ -210,4 +318,41 @@ function assertExactLeaseRoute(route: string): void {
       "INVALID_ROUTE",
     );
   }
+}
+
+function assertLeaseTtl(ttlSecs: number): void {
+  if (!Number.isSafeInteger(ttlSecs) || ttlSecs <= 0 || ttlSecs * 1000 > 2_147_483_647) {
+    throw new LeaseError("ttlSecs must be a positive, schedulable safe integer", "INVALID_TTL");
+  }
+}
+
+function isContention(error: unknown): boolean {
+  return (
+    error instanceof LeaseError &&
+    ["LEASE_HELD", "LEASE_QUEUED", "LEASE_ALREADY_QUEUED"].includes(error.code)
+  );
+}
+
+function isManagedCancellation(error: unknown, signal: AbortSignal): boolean {
+  return (
+    signal.aborted &&
+    (error === signal.reason || (error instanceof Error && error.name === "AbortError"))
+  );
+}
+
+function abortableDelay(ms: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) return Promise.reject(signal.reason);
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(done, ms);
+    function done(): void {
+      signal?.removeEventListener("abort", canceled);
+      resolve();
+    }
+    function canceled(): void {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", canceled);
+      reject(signal?.reason);
+    }
+    signal?.addEventListener("abort", canceled, { once: true });
+  });
 }

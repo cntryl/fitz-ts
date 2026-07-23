@@ -190,6 +190,8 @@ describe("public surface", () => {
       "ChangeNotification",
       "LeaseSubscription",
       "LeaseStatus",
+      "LeaseLifecycleError",
+      "WithLeaseOptions",
       "NoticeClient",
       "NoticeMsg",
       "NoticeHandler",

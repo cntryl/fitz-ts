@@ -24,6 +24,24 @@ class DisconnectableConnection {
   }
 }
 
+class LeaseConnection extends DisconnectableConnection {
+  readonly tokens: bigint[] = [];
+  private nextToken = 2n;
+
+  override async request(_type?: number, payload?: Uint8Array): Promise<Uint8Array> {
+    if (payload) {
+      this.tokens.push(
+        new DataView(payload.buffer, payload.byteOffset + payload.byteLength - 16, 8).getBigUint64(
+          0,
+        ),
+      );
+    }
+    const result = new Uint8Array(9);
+    new DataView(result.buffer).setBigUint64(1, this.nextToken++);
+    return result;
+  }
+}
+
 describe("stale handles", () => {
   it("fails queue item operations after disconnect", async () => {
     const connection = new DisconnectableConnection();
@@ -57,5 +75,23 @@ describe("stale handles", () => {
     await expect(lease.release()).rejects.toMatchObject({
       code: "LEASE_CLOSED",
     });
+  });
+
+  it("serializes lease extensions and rotates the fencing token", async () => {
+    const connection = new LeaseConnection();
+    const lease = createLease(1n, 2n, "lease://realm/area/resource", connection);
+
+    await Promise.all([lease.extend(30), lease.extend(30)]);
+
+    expect(connection.tokens).toEqual([1n, 2n]);
+  });
+
+  it("closes a lease before release transport completes", async () => {
+    const connection = new LeaseConnection();
+    const lease = createLease(1n, 2n, "lease://realm/area/resource", connection);
+
+    await lease.release();
+
+    await expect(lease.release()).rejects.toMatchObject({ code: "LEASE_CLOSED" });
   });
 });
