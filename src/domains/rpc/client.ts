@@ -330,11 +330,7 @@ export function createRpcClient(connection: RpcConnectionPort) {
   connection.onDisconnect(() => {
     const pending = Array.from(pendingRpcs.values());
     for (const entry of pending) {
-      if (typeof (entry.iterator as any).fail === "function") {
-        (entry.iterator as any).fail(
-          new ConnectionError("Connection closed while RPC response was pending"),
-        );
-      }
+      entry.iterator.fail(new ConnectionError("Connection closed while RPC response was pending"));
     }
     pendingRpcs.clear();
   });

@@ -1,6 +1,6 @@
 /// <reference types="node" />
 
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 import { describe, expect, expectTypeOf, it } from "vite-plus/test";
@@ -66,6 +66,10 @@ function readSource(relativePath: string): string {
 }
 
 describe("public surface", () => {
+  it("keeps one-off automation out of a top-level scripts directory", () => {
+    expect(existsSync(fileURLToPath(new URL("../../scripts", import.meta.url)))).toBe(false);
+  });
+
   it("keeps the root export inventory stable", () => {
     const source = readSource("../../src/index.ts");
     expect(collectExportNames(source)).toEqual([

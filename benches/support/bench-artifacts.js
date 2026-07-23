@@ -16,7 +16,7 @@ const schemaVersion = 1;
 const generatedBy = "fitz-ts bench-artifacts";
 
 const __filename = fileURLToPath(import.meta.url);
-const repoRoot = path.resolve(path.dirname(__filename), "..");
+const repoRoot = path.resolve(path.dirname(__filename), "../..");
 
 function normalizePath(value) {
   return value.replaceAll("\\", "/");

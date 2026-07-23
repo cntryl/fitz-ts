@@ -12,7 +12,7 @@ import {
   type BenchmarkSummary,
   type BenchmarkAttemptRecord,
   type FlattenedBenchmark,
-} from "../../../scripts/bench-artifacts.js";
+} from "../../../benches/support/bench-artifacts.js";
 
 function entry(id: string, run: number, hz: number, rme = 1): FlattenedBenchmark {
   return {
