@@ -95,7 +95,7 @@ const looksLikeStreamResponsePayload = (payload: Uint8Array): boolean => {
     return false;
   }
 
-  const flags = payload[offset];
+  const flags = payload[offset]!;
   if (flags & ~RPC_RESPONSE_FLAGS_SUPPORTED) {
     return false;
   }
@@ -262,7 +262,7 @@ export const RpcCodec = {
       (BigInt(readU32BEAt(payload, offset)) << 32n) | BigInt(readU32BEAt(payload, offset + 4));
     offset += 8;
 
-    const flags = payload[offset];
+    const flags = payload[offset]!;
     offset += 1;
     if (flags & ~RPC_RESPONSE_FLAGS_SUPPORTED) {
       throw new ProtocolError(
@@ -317,7 +317,7 @@ export const RpcCodec = {
       (BigInt(readU32BEAt(payload, offset)) << 32n) | BigInt(readU32BEAt(payload, offset + 4));
     offset += 8;
 
-    const flags = payload[offset];
+    const flags = payload[offset]!;
     offset += 1;
     if (flags & ~RPC_RESPONSE_FLAGS_SUPPORTED) {
       throw new ProtocolError(

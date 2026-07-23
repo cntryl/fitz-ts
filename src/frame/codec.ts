@@ -56,14 +56,14 @@ const encodeFrame = (messageType: number, payload: Uint8Array): Uint8Array => {
 const decodeFrame = (buffer: Uint8Array): Frame => {
   let offset = 0;
 
-  const firstByte = buffer[offset++];
+  const firstByte = buffer[offset++]!;
   let messageType: number;
 
   if (firstByte === 0xff) {
     if (offset + 2 > buffer.length) {
       throw new CodecError("Frame incomplete: invalid message type header");
     }
-    messageType = (buffer[offset] << 8) | buffer[offset + 1];
+    messageType = (buffer[offset]! << 8) | buffer[offset + 1]!;
     offset += 2;
   } else {
     messageType = firstByte;
@@ -73,7 +73,7 @@ const decodeFrame = (buffer: Uint8Array): Frame => {
     throw new CodecError("Frame incomplete: missing length header");
   }
 
-  const length = (buffer[offset] << 8) | buffer[offset + 1];
+  const length = (buffer[offset]! << 8) | buffer[offset + 1]!;
   offset += 2;
 
   const remaining = buffer.length - offset;
@@ -162,14 +162,14 @@ export function createFrameParser() {
 
     while (cursor < data.length) {
       const frameStart = cursor;
-      const firstByte = data[cursor++];
+      const firstByte = data[cursor++]!;
       let parsedMessageType: number;
 
       if (firstByte === 0xff) {
         if (cursor + 2 > data.length) {
           return { frames, consumed: frameStart };
         }
-        parsedMessageType = (data[cursor] << 8) | data[cursor + 1];
+        parsedMessageType = (data[cursor]! << 8) | data[cursor + 1]!;
         cursor += 2;
       } else {
         parsedMessageType = firstByte;
@@ -179,7 +179,7 @@ export function createFrameParser() {
         return { frames, consumed: frameStart };
       }
 
-      const parsedPayloadLength = (data[cursor] << 8) | data[cursor + 1];
+      const parsedPayloadLength = (data[cursor]! << 8) | data[cursor + 1]!;
       cursor += 2;
       if (cursor + parsedPayloadLength > data.length) {
         return { frames, consumed: frameStart };
@@ -216,10 +216,10 @@ export function createFrameParser() {
       if (state === 0) {
         if (offset >= end) break;
 
-        const firstByte = buffer[offset];
+        const firstByte = buffer[offset]!;
         if (firstByte === 0xff) {
           if (offset + 3 > end) break;
-          messageType = (buffer[offset + 1] << 8) | buffer[offset + 2];
+          messageType = (buffer[offset + 1]! << 8) | buffer[offset + 2]!;
           offset += 3;
         } else {
           messageType = firstByte;
@@ -231,7 +231,7 @@ export function createFrameParser() {
 
       if (state === 1) {
         if (offset + 2 > end) break;
-        payloadLength = (buffer[offset] << 8) | buffer[offset + 1];
+        payloadLength = (buffer[offset]! << 8) | buffer[offset + 1]!;
         offset += 2;
         state = 2;
       }

@@ -62,7 +62,7 @@ export function createSliceIterator<T>(items: T[]): Iterator<T> {
     if (index < 0 || index >= items.length) {
       throw new Error("SliceIterator.value() called in invalid state");
     }
-    return items[index];
+    return items[index]!;
   };
 
   const err = (): Error | null => null;

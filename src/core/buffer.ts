@@ -48,13 +48,7 @@ export function writeU64BENumberAt(buffer: Uint8Array, offset: number, value: nu
 }
 
 export function readU32BEAt(buffer: Uint8Array, offset: number): number {
-  return (
-    ((buffer[offset] << 24) |
-      (buffer[offset + 1] << 16) |
-      (buffer[offset + 2] << 8) |
-      buffer[offset + 3]) >>>
-    0
-  );
+  return new DataView(buffer.buffer, buffer.byteOffset, buffer.byteLength).getUint32(offset);
 }
 
 export function readU128BEAt(buffer: Uint8Array, offset: number): bigint {
@@ -327,14 +321,14 @@ export function createBufferReader(buffer: Uint8Array) {
     if (offset >= internalBuffer.length) {
       throw new Error("Buffer overflow: cannot read U8");
     }
-    return internalBuffer[offset++];
+    return internalBuffer[offset++]!;
   };
 
   const readU16BE = (): number => {
     if (offset + 2 > internalBuffer.length) {
       throw new Error("Buffer overflow: cannot read U16BE");
     }
-    const value = (internalBuffer[offset] << 8) | internalBuffer[offset + 1];
+    const value = (internalBuffer[offset]! << 8) | internalBuffer[offset + 1]!;
     offset += 2;
     return value;
   };
@@ -353,17 +347,17 @@ export function createBufferReader(buffer: Uint8Array) {
       throw new Error("Buffer overflow: cannot read U64BE");
     }
     const high =
-      ((BigInt(internalBuffer[offset]) << 24n) |
-        (BigInt(internalBuffer[offset + 1]) << 16n) |
-        (BigInt(internalBuffer[offset + 2]) << 8n) |
-        BigInt(internalBuffer[offset + 3])) &
+      ((BigInt(internalBuffer[offset]!) << 24n) |
+        (BigInt(internalBuffer[offset + 1]!) << 16n) |
+        (BigInt(internalBuffer[offset + 2]!) << 8n) |
+        BigInt(internalBuffer[offset + 3]!)) &
       0xffffffffn;
 
     const low =
-      ((BigInt(internalBuffer[offset + 4]) << 24n) |
-        (BigInt(internalBuffer[offset + 5]) << 16n) |
-        (BigInt(internalBuffer[offset + 6]) << 8n) |
-        BigInt(internalBuffer[offset + 7])) &
+      ((BigInt(internalBuffer[offset + 4]!) << 24n) |
+        (BigInt(internalBuffer[offset + 5]!) << 16n) |
+        (BigInt(internalBuffer[offset + 6]!) << 8n) |
+        BigInt(internalBuffer[offset + 7]!)) &
       0xffffffffn;
 
     offset += 8;
@@ -413,7 +407,7 @@ export function createBufferReader(buffer: Uint8Array) {
     if (offset >= internalBuffer.length) {
       throw new Error("Buffer overflow: cannot peek U8");
     }
-    return internalBuffer[offset];
+    return internalBuffer[offset]!;
   };
 
   const readOptionalU64 = (): bigint | undefined => {

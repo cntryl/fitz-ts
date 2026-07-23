@@ -72,8 +72,8 @@ export function createMultiplexer(observability: MultiplexerObservability = {}) 
   let nextTimeoutDeadline = Infinity;
 
   const swapTimeoutEntries = (leftIndex: number, rightIndex: number): void => {
-    const left = timeoutEntries[leftIndex];
-    const right = timeoutEntries[rightIndex];
+    const left = timeoutEntries[leftIndex]!;
+    const right = timeoutEntries[rightIndex]!;
     timeoutEntries[leftIndex] = right;
     timeoutEntries[rightIndex] = left;
     left.timeoutIndex = rightIndex;
@@ -83,7 +83,7 @@ export function createMultiplexer(observability: MultiplexerObservability = {}) 
   const heapifyUp = (index: number): void => {
     while (index > 0) {
       const parentIndex = (index - 1) >> 1;
-      if (timeoutEntries[index].deadline >= timeoutEntries[parentIndex].deadline) {
+      if (timeoutEntries[index]!.deadline >= timeoutEntries[parentIndex]!.deadline) {
         return;
       }
       swapTimeoutEntries(index, parentIndex);
@@ -100,13 +100,13 @@ export function createMultiplexer(observability: MultiplexerObservability = {}) 
 
       if (
         leftIndex < length &&
-        timeoutEntries[leftIndex].deadline < timeoutEntries[smallest].deadline
+        timeoutEntries[leftIndex]!.deadline < timeoutEntries[smallest]!.deadline
       ) {
         smallest = leftIndex;
       }
       if (
         rightIndex < length &&
-        timeoutEntries[rightIndex].deadline < timeoutEntries[smallest].deadline
+        timeoutEntries[rightIndex]!.deadline < timeoutEntries[smallest]!.deadline
       ) {
         smallest = rightIndex;
       }
@@ -119,7 +119,7 @@ export function createMultiplexer(observability: MultiplexerObservability = {}) 
   };
 
   const getNextTimeoutDeadline = (): number => {
-    return timeoutEntries.length === 0 ? Infinity : timeoutEntries[0].deadline;
+    return timeoutEntries.length === 0 ? Infinity : timeoutEntries[0]!.deadline;
   };
 
   const removeTimeoutEntry = (request: PendingRequest): void => {
@@ -247,8 +247,8 @@ export function createMultiplexer(observability: MultiplexerObservability = {}) 
 
     const nowMs = Date.now();
 
-    while (timeoutEntries.length > 0 && timeoutEntries[0].deadline <= nowMs) {
-      const request = timeoutEntries[0];
+    while (timeoutEntries.length > 0 && timeoutEntries[0]!.deadline <= nowMs) {
+      const request = timeoutEntries[0]!;
       removeTimeoutEntry(request);
       request.deadline = -1;
       meter?.counter("fitz.request.timeout", 1);
