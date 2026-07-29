@@ -16,7 +16,7 @@
 # - Anon TCP:     tcp://127.0.0.1:${FITZ_ANON_HOST_TCP_PORT:-4191}
 
 x-broker-common: &broker-common
-  image: ghcr.io/cntryl/fitz:main
+  image: ghcr.io/cntryl/fitz:latest
   restart: unless-stopped
   stop_grace_period: 15s
   healthcheck:
@@ -37,6 +37,7 @@ services:
     environment:
       <<: *broker-common-env
       FITZ_AUTH_REQUIRED: "true"
+      FITZ_ASSUME_LOCAL_LOOPBACK_EDGE: "true"
       FITZ_ADMIN_AUTH_MODE: "open"
       FITZ_HTTP_PORT: "${FITZ_AUTH_HTTP_PORT:-4090}"
       FITZ_TCP_PORT: "${FITZ_AUTH_TCP_PORT:-4091}"
@@ -46,7 +47,6 @@ services:
       FITZ_WS_ALLOWED_ORIGINS: "http://localhost:${FITZ_AUTH_HOST_HTTP_PORT:-4090},http://127.0.0.1:${FITZ_AUTH_HOST_HTTP_PORT:-4090}"
     volumes:
       - fitz_auth_data:/data
-
   fitz-anon:
     <<: *broker-common
     container_name: fitz-anon

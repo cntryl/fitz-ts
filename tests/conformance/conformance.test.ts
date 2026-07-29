@@ -1,5 +1,5 @@
 /**
- * Fitz cross-language conformance harness â€” TypeScript / fitz-ts
+ * Fitz cross-language conformance harness — TypeScript / fitz-ts
  *
  * Implements the shared CS-001..CS-017 scenarios for:
  *   fitz/docs/clients/cross-language-conformance-suite.yaml
@@ -185,12 +185,12 @@ function loadSharedSuiteScenarioIds(): string[] {
 // Scenarios
 // ---------------------------------------------------------------------------
 
-describe(`Fitz conformance â€” fitz-ts [transport=${TRANSPORT}, auth=${AUTH_MODE}]`, () => {
+describe(`Fitz conformance — fitz-ts [transport=${TRANSPORT}, auth=${AUTH_MODE}]`, () => {
   it("implements every shared conformance scenario id", () => {
     expect(IMPLEMENTED_SCENARIO_IDS).toEqual(loadSharedSuiteScenarioIds());
   });
 
-  // CS-001 â”€ connect success
+  // CS-001 ─ connect success
   it("CS-001 connect success", async () => {
     const result = await runScenario("CS-001", "connect success", "P0", async () => {
       const evidence: string[] = [];
@@ -225,7 +225,7 @@ describe(`Fitz conformance â€” fitz-ts [transport=${TRANSPORT}, auth=${AUTH
     expect(result.verdict).toBe("pass");
   });
 
-  // CS-002 â”€ auth failure
+  // CS-002 ─ auth failure
   it("CS-002 auth failure", async () => {
     const result = await runScenario("CS-002", "auth failure", "P0", async () => {
       const evidence: string[] = [];
@@ -254,10 +254,10 @@ describe(`Fitz conformance â€” fitz-ts [transport=${TRANSPORT}, auth=${AUTH
             await client.kv().begin(uniqueRoute("kv"), {
               durability: "Sync",
             });
-            evidence.push("domain request unexpectedly succeeded â€” verdict partial");
+            evidence.push("domain request unexpectedly succeeded — verdict partial");
             return { verdict: "partial", evidence };
           } catch {
-            evidence.push("domain request failed after silent auth close â€” partial pass");
+            evidence.push("domain request failed after silent auth close — partial pass");
             return { verdict: "partial", evidence };
           }
         } finally {
@@ -288,7 +288,7 @@ describe(`Fitz conformance â€” fitz-ts [transport=${TRANSPORT}, auth=${AUTH
           }
           return { verdict: "pass", evidence };
         }
-        // Didn't throw â€” check that client is not usable
+        // Didn't throw — check that client is not usable
         const afterConnected = client.isConnected();
         evidence.push(`isConnected() after invalid auth = ${afterConnected}`);
         evidence.push("connect did not throw for invalid JWT");
@@ -299,11 +299,10 @@ describe(`Fitz conformance â€” fitz-ts [transport=${TRANSPORT}, auth=${AUTH
     });
 
     collector.record(result);
-    // Accept pass or partial (TCP silent-close model is intentional by spec)
-    expect(["pass", "partial"]).toContain(result.verdict);
+    expect(result.verdict).toBe("pass");
   });
 
-  // CS-003 â”€ request success (kv read-after-write)
+  // CS-003 ─ request success (kv read-after-write)
   it("CS-003 request success", async () => {
     const result = await runScenario("CS-003", "request success", "P0", async () => {
       const evidence: string[] = [];
@@ -333,7 +332,7 @@ describe(`Fitz conformance â€” fitz-ts [transport=${TRANSPORT}, auth=${AUTH
     expect(result.verdict).toBe("pass");
   });
 
-  // CS-004 â”€ unknown route (rpc with no worker)
+  // CS-004 ─ unknown route (rpc with no worker)
   it("CS-004 unknown route", async () => {
     const result = await runScenario("CS-004", "unknown route", "P0", async () => {
       const evidence: string[] = [];
@@ -359,7 +358,7 @@ describe(`Fitz conformance â€” fitz-ts [transport=${TRANSPORT}, auth=${AUTH
     expect(result.verdict).toBe("pass");
   });
 
-  // CS-005 â”€ invalid payload (duplicate insert â†’ domain error, client stays healthy)
+  // CS-005 ─ invalid payload (duplicate insert → domain error, client stays healthy)
   it("CS-005 invalid payload", async () => {
     const result = await runScenario("CS-005", "invalid payload", "P0", async () => {
       const evidence: string[] = [];
@@ -400,7 +399,7 @@ describe(`Fitz conformance â€” fitz-ts [transport=${TRANSPORT}, auth=${AUTH
     expect(result.verdict).toBe("pass");
   });
 
-  // CS-006 â”€ server error mapping
+  // CS-006 ─ server error mapping
   it("CS-006 server error mapping", async () => {
     const result = await runScenario("CS-006", "server error mapping", "P0", async () => {
       const evidence: string[] = [];
@@ -408,7 +407,7 @@ describe(`Fitz conformance â€” fitz-ts [transport=${TRANSPORT}, auth=${AUTH
       await withClient({}, async (client) => {
         const route = uniqueRoute("rpc");
 
-        // No worker registered â€” server returns RPC_ERR_NO_WORKER (retryable or
+        // No worker registered — server returns RPC_ERR_NO_WORKER (retryable or
         // domain error, code should be accessible on the thrown error)
         const iterator = await client.rpc().call(route, b("ping"), { timeoutMs: 500 });
         const caught = await expectRpcIteratorFailure(iterator);
@@ -449,7 +448,7 @@ describe(`Fitz conformance â€” fitz-ts [transport=${TRANSPORT}, auth=${AUTH
     expect(result.verdict).toBe("pass");
   });
 
-  // CS-007 â”€ timeout handling
+  // CS-007 ─ timeout handling
   it("CS-007 timeout handling", async () => {
     const result = await runScenario("CS-007", "timeout handling", "P0", async () => {
       const evidence: string[] = [];
@@ -490,7 +489,7 @@ describe(`Fitz conformance â€” fitz-ts [transport=${TRANSPORT}, auth=${AUTH
 
         // Must NOT be AbortError
         expect((caught as Error).name).not.toBe("AbortError");
-        evidence.push("error is not AbortError (timeout â‰  cancellation)");
+        evidence.push("error is not AbortError (timeout ≠ cancellation)");
 
         // Connection still healthy
         const kvRoute = uniqueRoute("kv");
@@ -512,7 +511,7 @@ describe(`Fitz conformance â€” fitz-ts [transport=${TRANSPORT}, auth=${AUTH
     expect(result.verdict).toBe("pass");
   });
 
-  // CS-008 â”€ caller cancellation
+  // CS-008 ─ caller cancellation
   it("CS-008 caller cancellation", async () => {
     const result = await runScenario("CS-008", "caller cancellation", "P0", async () => {
       const evidence: string[] = [];
@@ -565,7 +564,7 @@ describe(`Fitz conformance â€” fitz-ts [transport=${TRANSPORT}, auth=${AUTH
         expect(caught).toBeTruthy();
         evidence.push(`cancellation threw: ${(caught as Error).name}`);
         expect((caught as Error).name).toBe("AbortError");
-        evidence.push("error is AbortError (correct â€” not timeout)");
+        evidence.push("error is AbortError (correct — not timeout)");
 
         await sub.unsubscribe().catch(() => undefined);
 
@@ -587,7 +586,7 @@ describe(`Fitz conformance â€” fitz-ts [transport=${TRANSPORT}, auth=${AUTH
     expect(result.verdict).toBe("pass");
   });
 
-  // CS-009 â”€ disconnect during request
+  // CS-009 ─ disconnect during request
   it("CS-009 disconnect during request", async () => {
     const result = await runScenario("CS-009", "disconnect during request", "P1", async () => {
       const evidence: string[] = [];
@@ -655,7 +654,7 @@ describe(`Fitz conformance â€” fitz-ts [transport=${TRANSPORT}, auth=${AUTH
     expect(result.verdict).toBe("pass");
   });
 
-  // CS-010 â”€ reconnect and retry behavior
+  // CS-010 ─ reconnect and retry behavior
   it("CS-010 reconnect and retry behavior", async () => {
     const result = await runScenario("CS-010", "reconnect and retry behavior", "P1", async () => {
       const evidence: string[] = [];
@@ -698,7 +697,7 @@ describe(`Fitz conformance â€” fitz-ts [transport=${TRANSPORT}, auth=${AUTH
         if (message.includes("reconnect") || message.includes("Unknown config")) {
           evidence.push(`reconnect config not accepted: ${message}`);
           evidence.push(
-            "NOTE: reconnect config key may differ from 'reconnect' â€” check ClientConfig",
+            "NOTE: reconnect config key may differ from 'reconnect' — check ClientConfig",
           );
           return { verdict: "partial", evidence };
         }
@@ -709,11 +708,10 @@ describe(`Fitz conformance â€” fitz-ts [transport=${TRANSPORT}, auth=${AUTH
     });
 
     collector.record(result);
-    // pass or partial are both acceptable â€” full reconnect loop needs controlled network
-    expect(["pass", "partial"]).toContain(result.verdict);
+    expect(result.verdict).toBe("pass");
   });
 
-  // CS-011 â”€ stream receive sequence
+  // CS-011 ─ stream receive sequence
   it("CS-011 stream receive sequence", async () => {
     const result = await runScenario("CS-011", "stream receive sequence", "P1", async () => {
       const evidence: string[] = [];
@@ -760,10 +758,10 @@ describe(`Fitz conformance â€” fitz-ts [transport=${TRANSPORT}, auth=${AUTH
     });
 
     collector.record(result);
-    expect(["pass", "partial"]).toContain(result.verdict);
+    expect(result.verdict).toBe("pass");
   });
 
-  // CS-012 â”€ stream completion
+  // CS-012 ─ stream completion
   it("CS-012 stream completion", async () => {
     const result = await runScenario("CS-012", "stream completion", "P1", async () => {
       const evidence: string[] = [];
@@ -792,10 +790,10 @@ describe(`Fitz conformance â€” fitz-ts [transport=${TRANSPORT}, auth=${AUTH
     });
 
     collector.record(result);
-    expect(["pass", "partial"]).toContain(result.verdict);
+    expect(result.verdict).toBe("pass");
   });
 
-  // CS-013 â”€ stream error mid-flight
+  // CS-013 ─ stream error mid-flight
   it("CS-013 stream error mid-flight", async () => {
     const result = await runScenario("CS-013", "stream error mid-flight", "P1", async () => {
       const evidence: string[] = [];
@@ -837,7 +835,7 @@ describe(`Fitz conformance â€” fitz-ts [transport=${TRANSPORT}, auth=${AUTH
     expect(result.verdict).toBe("pass");
   });
 
-  // CS-014 â”€ concurrent in-flight requests
+  // CS-014 ─ concurrent in-flight requests
   it("CS-014 concurrent in-flight requests", async () => {
     const result = await runScenario("CS-014", "concurrent in-flight requests", "P1", async () => {
       const evidence: string[] = [];
@@ -877,7 +875,7 @@ describe(`Fitz conformance â€” fitz-ts [transport=${TRANSPORT}, auth=${AUTH
     expect(result.verdict).toBe("pass");
   });
 
-  // CS-015 â”€ shutdown during active work
+  // CS-015 ─ shutdown during active work
   it("CS-015 shutdown during active work", async () => {
     const result = await runScenario("CS-015", "shutdown during active work", "P1", async () => {
       const evidence: string[] = [];
@@ -914,8 +912,8 @@ describe(`Fitz conformance â€” fitz-ts [transport=${TRANSPORT}, auth=${AUTH
           evidence.push(`in-flight begin threw: ${(caught as Error).constructor.name}`);
           expect(caught).toBeInstanceOf(Error);
         } else {
-          // Operation may have completed before close â€” acceptable
-          evidence.push("operation completed before close (race â€” acceptable)");
+          // Operation may have completed before close — acceptable
+          evidence.push("operation completed before close (race — acceptable)");
         }
 
         evidence.push("close during active work did not panic");

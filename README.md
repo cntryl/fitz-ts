@@ -218,6 +218,7 @@ Current conformance scope:
 
 - `tests/conformance/conformance.test.ts` covers `CS-001` through `CS-017`.
 - `.github/workflows/ci.yml` runs the full `ws|tcp` x `anonymous|valid_jwt` conformance matrix and uploads one JSON artifact per combination.
+- Broker-backed integration tests cover KV, Queue, RPC, Lease, Notice, Stream, and Schedule lifecycles.
 - `npm run pack:smoke` is enforced in CI alongside the unit, integration, and conformance gates.
 
 Tooling is direct:

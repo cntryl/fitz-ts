@@ -4,7 +4,7 @@ on:
   workflow_call:
   workflow_dispatch:
   schedule:
-    - cron: "0 0 * * *" # Runs daily at midnight UTC
+    - cron: "0 0 * * *"
   push:
   pull_request:
 
@@ -12,8 +12,6 @@ jobs:
   ci:
     timeout-minutes: 20
     runs-on: ubuntu-latest
-    env:
-      FITZ_BROKER_JWT_HMAC_SECRET: dev-test-secret
 
     steps:
       - name: Check out repository
@@ -26,11 +24,11 @@ jobs:
           cache: npm
           cache-dependency-path: package-lock.json
 
-      - name: Start Docker Compose
-        run: docker compose up -d
-
       - name: Install dependencies
         run: npm ci
+
+      - name: Check formatting
+        run: npm run fmt:check
 
       - name: Lint package
         run: npm run lint
@@ -38,9 +36,39 @@ jobs:
       - name: Build package
         run: npm run build
 
-      - name: Run tests
-        run: npm test
+      - name: Run unit tests
+        run: npm run test:unit
 
-      - name: Tear down Docker Compose
+      - name: Smoke test package
+        run: npm run pack:smoke
+
+      - name: Start broker stack
+        run: docker compose up -d
+
+      - name: Run broker integration suite
+        run: npm run test:integration
+
+      - name: Run conformance matrix
+        shell: bash
+        run: |
+          for transport in tcp ws; do
+            for auth_mode in anonymous valid_jwt; do
+              output="artifacts/conformance-${transport}-${auth_mode}.json"
+              CONFORMANCE_TRANSPORT="$transport" \
+                CONFORMANCE_AUTH_MODE="$auth_mode" \
+                CONFORMANCE_OUTPUT="$output" \
+                npm run test:conformance
+            done
+          done
+
+      - name: Upload conformance results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fitz-ts-conformance-results
+          path: artifacts/conformance-*.json
+          if-no-files-found: warn
+
+      - name: Tear down broker stack
         if: always()
         run: docker compose down --volumes
