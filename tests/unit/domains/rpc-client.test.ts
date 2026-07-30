@@ -285,7 +285,7 @@ describe("RpcClient", () => {
     expect(connection.countRequests(MSG_RPC_SUBSCRIBE_WORKER)).toBe(1);
   });
 
-  it("encodes worker maxConcurrency and rejects invalid values", async () => {
+  it("should reject worker registration given maxConcurrency outside 1..1024 when subscribe is called", async () => {
     const connection = new FakeRpcConnection();
     const client = createRpcClient(connection);
 

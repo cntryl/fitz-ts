@@ -25,6 +25,7 @@ function generateTestJwt(
   audience: string,
   expiresAtSeconds: number,
   tenant: string,
+  permissions: readonly string[] = DEFAULT_PERMISSIONS,
 ): string {
   const now = Math.floor(Date.now() / 1000);
   const header = encodeBase64Url(
@@ -41,15 +42,26 @@ function generateTestJwt(
       tid: tenant,
       exp: expiresAtSeconds,
       iat: now,
-      permissions: DEFAULT_PERMISSIONS,
+      permissions,
     }),
   );
   const signature = sign(`${header}.${payload}`, secret);
   return `${header}.${payload}.${signature}`;
 }
 
-export function generateValidTestJwt(secret: string, audience: string, tenant: string): string {
-  return generateTestJwt(secret, audience, Math.floor(Date.now() / 1000) + 3600, tenant);
+export function generateValidTestJwt(
+  secret: string,
+  audience: string,
+  tenant: string,
+  permissions: readonly string[] = DEFAULT_PERMISSIONS,
+): string {
+  return generateTestJwt(
+    secret,
+    audience,
+    Math.floor(Date.now() / 1000) + 3600,
+    tenant,
+    permissions,
+  );
 }
 
 export function generateExpiredTestJwt(secret: string, audience: string, tenant: string): string {

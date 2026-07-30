@@ -68,7 +68,7 @@ describe("Notice integration", () => {
       expect(count).toBe(2);
     });
 
-    it("should fan out to local subscribers on the same route", async () => {
+    it("should unsubscribe only after the last local handler given duplicate local handlers when unsubscribe is called", async () => {
       const f = new TestFixture(transport, authMode);
       await f.connectOrFail();
 
@@ -156,7 +156,7 @@ describe("Notice integration", () => {
       expect(received).toEqual(["before"]);
     });
 
-    it("should match wildcard subscriptions", async () => {
+    it("should match a single-star subscription given a one-segment suffix when publish is called", async () => {
       const f = new TestFixture(transport, authMode);
       await f.connectOrFail();
 
@@ -191,6 +191,63 @@ describe("Notice integration", () => {
         route,
         body: "wildcard-test",
       });
+    });
+
+    it("should distinguish double-star matching given a nested route when publish is called", async () => {
+      const f = new TestFixture(transport, authMode);
+      await f.connectOrFail();
+
+      const realm = f.uniqueRealm();
+      const area = f.uniqueArea();
+      const nestedArea = f.uniqueArea();
+      const route = `notice://${realm}/${nestedArea}/events`;
+      const received: string[] = [];
+
+      await f
+        .client()
+        .notice()
+        .subscribe(`notice://${realm}/${area}/*`, async () => {
+          received.push("single");
+        });
+      await f
+        .client()
+        .notice()
+        .subscribe(`notice://${realm}/**`, async () => {
+          received.push("double");
+        });
+
+      await f.client().notice().publish(route, b("nested"));
+      await sleep(500);
+
+      expect(received).toEqual(["double"]);
+    });
+
+    it("should isolate realms given prod and staging subscriptions when publish is called", async () => {
+      const f = new TestFixture(transport, authMode);
+      await f.connectOrFail();
+
+      const prodRealm = f.uniqueRealm();
+      const stagingRealm = f.uniqueRealm();
+      const area = f.uniqueArea();
+      const received: string[] = [];
+
+      await f
+        .client()
+        .notice()
+        .subscribe(`notice://${prodRealm}/**`, async () => {
+          received.push("prod");
+        });
+      await f
+        .client()
+        .notice()
+        .subscribe(`notice://${stagingRealm}/**`, async () => {
+          received.push("staging");
+        });
+
+      await f.client().notice().publish(`notice://${prodRealm}/${area}/events`, b("prod"));
+      await sleep(500);
+
+      expect(received).toEqual(["prod"]);
     });
   });
 });
