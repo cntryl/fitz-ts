@@ -273,4 +273,17 @@ describe("route validation", () => {
     );
     expect(connection.lastRequest).toBeNull();
   });
+
+  it("should reject legacy schedule route arity given a three-segment route when validation runs", async () => {
+    const connection = new FakeConnection(new Uint8Array([0]));
+    const client = createScheduleClient(connection as unknown as Connection);
+
+    await expectRouteValidationFailure(
+      client.create("schedule://example/jobs/nightly", "0 0 * * *", "broadcast"),
+      ScheduleError,
+      "SCHEDULE_INVALID_ROUTE",
+      "expected schedule://",
+    );
+    expect(connection.lastRequest).toBeNull();
+  });
 });

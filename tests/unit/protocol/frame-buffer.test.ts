@@ -80,13 +80,33 @@ describe("protocol primitives", () => {
     expect(decoded).toEqual({ messageType: MSG_SCHEDULE_NOTIFY, payload });
   });
 
-  it("rejects truncated frames", () => {
+  it("should reject truncated values given incomplete TLV bytes when decoding", () => {
     expect(() =>
       FrameCodec.decodeFrame(new Uint8Array([MSG_CONNECT, 0x00, 0x02, 0x01])),
     ).toThrowError(CodecError);
   });
 
-  it("rejects frames larger than the u16 payload length field", () => {
+  it("should reject truncated frames given incomplete length bytes when decoding", () => {
+    expect(() => FrameCodec.decodeFrame(new Uint8Array([MSG_CONNECT, 0x00]))).toThrowError(
+      CodecError,
+    );
+  });
+
+  it("should reject trailing bytes given extra frame data when strict decoding is used", () => {
+    const frame = FrameCodec.encodeFrame(MSG_CONNECT, new Uint8Array([1]));
+    const malformed = new Uint8Array([...frame, MSG_KV_BEGIN, 0, 0]);
+
+    expect(() => FrameCodec.decodeFrame(malformed)).toThrowError(/trailing data/);
+  });
+
+  it("should reject duplicate tags given repeated TLV tags when decoding", () => {
+    const frame = FrameCodec.encodeFrame(MSG_CONNECT, new Uint8Array([1]));
+    const duplicate = new Uint8Array([...frame, ...frame]);
+
+    expect(() => FrameCodec.decodeFrame(duplicate)).toThrowError(/Duplicate TLV tag/);
+  });
+
+  it("should reject oversized payloads given data above the frame limit when encoding", () => {
     expect(() => FrameCodec.encodeFrame(MSG_CONNECT, new Uint8Array(65536))).toThrowError(
       CodecError,
     );

@@ -80,6 +80,18 @@ const decodeFrame = (buffer: Uint8Array): Frame => {
   if (remaining < length) {
     throw new CodecError(`Frame incomplete: expected ${length} bytes, got ${remaining}`);
   }
+  if (remaining > length) {
+    const nextOffset = offset + length;
+    const nextFirstByte = buffer[nextOffset]!;
+    const nextMessageType =
+      nextFirstByte === 0xff && nextOffset + 2 < buffer.length
+        ? (buffer[nextOffset + 1]! << 8) | buffer[nextOffset + 2]!
+        : nextFirstByte;
+    if (nextMessageType === messageType) {
+      throw new CodecError(`Duplicate TLV tag: ${messageType}`);
+    }
+    throw new CodecError(`Frame has trailing data: expected ${length} bytes, got ${remaining}`);
+  }
 
   const payload = buffer.subarray(offset, offset + length);
   return { messageType, payload };
