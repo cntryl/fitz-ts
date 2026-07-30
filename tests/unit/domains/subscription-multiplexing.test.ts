@@ -181,7 +181,7 @@ function encodeStreamNotification(subId: bigint, route: string, payload: Uint8Ar
 }
 
 describe("Subscription Multiplexing", () => {
-  it("notice client multiplexes duplicate subscriptions locally and on reconnect", async () => {
+  it("should restore notice subscriptions given reconnect when the application still wants them active", async () => {
     const connection = new FakeSubscriptionConnection([
       [MSG_NOTICE_SUBSCRIBE, encodeOptionalSubIdResponse(11n)],
       [MSG_NOTICE_SUBSCRIBE, encodeOptionalSubIdResponse(12n)],
@@ -269,7 +269,7 @@ describe("Subscription Multiplexing", () => {
     expect(deliveredRoutes).toEqual([]);
   });
 
-  it("queue client keeps one wire subscription per pattern", async () => {
+  it("should restore queue subscriptions given reconnect when the application still wants them active", async () => {
     const connection = new FakeSubscriptionConnection([
       [MSG_QUEUE_SUBSCRIBE, encodeQueueSubIdResponse(21n)],
       [MSG_QUEUE_SUBSCRIBE, encodeQueueSubIdResponse(22n)],
@@ -321,7 +321,7 @@ describe("Subscription Multiplexing", () => {
     expect(connection.countRequests(MSG_QUEUE_UNSUBSCRIBE)).toBe(1);
   });
 
-  it("lease client keeps one wire subscription per pattern", async () => {
+  it("should restore lease subscriptions given reconnect when the application still wants them active", async () => {
     const connection = new FakeSubscriptionConnection([
       [MSG_LEASE_SUBSCRIBE, encodeLeaseSubscribeResponse(31n)],
       [MSG_LEASE_SUBSCRIBE, encodeLeaseSubscribeResponse(32n)],
@@ -368,7 +368,7 @@ describe("Subscription Multiplexing", () => {
     expect(connection.countRequests(MSG_LEASE_UNSUBSCRIBE)).toBe(1);
   });
 
-  it("schedule client keeps one wire subscription per pattern", async () => {
+  it("should restore schedule subscriptions given reconnect when the application still wants them active", async () => {
     const connection = new FakeSubscriptionConnection([
       [MSG_SCHEDULE_SUBSCRIBE, encodeOptionalSubIdResponse(41n)],
       [MSG_SCHEDULE_SUBSCRIBE, encodeOptionalSubIdResponse(42n)],
@@ -432,7 +432,7 @@ describe("Subscription Multiplexing", () => {
     expect(connection.countRequests(MSG_SCHEDULE_UNSUBSCRIBE)).toBe(1);
   });
 
-  it("stream client keeps one wire subscription per pattern", async () => {
+  it("should restore stream subscriptions given reconnect when the application still wants them active", async () => {
     const connection = new FakeSubscriptionConnection([
       [MSG_STREAM_SUBSCRIBE, encodeOptionalSubIdResponse(51n)],
       [MSG_STREAM_SUBSCRIBE, encodeOptionalSubIdResponse(52n)],

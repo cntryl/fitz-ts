@@ -183,7 +183,7 @@ describe("KvClient", () => {
     });
   });
 
-  it("invalidates open transactions on disconnect", async () => {
+  it("should invalidate a KV handle given disconnect when the old handle is reused", async () => {
     const connection = new FakeKvConnection();
     const client = createKvClient(connection);
 

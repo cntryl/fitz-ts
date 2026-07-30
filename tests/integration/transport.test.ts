@@ -29,13 +29,13 @@ function testTenant(): string {
 
 describe("Transport integration", () => {
   runWithTransportsOnly(({ transport }) => {
-    it("should connect using the configured transport", async () => {
+    it("should accept anonymous access given auth is disabled when connect is called", async () => {
       const f = new TestFixture(transport, "anonymous");
       await f.connectOrFail();
       expect(f.client().isConnected()).toBe(true);
     });
 
-    it("should authenticate with a valid jwt against the auth broker", async () => {
+    it("should connect given a valid JWT when CONNECT is sent", async () => {
       const f = new TestFixture(transport, "valid_jwt");
       await f.connectWithAuthOrFail("valid_jwt");
       expect(f.client().isConnected()).toBe(true);
@@ -79,7 +79,7 @@ describe("Transport integration", () => {
       await expect(connectAttempt).rejects.toBeTruthy();
     });
 
-    it("should remain disconnected and never auto-reconnect after auth rejection", async () => {
+    it("should not retry given an authentication rejection when reconnect is enabled", async () => {
       const f = new TestFixture(transport, "invalid_signature");
 
       await expect(
@@ -190,7 +190,7 @@ describe("Transport integration", () => {
       }
     });
 
-    it("should reject a non-CONNECT frame sent before authentication", async () => {
+    it("should close given a non-CONNECT frame before authentication when send is attempted", async () => {
       const addr = brokerAddrFor(transport, "valid_jwt");
       const rawTransport = createTransport(addr, transport, { timeout: 1000 });
 

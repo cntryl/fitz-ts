@@ -110,7 +110,7 @@ describe("Connection lifecycle", () => {
     expect(closeResolved).toBe(true);
   });
 
-  it("should abort scope, wait for active handlers, and drop queued handlers on close", async () => {
+  it("should release queued and active handlers given client close when work is pending", async () => {
     const transport = new FakeTransport();
     const connection = createConnection(
       () => transport,

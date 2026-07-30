@@ -189,7 +189,7 @@ describe("RpcClient", () => {
     expect(connection.sendCalls).toHaveLength(0);
   });
 
-  it("re-subscribes workers on reconnect and handles requests with the restored handler", async () => {
+  it("should restore RPC workers given reconnect when registration remains active", async () => {
     const connection = new FakeRpcConnection();
     const client = createRpcClient(connection);
     const route = "rpc://realm/area/method";
