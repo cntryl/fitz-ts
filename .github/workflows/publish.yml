@@ -69,4 +69,4 @@ jobs:
         run: npm run build
 
       - name: Publish to npm
-        uses: askrjs/actions/actions/publish-package@main
+        run: npm publish --provenance --access public
