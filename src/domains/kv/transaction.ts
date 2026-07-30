@@ -24,6 +24,22 @@ export type KvTransaction = ReturnType<typeof createKvTransaction>;
 
 type KvTransactionConnectionPort = RequestPort & DisconnectListenerPort & RetryExecutionPort;
 
+function compareKeys(left: Uint8Array, right: Uint8Array): number {
+  const sharedLength = Math.min(left.length, right.length);
+  for (let index = 0; index < sharedLength; index += 1) {
+    if (left[index] !== right[index]) {
+      return left[index]! - right[index]!;
+    }
+  }
+  return left.length - right.length;
+}
+
+function assertValidRange(startKey: Uint8Array, endKey: Uint8Array): void {
+  if (compareKeys(startKey, endKey) >= 0) {
+    throw new KvError("Range start key must be less than end key", "INVALID_RANGE");
+  }
+}
+
 export function createKvTransaction(
   connection: KvTransactionConnectionPort,
   route: string,
@@ -120,6 +136,7 @@ export function createKvTransaction(
     signal?: AbortSignal,
   ): Promise<void> => {
     ensureOpen();
+    assertValidRange(startKey, endKey);
     const payload = KvCodec.encodeDeleteRange(txId, route, startKey, endKey);
     const response = await connection.request(MSG_KV_DELETE_RANGE, payload, signal);
     checkStatus(KvCodec.decodeStatusResponse(response).status, "DELETE_RANGE");
@@ -130,6 +147,9 @@ export function createKvTransaction(
     signal?: AbortSignal,
   ): Promise<KvScanPage> => {
     ensureOpen();
+    if (options.startKey !== undefined && options.endKey !== undefined) {
+      assertValidRange(options.startKey, options.endKey);
+    }
     return runWithRetry(
       {
         domain: "kv",

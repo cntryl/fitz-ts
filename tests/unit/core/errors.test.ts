@@ -150,10 +150,6 @@ describe("core errors", () => {
     expect(isRetryable(new KvError("backend", "BACKEND_ERROR", ErrCodeKvBackendError))).toBe(true);
     expect(isRetryable(new QueueError("full", "QUEUE_FULL", ErrCodeQueueFull))).toBe(true);
     expect(isRetryable(new LeaseError("held", "LEASE_HELD", ErrCodeLeaseHeld))).toBe(true);
-    expect(isRetryable(new RpcError("timeout", "TIMEOUT", ErrCodeRpcTimeout))).toBe(true);
-    expect(
-      isRetryable(new RpcError("worker missing", "WORKER_NOT_FOUND", ErrCodeRpcWorkerNotFound)),
-    ).toBe(true);
     expect(isRetryable(new RpcError("backpressure", "BACKPRESSURE", ErrCodeRpcBackpressure))).toBe(
       true,
     );
@@ -180,10 +176,20 @@ describe("core errors", () => {
         new QueueError("ENQUEUE failed: Failed to commit transaction: InvalidRoute", "ERROR"),
       ),
     ).toBe(false);
+    expect(isRetryable(new StreamError("missing", "STREAM_NOT_FOUND", 1))).toBe(false);
+    expect(isRetryable(new Error("plain error"))).toBe(false);
+  });
+
+  it("should retry only retryable failures given timeout or no-worker errors when a call is classified", () => {
+    expect(isRetryable(new RpcError("timeout", "TIMEOUT", ErrCodeRpcTimeout))).toBe(true);
+    expect(
+      isRetryable(new RpcError("worker missing", "WORKER_NOT_FOUND", ErrCodeRpcWorkerNotFound)),
+    ).toBe(true);
+  });
+
+  it("should not retry fatal failures given an unauthorized error when a call is classified", () => {
     expect(isRetryable(new RpcError("unauthorized", "UNAUTHORIZED", ErrCodeRpcUnauthorized))).toBe(
       false,
     );
-    expect(isRetryable(new StreamError("missing", "STREAM_NOT_FOUND", 1))).toBe(false);
-    expect(isRetryable(new Error("plain error"))).toBe(false);
   });
 });

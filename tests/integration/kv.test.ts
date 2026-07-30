@@ -212,7 +212,29 @@ describe("KV integration", () => {
       ).rejects.toBeTruthy();
     });
 
-    it("should reject second commit after commit", async () => {
+    it("should reject inverted bounds given an invalid range when scan is called", async () => {
+      const f = new TestFixture(transport, authMode);
+      await f.connectOrFail();
+      const route = f.uniqueRoute("kv");
+
+      const tx = await f.client().kv().begin(route, { durability: "Sync" });
+
+      await expect(tx.scan({ startKey: b("z"), endKey: b("a") })).rejects.toBeTruthy();
+      await tx.rollback();
+    });
+
+    it("should reject inverted bounds given an invalid range when delete-range is called", async () => {
+      const f = new TestFixture(transport, authMode);
+      await f.connectOrFail();
+      const route = f.uniqueRoute("kv");
+
+      const tx = await f.client().kv().begin(route, { durability: "Sync" });
+
+      await expect(tx.deleteRange(b("z"), b("a"))).rejects.toBeTruthy();
+      await tx.rollback();
+    });
+
+    it("should reject a second commit given a completed transaction when commit is called", async () => {
       const f = new TestFixture(transport, authMode);
       await f.connectOrFail();
       const route = f.uniqueRoute("kv");

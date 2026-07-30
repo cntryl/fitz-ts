@@ -2,7 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import { sleep, waitFor } from "./helpers";
 import { TestFixture } from "./fixture/fixture";
-import { runWithBothTransports } from "./fixture/transport";
+import { runWithBothTransports, runWithTransportsOnly } from "./fixture/transport";
 
 const b = (value: string) => Buffer.from(value);
 
@@ -191,12 +191,46 @@ describe("Queue integration", () => {
       }
     });
 
-    it("should return empty array for an empty queue", async () => {
+    it("should return empty given an empty queue when reserve is called", async () => {
       const f = new TestFixture(transport, authMode);
       await f.connectOrFail();
 
       const items = await f.client().queue().reserve(f.uniqueRoute("queue"), 30, 1);
       expect(items).toEqual([]);
+    });
+
+    it("should not expose delayed work before visibility given a nonzero delay when reserve is called", async () => {
+      const f = new TestFixture(transport, authMode);
+      await f.connectOrFail();
+
+      const route = f.uniqueRoute("queue");
+      await f.client().queue().enqueue(route, b("later"), { delayMs: 2_000 });
+
+      const items = await f.client().queue().reserve(route, 30, 1);
+
+      expect(items).toEqual([]);
+    });
+
+    it("should delay visibility given a nonzero delay when reserve is called by another consumer", async () => {
+      const producer = new TestFixture(transport, authMode);
+      const consumer = new TestFixture(transport, authMode);
+      await producer.connectOrFail();
+      await consumer.connectOrFail();
+
+      const route = producer.uniqueRoute("queue");
+      await producer.client().queue().enqueue(route, b("later"), { delayMs: 1_000 });
+
+      await waitFor(
+        async () => {
+          const items = await consumer.client().queue().reserve(route, 30, 1);
+          return items.length === 1 && Buffer.from(items[0].body).toString() === "later";
+        },
+        {
+          timeoutMs: 3_000,
+          intervalMs: 100,
+          timeoutMessage: "delayed queue item did not become visible",
+        },
+      );
     });
 
     it("should notify subscribers when a queue becomes available", async () => {
@@ -221,6 +255,18 @@ describe("Queue integration", () => {
       await sleep(500);
 
       expect(notifications).toHaveLength(1);
+    });
+  });
+
+  runWithTransportsOnly(({ transport }) => {
+    it("should reject enqueue given read-only permissions when enqueue is called", async () => {
+      const f = new TestFixture(transport);
+      f.setPermissions(["queue://**#read"]);
+      await f.connectOrFail();
+
+      await expect(
+        f.client().queue().enqueue(f.uniqueRoute("queue"), b("forbidden")),
+      ).rejects.toBeTruthy();
     });
   });
 });

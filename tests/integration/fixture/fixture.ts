@@ -117,6 +117,14 @@ export class TestFixture {
     this.tokenProviderOverride = provider;
   }
 
+  setPermissions(permissions: readonly string[]): void {
+    this.setAuthMode("valid_jwt");
+    const secret = env(EnvBrokerJWTHMACSecret) ?? DEFAULT_SECRET;
+    const audience = env(EnvBrokerJWTAudience) ?? DEFAULT_AUDIENCE;
+    const tenant = env(EnvBrokerJWTTenant) ?? DEFAULT_TENANT;
+    this.setTokenProvider(() => generateValidTestJwt(secret, audience, tenant, permissions));
+  }
+
   addCleanup(fn: () => void | Promise<void>): void {
     this.cleanupFns.push(fn);
   }
