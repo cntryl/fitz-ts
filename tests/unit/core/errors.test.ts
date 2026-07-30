@@ -138,12 +138,12 @@ describe("core errors", () => {
     });
   });
 
-  it("classifies timeout and transport failures as retryable", () => {
+  it("should classify retryable errors given timeout and transport failures when policy runs", () => {
     expect(isRetryable(new TimeoutError("timeout"))).toBe(true);
     expect(isRetryable(new TransportError("connection reset"))).toBe(true);
   });
 
-  it("classifies known domain retryable codes as retryable", () => {
+  it("should classify retryable errors given representative domain codes when policy runs", () => {
     expect(
       isRetryable(new KvError("conflict", "CONFLICTING_WRITE", ErrCodeKvIsolationConflict)),
     ).toBe(true);
@@ -172,7 +172,7 @@ describe("core errors", () => {
     ).toBe(true);
   });
 
-  it("does not classify non-retryable domain errors as retryable", () => {
+  it("should classify fatal errors given representative domain codes when policy runs", () => {
     expect(isRetryable(new KvError("missing", "KEY_NOT_FOUND", 4))).toBe(false);
     expect(isRetryable(new QueueError("invalid token", "INVALID_TOKEN", 3))).toBe(false);
     expect(

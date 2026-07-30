@@ -106,7 +106,7 @@ describe("ScheduleClient route validation", () => {
 });
 
 describe("ScheduleClient domain errors", () => {
-  it("preserves schedule error code 7008", async () => {
+  it("should preserve domain identity given typed broker errors when errors are mapped", async () => {
     const response = new Uint8Array([
       1,
       0,
