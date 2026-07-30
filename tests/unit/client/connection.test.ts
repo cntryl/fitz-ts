@@ -434,7 +434,7 @@ describe("Connection", () => {
     await connection.close();
   });
 
-  it("does not reconnect after close during reconnect backoff", async () => {
+  it("should stop reconnecting given close during backoff when close is called", async () => {
     const first = new FakeTransport();
     const second = new FakeTransport();
     const factory = vi.fn<() => Transport>().mockReturnValueOnce(first).mockReturnValueOnce(second);
@@ -619,7 +619,7 @@ describe("Connection", () => {
     await connection.close();
   });
 
-  it("bounds concurrent outbound requests to the configured limit", async () => {
+  it("should bound outbound work given a burst above max in-flight when requests are issued", async () => {
     const transport = new FakeTransport();
     const connection = createConnection(
       () => transport,

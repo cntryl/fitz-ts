@@ -4,7 +4,7 @@ import { createMultiplexer } from "../../../src/client/multiplexer";
 import { ConnectionError } from "../../../src/core/errors";
 
 describe("Multiplexer shutdown errors", () => {
-  it("rejects pending requests with ConnectionError on disconnect", async () => {
+  it("should fail pending requests given transport loss when an operation is in flight", async () => {
     const multiplexer = createMultiplexer();
     multiplexer.setConnected();
 

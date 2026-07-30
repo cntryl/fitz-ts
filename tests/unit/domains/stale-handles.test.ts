@@ -43,7 +43,7 @@ class LeaseConnection extends DisconnectableConnection {
 }
 
 describe("stale handles", () => {
-  it("fails queue item operations after disconnect", async () => {
+  it("should invalidate a queue handle given disconnect when the old handle is reused", async () => {
     const connection = new DisconnectableConnection();
     const item = createQueueItem(
       1n,
@@ -63,7 +63,7 @@ describe("stale handles", () => {
     });
   });
 
-  it("fails lease operations after disconnect", async () => {
+  it("should invalidate a lease handle given disconnect when the old handle is reused", async () => {
     const connection = new DisconnectableConnection();
     const lease = createLease(1n, 2n, "lease://realm/area/resource", connection);
 

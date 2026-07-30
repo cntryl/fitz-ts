@@ -103,7 +103,7 @@ class FakeStreamConnection {
 }
 
 describe("StreamClient", () => {
-  it("invalidates open stream sessions on disconnect", async () => {
+  it("should invalidate a stream handle given disconnect when the old handle is reused", async () => {
     const connection = new FakeStreamConnection();
     const client = createStreamClient(connection as unknown as Connection);
 
