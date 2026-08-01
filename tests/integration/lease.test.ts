@@ -10,7 +10,7 @@ describe("Lease integration", () => {
       const f = new TestFixture(transport, authMode);
       await f.connectOrFail();
 
-      const lease = await f.client().lease().acquire(f.uniqueRoute("lease"), 30);
+      const lease = await f.client().lease.acquire(f.uniqueRoute("lease"), 30);
       expect(lease).toBeTruthy();
       expect(lease.getExpiry()).toBeGreaterThan(BigInt(Math.floor(Date.now() / 1000)));
     });
@@ -22,17 +22,17 @@ describe("Lease integration", () => {
       await f2.connectOrFail();
 
       const route = f1.uniqueRoute("lease");
-      const lease = await f1.client().lease().acquire(route, 30);
+      const lease = await f1.client().lease.acquire(route, 30);
       expect(lease.getExpiry()).toBeGreaterThan(BigInt(Math.floor(Date.now() / 1000)));
 
-      await expect(f2.client().lease().acquire(route, 30)).rejects.toBeTruthy();
+      await expect(f2.client().lease.acquire(route, 30)).rejects.toBeTruthy();
     });
 
     it("should extend ttl when renew is called with a valid token", async () => {
       const f = new TestFixture(transport, authMode);
       await f.connectOrFail();
 
-      const lease = await f.client().lease().acquire(f.uniqueRoute("lease"), 10);
+      const lease = await f.client().lease.acquire(f.uniqueRoute("lease"), 10);
       const originalExpiry = lease.getExpiry();
       const newExpiry = await lease.extend(60);
 
@@ -47,11 +47,11 @@ describe("Lease integration", () => {
       await f2.connectOrFail();
 
       const route = f1.uniqueRoute("lease");
-      const staleLease = await f1.client().lease().acquire(route, 1);
+      const staleLease = await f1.client().lease.acquire(route, 1);
       await waitFor(
         async () => {
           try {
-            await f2.client().lease().acquire(route, 30);
+            await f2.client().lease.acquire(route, 30);
             return true;
           } catch {
             return false;
@@ -72,10 +72,10 @@ describe("Lease integration", () => {
       await f.connectOrFail();
 
       const route = f.uniqueRoute("lease");
-      const lease = await f.client().lease().acquire(route, 30);
+      const lease = await f.client().lease.acquire(route, 30);
       await lease.release();
 
-      const reacquired = await f.client().lease().acquire(route, 30);
+      const reacquired = await f.client().lease.acquire(route, 30);
       expect(reacquired.getExpiry()).toBeGreaterThan(BigInt(Math.floor(Date.now() / 1000)));
     });
 
@@ -86,11 +86,11 @@ describe("Lease integration", () => {
       await f2.connectOrFail();
 
       const route = f1.uniqueRoute("lease");
-      const staleLease = await f1.client().lease().acquire(route, 1);
+      const staleLease = await f1.client().lease.acquire(route, 1);
       await waitFor(
         async () => {
           try {
-            await f2.client().lease().acquire(route, 30);
+            await f2.client().lease.acquire(route, 30);
             return true;
           } catch {
             return false;
@@ -111,14 +111,14 @@ describe("Lease integration", () => {
       await f.connectOrFail();
 
       const route = f.uniqueRoute("lease");
-      const lease = await f.client().lease().acquire(route, 1);
+      const lease = await f.client().lease.acquire(route, 1);
       expect(lease.getExpiry()).toBeGreaterThan(BigInt(Math.floor(Date.now() / 1000)));
 
       let reacquired: { getExpiry(): bigint } | null = null;
       await waitFor(
         async () => {
           try {
-            reacquired = await f.client().lease().acquire(route, 30);
+            reacquired = await f.client().lease.acquire(route, 30);
             return true;
           } catch {
             return false;
@@ -143,9 +143,9 @@ describe("Lease integration", () => {
       await f.connectOrFail();
 
       const route = f.uniqueRoute("lease");
-      await f.client().lease().acquire(route, 30);
+      await f.client().lease.acquire(route, 30);
 
-      const info = await f.client().lease().query(route);
+      const info = await f.client().lease.query(route);
       expect(info.isHeld).toBe(true);
       expect(
         info.owner !== undefined || info.ttlRemainingSecs !== undefined || info.token !== undefined,
@@ -166,15 +166,12 @@ describe("Lease integration", () => {
         }, 5000);
       });
 
-      const subscription = await f
-        .client()
-        .lease()
-        .subscribe(route, async (notif) => {
-          clearTimeout(timer);
-          resolveNotification(notif.route);
-        });
+      const subscription = await f.client().lease.subscribe(route, async (notif) => {
+        clearTimeout(timer);
+        resolveNotification(notif.route);
+      });
 
-      const lease = await f.client().lease().acquire(route, 30);
+      const lease = await f.client().lease.acquire(route, 30);
       await lease.release();
       await expect(notification).resolves.toBe(route);
       await subscription.unsubscribe();

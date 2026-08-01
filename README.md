@@ -26,7 +26,7 @@ const client = Client({
 
 await client.connect();
 
-const tx = await client.kv().begin("kv://realm/area/users", "ReadWrite");
+const tx = await client.kv.begin("kv://realm/area/users", "ReadWrite");
 await tx.put(new TextEncoder().encode("user-1"), new TextEncoder().encode('{"name":"Alice"}'));
 await tx.commit();
 
@@ -110,12 +110,12 @@ const filter: StreamFilterSet = {
   clauses: [{ kind: "Equals", value: "proj.alpha" }],
 };
 
-const records = await client.stream().read("stream://realm/app/events", 0n, 100, {
+const records = await client.stream.read("stream://realm/app/events", 0n, 100, {
   filter,
   maxBytes: 64_000n,
 });
 
-const page = await client.stream().readPage("stream://realm/app/events", 0n, 100, {
+const page = await client.stream.readPage("stream://realm/app/events", 0n, 100, {
   filter,
   maxBytes: 64_000n,
 });
@@ -246,7 +246,7 @@ Broker-backed connection hardening coverage now includes automatic reconnect sub
 
 ## Managed leases
 
-`client.lease().withLease(route, ttlSecs, async signal => { ... })` acquires, renews, and
+`client.lease.withLease(route, ttlSecs, async signal => { ... })` acquires, renews, and
 releases a lease around a callback. Pass `{ waitForAvailability: true, signal }` to wait
 through typed contention and link caller cancellation. Callback code must stop promptly
 when `signal` aborts. Low-level `acquire`, `extend`, and `release` remain available; each

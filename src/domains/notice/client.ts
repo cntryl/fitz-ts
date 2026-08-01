@@ -21,6 +21,7 @@ import {
 } from "../../frame/types";
 import { isRegistrationPatternShape, isRouteShape } from "../_routes";
 import { restoreMapEntriesAtomically } from "../internal/restore";
+import { createKeyedSingleFlight } from "../internal/keyed-single-flight";
 import { createBufferReader } from "../../core/buffer";
 import { parseStandardResponse } from "../../protocol/response";
 import { NoticeCodec } from "./codec";
@@ -39,9 +40,12 @@ type NoticeConnectionPort = RequestPort &
   OptionalResponsePort &
   Partial<ReconnectRestoreRequestPort>;
 
-export type NoticeClient = ReturnType<typeof createNoticeClient>;
+export interface NoticeClient {
+  publish(route: string, body: Uint8Array): Promise<void>;
+  subscribe(pattern: string, handler: NoticeHandler): Promise<NoticeSubscription>;
+}
 
-export function createNoticeClient(connection: NoticeConnectionPort) {
+export function createNoticeClient(connection: NoticeConnectionPort): NoticeClient {
   const { requestFrame, requestReconnectFrame, expectOptionalResponse } =
     createDomainClient(connection);
   const subscriptionsByPattern = new Map<string, NoticeSubscriptionState>();
@@ -49,6 +53,7 @@ export function createNoticeClient(connection: NoticeConnectionPort) {
   const pendingNotificationsBySubId = new Map<bigint, NoticeMsg[]>();
   let initialized = false;
   let nextHandlerId = 1;
+  const registerSingleFlight = createKeyedSingleFlight<string, bigint>();
 
   connection.onReconnect(async () => {
     if (subscriptionsByPattern.size === 0) {
@@ -93,7 +98,7 @@ export function createNoticeClient(connection: NoticeConnectionPort) {
       return addLocalSubscription(pattern, existing.subId, handler);
     }
 
-    const subId = await subscribeWire(pattern);
+    const subId = await registerSingleFlight(pattern, () => subscribeWire(pattern));
     return addLocalSubscription(pattern, subId, handler);
   };
 

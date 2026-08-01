@@ -33,6 +33,7 @@ import { isRegistrationPatternShape, isRouteShape } from "../_routes";
 import { parseStandardResponse } from "../../protocol/response";
 import { createBufferReader } from "../../core/buffer";
 import { restoreMapEntriesAtomically } from "../internal/restore";
+import { createKeyedSingleFlight } from "../internal/keyed-single-flight";
 
 type KvConnectionPort = RequestPort &
   DisconnectListenerPort &
@@ -44,14 +45,18 @@ type KvConnectionPort = RequestPort &
 
 type KvSubscriptionState = { subId: bigint; handlers: Map<number, KvHandler> };
 
-export type KvClient = ReturnType<typeof createKvClient>;
+export interface KvClient {
+  begin(route: string, options: KvBeginOptions): Promise<KvTransaction>;
+  subscribe(pattern: string, handler: KvHandler): Promise<KvSubscription>;
+}
 
-export function createKvClient(connection: KvConnectionPort) {
+export function createKvClient(connection: KvConnectionPort): KvClient {
   const { requestFrame, requestReconnectFrame } = createDomainClient(connection);
   const subscriptionsByPattern = new Map<string, KvSubscriptionState>();
   const patternsBySubId = new Map<bigint, string>();
   let nextHandlerId = 1;
   let notifyHandlerInitialized = false;
+  const registerSingleFlight = createKeyedSingleFlight<string, KvSubscriptionState>();
 
   connection.onReconnect(async () => {
     await restoreMapEntriesAtomically(subscriptionsByPattern, async (pattern, state) => ({
@@ -153,12 +158,17 @@ export function createKvClient(connection: KvConnectionPort) {
       );
     }
     initNotifyHandler();
-    let state = subscriptionsByPattern.get(pattern);
-    if (!state) {
-      state = { subId: await subscribeWire(pattern), handlers: new Map() };
-      subscriptionsByPattern.set(pattern, state);
-      patternsBySubId.set(state.subId, pattern);
-    }
+    const state =
+      subscriptionsByPattern.get(pattern) ??
+      (await registerSingleFlight(pattern, async () => {
+        const registered = {
+          subId: await subscribeWire(pattern),
+          handlers: new Map<number, KvHandler>(),
+        };
+        subscriptionsByPattern.set(pattern, registered);
+        patternsBySubId.set(registered.subId, pattern);
+        return registered;
+      }));
     const handlerId = nextHandlerId++;
     state.handlers.set(handlerId, handler);
     return createKvSubscription(state.subId, pattern, async () => unsubscribe(pattern, handlerId));

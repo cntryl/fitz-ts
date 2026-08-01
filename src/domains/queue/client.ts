@@ -24,6 +24,7 @@ import {
 } from "../../frame/types";
 import { isRegistrationPatternShape, isRouteShape, isSelectorRouteShape } from "../_routes";
 import { restoreMapEntriesAtomically } from "../internal/restore";
+import { createKeyedSingleFlight } from "../internal/keyed-single-flight";
 import { formatStatusName } from "../internal/status";
 import { QueueCodec } from "./codec";
 import {
@@ -50,9 +51,23 @@ type QueueConnectionPort = RequestPort &
   RetryExecutionPort &
   Partial<ReconnectRestoreRequestPort>;
 
-export type QueueClient = ReturnType<typeof createQueueClient>;
+export interface QueueClient {
+  enqueue(route: string, body: Uint8Array, options?: EnqueueOptions): Promise<bigint>;
+  reserve(
+    route: string,
+    leaseSeconds: number,
+    batchSize?: number,
+    waitSeconds?: number,
+  ): Promise<QueueItem[]>;
+  reserveWhenAvailable(
+    route: string,
+    options: { leaseSeconds: number; batchSize?: number; signal?: AbortSignal },
+  ): AsyncIterable<QueueItem[]>;
+  subscribe(pattern: string, handler: AvailabilityHandler): Promise<QueueSubscription>;
+}
 
-export function createQueueClient(connection: QueueConnectionPort) {
+export function createQueueClient(connection: QueueConnectionPort): QueueClient {
+  const registerSingleFlight = createKeyedSingleFlight<string, bigint>();
   const { requestFrame, requestReconnectFrame, runWithRetry } = createDomainClient(connection);
   const subscriptionsByPattern = new Map<string, QueueSubscriptionState>();
   const patternsBySubId = new Map<bigint, string>();
@@ -237,7 +252,7 @@ export function createQueueClient(connection: QueueConnectionPort) {
       return addLocalSubscription(pattern, existing.subId, handler);
     }
 
-    const subId = await subscribeWire(pattern);
+    const subId = await registerSingleFlight(pattern, () => subscribeWire(pattern));
     return addLocalSubscription(pattern, subId, handler);
   };
 

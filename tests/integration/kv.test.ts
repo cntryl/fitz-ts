@@ -22,11 +22,12 @@ describe("KV integration", () => {
       });
       const subscription = await f
         .client()
-        .kv()
-        .subscribe(`kv://${realm}/${uniqueArea}/**`, async (value) => resolveNotification?.(value));
+        .kv.subscribe(`kv://${realm}/${uniqueArea}/**`, async (value) =>
+          resolveNotification?.(value),
+        );
       f.addCleanup(() => subscription.unsubscribe());
 
-      const tx = await f.client().kv().begin(route, { durability: "Sync" });
+      const tx = await f.client().kv.begin(route, { durability: "Sync" });
       await tx.put(b("key"), b("value"));
       await tx.commit();
 
@@ -38,11 +39,11 @@ describe("KV integration", () => {
       await f.connectOrFail();
       const route = f.uniqueRoute("kv");
 
-      const tx = await f.client().kv().begin(route, { durability: "Sync" });
+      const tx = await f.client().kv.begin(route, { durability: "Sync" });
       await tx.put(b("user:123"), b("Alice"));
       await tx.commit();
 
-      const rtx = await f.client().kv().begin(route, { mode: "ReadOnly", durability: "Sync" });
+      const rtx = await f.client().kv.begin(route, { mode: "ReadOnly", durability: "Sync" });
       const result = await rtx.get(b("user:123"));
       expect(result.type).toBe("found");
       if (result.type === "found") {
@@ -55,11 +56,11 @@ describe("KV integration", () => {
       await f.connectOrFail();
       const route = f.uniqueRoute("kv");
 
-      const tx = await f.client().kv().begin(route, { durability: "Sync" });
+      const tx = await f.client().kv.begin(route, { durability: "Sync" });
       await tx.put(b("colour"), b("blue"));
       await tx.commit();
 
-      const rtx = await f.client().kv().begin(route, { mode: "ReadOnly", durability: "Sync" });
+      const rtx = await f.client().kv.begin(route, { mode: "ReadOnly", durability: "Sync" });
       const result = await rtx.get(b("colour"));
       expect(result.type).toBe("found");
       if (result.type === "found") {
@@ -71,7 +72,7 @@ describe("KV integration", () => {
       const f = new TestFixture(transport, authMode);
       await f.connectOrFail();
 
-      const rtx = await f.client().kv().begin(f.uniqueRoute("kv"), {
+      const rtx = await f.client().kv.begin(f.uniqueRoute("kv"), {
         mode: "ReadOnly",
         durability: "Sync",
       });
@@ -84,7 +85,7 @@ describe("KV integration", () => {
       await f.connectOrFail();
       const route = f.uniqueRoute("kv");
 
-      const tx = await f.client().kv().begin(route, { durability: "Sync" });
+      const tx = await f.client().kv.begin(route, { durability: "Sync" });
       await tx.put(b("k1"), b("v1"));
       const result = await tx.get(b("k1"));
       expect(result.type).toBe("found");
@@ -96,7 +97,7 @@ describe("KV integration", () => {
       await f.connectOrFail();
       const route = f.uniqueRoute("kv");
 
-      const tx = await f.client().kv().begin(route, { durability: "Sync" });
+      const tx = await f.client().kv.begin(route, { durability: "Sync" });
       await tx.insert(b("new-key"), b("new-value"));
       const result = await tx.get(b("new-key"));
       expect(result.type).toBe("found");
@@ -108,11 +109,11 @@ describe("KV integration", () => {
       await f.connectOrFail();
       const route = f.uniqueRoute("kv");
 
-      const tx = await f.client().kv().begin(route, { durability: "Sync" });
+      const tx = await f.client().kv.begin(route, { durability: "Sync" });
       await tx.insert(b("dup"), b("first"));
       await tx.commit();
 
-      const tx2 = await f.client().kv().begin(route, { durability: "Sync" });
+      const tx2 = await f.client().kv.begin(route, { durability: "Sync" });
       await expect(tx2.insert(b("dup"), b("second"))).rejects.toBeTruthy();
       await tx2.rollback();
     });
@@ -122,15 +123,15 @@ describe("KV integration", () => {
       await f.connectOrFail();
       const route = f.uniqueRoute("kv");
 
-      const tx = await f.client().kv().begin(route, { durability: "Sync" });
+      const tx = await f.client().kv.begin(route, { durability: "Sync" });
       await tx.put(b("to-delete"), b("value"));
       await tx.commit();
 
-      const tx2 = await f.client().kv().begin(route, { durability: "Sync" });
+      const tx2 = await f.client().kv.begin(route, { durability: "Sync" });
       await tx2.delete(b("to-delete"));
       await tx2.commit();
 
-      const rtx = await f.client().kv().begin(route, { mode: "ReadOnly", durability: "Sync" });
+      const rtx = await f.client().kv.begin(route, { mode: "ReadOnly", durability: "Sync" });
       expect(await rtx.get(b("to-delete"))).toEqual({ type: "not-found" });
     });
 
@@ -139,13 +140,13 @@ describe("KV integration", () => {
       await f.connectOrFail();
       const route = f.uniqueRoute("kv");
 
-      const tx = await f.client().kv().begin(route, { durability: "Sync" });
+      const tx = await f.client().kv.begin(route, { durability: "Sync" });
       await tx.put(b("b"), b("2"));
       await tx.put(b("a"), b("1"));
       await tx.put(b("c"), b("3"));
       await tx.commit();
 
-      const rtx = await f.client().kv().begin(route, { mode: "ReadOnly", durability: "Sync" });
+      const rtx = await f.client().kv.begin(route, { mode: "ReadOnly", durability: "Sync" });
       const keys = await collectAsyncIterable(
         await rtx.scan({ startKey: b("a"), endKey: b("d"), limit: 10 }),
       );
@@ -157,18 +158,18 @@ describe("KV integration", () => {
       await f.connectOrFail();
       const route = f.uniqueRoute("kv");
 
-      const tx = await f.client().kv().begin(route, { durability: "Sync" });
+      const tx = await f.client().kv.begin(route, { durability: "Sync" });
       await tx.put(b("a"), b("1"));
       await tx.put(b("b"), b("2"));
       await tx.put(b("c"), b("3"));
       await tx.put(b("d"), b("4"));
       await tx.commit();
 
-      const tx2 = await f.client().kv().begin(route, { durability: "Sync" });
+      const tx2 = await f.client().kv.begin(route, { durability: "Sync" });
       await tx2.deleteRange(b("b"), b("d"));
       await tx2.commit();
 
-      const rtx = await f.client().kv().begin(route, { mode: "ReadOnly", durability: "Sync" });
+      const rtx = await f.client().kv.begin(route, { mode: "ReadOnly", durability: "Sync" });
       const keys = await collectAsyncIterable(
         await rtx.scan({ startKey: b("a"), endKey: b("z"), limit: 10 }),
       );
@@ -180,13 +181,13 @@ describe("KV integration", () => {
       await f.connectOrFail();
       const route = f.uniqueRoute("kv");
 
-      const tx = await f.client().kv().begin(route, { durability: "Sync" });
+      const tx = await f.client().kv.begin(route, { durability: "Sync" });
       await tx.put(b("a"), b("1"));
       await tx.put(b("b"), b("2"));
       await tx.put(b("c"), b("3"));
       await tx.commit();
 
-      const rtx = await f.client().kv().begin(route, { mode: "ReadOnly", durability: "Sync" });
+      const rtx = await f.client().kv.begin(route, { mode: "ReadOnly", durability: "Sync" });
       const keys = await collectAsyncIterable(
         await rtx.scan({ startKey: b("a"), endKey: b("z"), limit: 2 }),
       );
@@ -198,11 +199,11 @@ describe("KV integration", () => {
       await f.connectOrFail();
       const route = f.uniqueRoute("kv");
 
-      const tx = await f.client().kv().begin(route, { durability: "Sync" });
+      const tx = await f.client().kv.begin(route, { durability: "Sync" });
       await tx.put(b("ephemeral"), b("gone"));
       await tx.rollback();
 
-      const rtx = await f.client().kv().begin(route, { mode: "ReadOnly", durability: "Sync" });
+      const rtx = await f.client().kv.begin(route, { mode: "ReadOnly", durability: "Sync" });
       expect(await rtx.get(b("ephemeral"))).toEqual({ type: "not-found" });
     });
 
@@ -213,8 +214,8 @@ describe("KV integration", () => {
       await f2.connectOrFail();
       const route = f1.uniqueRoute("kv");
 
-      const tx1 = await f1.client().kv().begin(route, { durability: "Sync" });
-      await expect(f2.client().kv().begin(route, { durability: "Sync" })).rejects.toBeTruthy();
+      const tx1 = await f1.client().kv.begin(route, { durability: "Sync" });
+      await expect(f2.client().kv.begin(route, { durability: "Sync" })).rejects.toBeTruthy();
       await tx1.rollback();
     });
 
@@ -223,7 +224,7 @@ describe("KV integration", () => {
       await f.connectOrFail();
       const route = f.uniqueRoute("kv");
 
-      const tx = await f.client().kv().begin(route, { mode: "ReadOnly", durability: "Sync" });
+      const tx = await f.client().kv.begin(route, { mode: "ReadOnly", durability: "Sync" });
       await expect(tx.put(b("k"), b("v"))).rejects.toBeTruthy();
       await tx.rollback();
     });
@@ -233,7 +234,7 @@ describe("KV integration", () => {
       await f.connectOrFail();
 
       await expect(
-        f.client().kv().begin("invalid-route-not-kv-format", { durability: "Sync" }),
+        f.client().kv.begin("invalid-route-not-kv-format", { durability: "Sync" }),
       ).rejects.toBeTruthy();
     });
 
@@ -242,7 +243,7 @@ describe("KV integration", () => {
       await f.connectOrFail();
       const route = f.uniqueRoute("kv");
 
-      const tx = await f.client().kv().begin(route, { durability: "Sync" });
+      const tx = await f.client().kv.begin(route, { durability: "Sync" });
 
       await expect(tx.scan({ startKey: b("z"), endKey: b("a") })).rejects.toBeTruthy();
       await tx.rollback();
@@ -253,7 +254,7 @@ describe("KV integration", () => {
       await f.connectOrFail();
       const route = f.uniqueRoute("kv");
 
-      const tx = await f.client().kv().begin(route, { durability: "Sync" });
+      const tx = await f.client().kv.begin(route, { durability: "Sync" });
 
       await expect(tx.deleteRange(b("z"), b("a"))).rejects.toBeTruthy();
       await tx.rollback();
@@ -264,7 +265,7 @@ describe("KV integration", () => {
       await f.connectOrFail();
       const route = f.uniqueRoute("kv");
 
-      const tx = await f.client().kv().begin(route, { durability: "Sync" });
+      const tx = await f.client().kv.begin(route, { durability: "Sync" });
       await tx.put(b("k"), b("v"));
       await tx.commit();
       await expect(tx.commit()).rejects.toBeTruthy();

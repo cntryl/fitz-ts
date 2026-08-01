@@ -45,6 +45,7 @@ import {
 } from "../../frame/types";
 import { isRegistrationPatternShape, isRouteShape } from "../_routes";
 import { restoreMapEntriesAtomically } from "../internal/restore";
+import { createKeyedSingleFlight } from "../internal/keyed-single-flight";
 import { formatStatusName } from "../internal/status";
 import { createBufferReader } from "../../core/buffer";
 import { parseStandardResponse } from "../../protocol/response";
@@ -62,9 +63,43 @@ type StreamConnectionPort = RequestPort &
   RetryExecutionPort &
   Partial<ReconnectRestoreRequestPort>;
 
-export type StreamClient = ReturnType<typeof createStreamClient>;
+export interface StreamClient {
+  begin(route: string, ingestMetadata?: Uint8Array): Promise<StreamSession>;
+  readPage(
+    route: string,
+    startOffset: bigint,
+    limit?: number,
+    options?: StreamReadOptions,
+  ): Promise<StreamReadPage>;
+  read(
+    route: string,
+    startOffset: bigint,
+    limit?: number,
+    options?: StreamReadOptions,
+  ): Promise<StreamRecord[]>;
+  readWhenCommitted(
+    route: string,
+    options: {
+      offset: bigint;
+      batchSize?: number;
+      signal?: AbortSignal;
+      maxBytes?: bigint;
+      filter?: StreamReadOptions["filter"];
+    },
+  ): AsyncIterable<StreamRecord[]>;
+  consume(
+    route: string,
+    startOffset: bigint,
+    limit?: number,
+    options?: StreamReadOptions,
+  ): Promise<AsyncIterable<StreamRecord>>;
+  peek(route: string): Promise<StreamRecord | null>;
+  metadata(route: string): Promise<StreamMetadata>;
+  subscribe(pattern: string, handler: StreamCommitHandler): Promise<StreamSubscription>;
+}
 
-export function createStreamClient(connection: StreamConnectionPort) {
+export function createStreamClient(connection: StreamConnectionPort): StreamClient {
+  const registerSingleFlight = createKeyedSingleFlight<string, bigint>();
   const { requestFrame, requestReconnectFrame, runWithRetry } = createDomainClient(connection);
   const subscriptionsByPattern = new Map<string, StreamSubscriptionState>();
   const patternsBySubId = new Map<bigint, string>();
@@ -269,7 +304,7 @@ export function createStreamClient(connection: StreamConnectionPort) {
       return addLocalSubscription(pattern, existing.subId, handler);
     }
 
-    const subId = await subscribeWire(pattern);
+    const subId = await registerSingleFlight(pattern, () => subscribeWire(pattern));
     return addLocalSubscription(pattern, subId, handler);
   };
 

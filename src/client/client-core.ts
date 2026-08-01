@@ -119,13 +119,13 @@ export type Client<TConfig extends ClientConfig = ClientConfig> = {
   connectWhenReady: (options?: ConnectWhenReadyOptions) => Promise<void>;
   close: () => Promise<void>;
   isConnected: () => boolean;
-  kv: () => KvClient;
-  queue: () => QueueClient;
-  rpc: () => RpcClient;
-  lease: () => LeaseClient;
-  notice: () => NoticeClient;
-  stream: () => StreamClient;
-  schedule: () => ScheduleClient;
+  readonly kv: KvClient;
+  readonly queue: QueueClient;
+  readonly rpc: RpcClient;
+  readonly lease: LeaseClient;
+  readonly notice: NoticeClient;
+  readonly stream: StreamClient;
+  readonly schedule: ScheduleClient;
   getUrl: () => string;
   getState: () => ConnectionState;
 };
@@ -428,34 +428,6 @@ export function createClientWithTransport<TConfig extends ClientConfig>(
     return created;
   };
 
-  const kv = (): KvClient => {
-    return getDomain("kv");
-  };
-
-  const queue = (): QueueClient => {
-    return getDomain("queue");
-  };
-
-  const rpc = (): RpcClient => {
-    return getDomain("rpc");
-  };
-
-  const lease = (): LeaseClient => {
-    return getDomain("lease");
-  };
-
-  const notice = (): NoticeClient => {
-    return getDomain("notice");
-  };
-
-  const stream = (): StreamClient => {
-    return getDomain("stream");
-  };
-
-  const schedule = (): ScheduleClient => {
-    return getDomain("schedule");
-  };
-
   const getUrl = (): string => {
     return ensureConnection().getUrl();
   };
@@ -479,13 +451,27 @@ export function createClientWithTransport<TConfig extends ClientConfig>(
     connectWhenReady,
     close,
     isConnected,
-    kv,
-    queue,
-    rpc,
-    lease,
-    notice,
-    stream,
-    schedule,
+    get kv() {
+      return getDomain("kv");
+    },
+    get queue() {
+      return getDomain("queue");
+    },
+    get rpc() {
+      return getDomain("rpc");
+    },
+    get lease() {
+      return getDomain("lease");
+    },
+    get notice() {
+      return getDomain("notice");
+    },
+    get stream() {
+      return getDomain("stream");
+    },
+    get schedule() {
+      return getDomain("schedule");
+    },
     getUrl,
     getState,
   } satisfies Client<TConfig>;

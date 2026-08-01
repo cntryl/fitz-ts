@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 The format is based on Keep a Changelog and the project follows Semantic Versioning.
 
+## [Unreleased]
+
+### Changed
+
+- Breaking: domain accessors are readonly lazy properties (`client.kv`, `client.queue`, `client.rpc`, `client.lease`, `client.notice`, `client.stream`, and `client.schedule`) instead of methods.
+- Public client and domain declarations now use named interfaces rather than factory `ReturnType` aliases.
+- Concurrent subscriptions for the same KV, Queue, Notice, Lease, Stream, or Schedule pattern now share one broker registration; failed registration attempts remain retryable and the final local handle owns wire unsubscription.
+
 ## [0.1.0] - 2026-03-25
 
 ### Added

@@ -145,7 +145,7 @@ describe("Client lifecycle ownership", () => {
 
     const client = createClient({ url: "ws://example.test" });
     await client.connect();
-    const kvClient = client.kv();
+    const kvClient = client.kv;
 
     connection.state = ConnectionState.Reconnecting;
     connection.shouldWaitForReconnectValue = true;
@@ -169,7 +169,7 @@ describe("Client lifecycle ownership", () => {
     releaseReconnect();
     await Promise.all([firstWait, secondWait]);
 
-    expect(client.kv()).toBe(kvClient);
+    expect(client.kv).toBe(kvClient);
     expect(client.isConnected()).toBe(true);
   });
 

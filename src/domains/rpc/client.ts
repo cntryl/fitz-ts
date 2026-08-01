@@ -344,9 +344,20 @@ function createRpcIterator(
   };
 }
 
-export type RpcClient = ReturnType<typeof createRpcClient>;
+export interface RpcClient {
+  call(
+    route: string,
+    body: Uint8Array,
+    options?: RequestOptions,
+  ): Promise<AsyncIterableIterator<ResponseFrame>>;
+  registerWorker(
+    route: string,
+    handler: RpcHandler,
+    options?: RegisterWorkerOptions,
+  ): Promise<RpcSubscription>;
+}
 
-export function createRpcClient(connection: RpcConnectionPort) {
+export function createRpcClient(connection: RpcConnectionPort): RpcClient {
   const { requestFrame, requestReconnectFrame } = createDomainClient(connection);
   type PendingRpcEntry = { iterator: RpcIterator; correlationId: Uint8Array };
   const pendingRpcs = new Map<bigint, PendingRpcEntry>();

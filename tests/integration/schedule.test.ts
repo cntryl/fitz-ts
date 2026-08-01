@@ -14,8 +14,7 @@ describe("Schedule integration", () => {
 
       const id = await f
         .client()
-        .schedule()
-        .create(f.uniqueRoute("schedule"), "*/5 * * * *", "broadcast", b("task-payload"));
+        .schedule.create(f.uniqueRoute("schedule"), "*/5 * * * *", "broadcast", b("task-payload"));
 
       expect(id.length).toBeGreaterThan(0);
     });
@@ -27,8 +26,7 @@ describe("Schedule integration", () => {
       await expect(
         f
           .client()
-          .schedule()
-          .create(f.uniqueRoute("schedule"), "not a cron", "broadcast", b("payload")),
+          .schedule.create(f.uniqueRoute("schedule"), "not a cron", "broadcast", b("payload")),
       ).rejects.toBeTruthy();
     });
 
@@ -37,8 +35,8 @@ describe("Schedule integration", () => {
       await f.connectOrFail();
 
       const route = f.uniqueRoute("schedule");
-      await f.client().schedule().create(route, "0 9 * * 1", "broadcast", b("weekly"));
-      await expect(f.client().schedule().cancel(route)).resolves.toBeUndefined();
+      await f.client().schedule.create(route, "0 9 * * 1", "broadcast", b("weekly"));
+      await expect(f.client().schedule.cancel(route)).resolves.toBeUndefined();
     });
 
     it("should list schedules without error", async () => {
@@ -47,10 +45,10 @@ describe("Schedule integration", () => {
 
       const route = f.uniqueRoute("schedule");
       const secondRoute = route.replace(/\/run$/, "/send");
-      await f.client().schedule().create(route, "0 9 * * 1", "broadcast", b("s1"));
-      await f.client().schedule().create(secondRoute, "0 12 * * *", "broadcast", b("s2"));
+      await f.client().schedule.create(route, "0 9 * * 1", "broadcast", b("s1"));
+      await f.client().schedule.create(secondRoute, "0 12 * * *", "broadcast", b("s2"));
 
-      const [entries, totalCount] = await f.client().schedule().list(0n, 100n);
+      const [entries, totalCount] = await f.client().schedule.list(0n, 100n);
       expect(Array.isArray(entries)).toBe(true);
       expect(typeof totalCount).toBe("bigint");
     });
@@ -59,10 +57,7 @@ describe("Schedule integration", () => {
       const f = new TestFixture(transport, authMode);
       await f.connectOrFail();
 
-      const cancel = f
-        .client()
-        .schedule()
-        .cancel(`${f.uniqueRoute("schedule")}-missing`);
+      const cancel = f.client().schedule.cancel(`${f.uniqueRoute("schedule")}-missing`);
       try {
         await cancel;
       } catch (error) {
@@ -76,8 +71,7 @@ describe("Schedule integration", () => {
 
       const sub = await f
         .client()
-        .schedule()
-        .subscribe(f.uniqueRoute("schedule"), async () => undefined);
+        .schedule.subscribe(f.uniqueRoute("schedule"), async () => undefined);
 
       expect(sub).toBeTruthy();
       await expect(sub.unsubscribe()).resolves.toBeUndefined();
@@ -98,19 +92,16 @@ describe("Schedule integration", () => {
     const timeout = setTimeout(() => {
       rejectSecond(new Error("timed out waiting for two schedule notifications"));
     }, 130_000);
-    const subscription = await f
-      .client()
-      .schedule()
-      .subscribe(route, async () => {
-        receivedAt.push(Date.now());
-        if (receivedAt.length === 2) {
-          clearTimeout(timeout);
-          resolveSecond();
-        }
-      });
+    const subscription = await f.client().schedule.subscribe(route, async () => {
+      receivedAt.push(Date.now());
+      if (receivedAt.length === 2) {
+        clearTimeout(timeout);
+        resolveSecond();
+      }
+    });
 
     try {
-      await f.client().schedule().create(route, "* * * * *", "broadcast", b("every-minute"));
+      await f.client().schedule.create(route, "* * * * *", "broadcast", b("every-minute"));
       await secondNotification;
 
       expect(receivedAt[1] - receivedAt[0]).toBeGreaterThanOrEqual(50_000);
@@ -119,8 +110,7 @@ describe("Schedule integration", () => {
       clearTimeout(timeout);
       await f
         .client()
-        .schedule()
-        .cancel(route)
+        .schedule.cancel(route)
         .catch(() => undefined);
       await subscription.unsubscribe().catch(() => undefined);
     }
@@ -143,16 +133,13 @@ describe("Schedule integration", () => {
     const timeout = setTimeout(() => {
       rejectNotification(new Error(`timed out waiting for constrained cron ${cron}`));
     }, 70_000);
-    const subscription = await f
-      .client()
-      .schedule()
-      .subscribe(route, async () => {
-        clearTimeout(timeout);
-        resolveNotification();
-      });
+    const subscription = await f.client().schedule.subscribe(route, async () => {
+      clearTimeout(timeout);
+      resolveNotification();
+    });
 
     try {
-      await f.client().schedule().create(route, cron, "broadcast", b("constrained"));
+      await f.client().schedule.create(route, cron, "broadcast", b("constrained"));
       await notification;
 
       expect(new Date().getUTCHours()).toBe(hour);
@@ -160,8 +147,7 @@ describe("Schedule integration", () => {
       clearTimeout(timeout);
       await f
         .client()
-        .schedule()
-        .cancel(route)
+        .schedule.cancel(route)
         .catch(() => undefined);
       await subscription.unsubscribe().catch(() => undefined);
     }
@@ -172,23 +158,19 @@ describe("Schedule integration", () => {
     await f.connectOrFail();
     const route = f.uniqueRoute("schedule");
     let notifications = 0;
-    const subscription = await f
-      .client()
-      .schedule()
-      .subscribe(route, async () => {
-        notifications += 1;
-      });
+    const subscription = await f.client().schedule.subscribe(route, async () => {
+      notifications += 1;
+    });
 
     try {
-      await f.client().schedule().create(route, "* * * * *", "broadcast", b("not-yet"));
+      await f.client().schedule.create(route, "* * * * *", "broadcast", b("not-yet"));
       await sleep(2_000);
 
       expect(notifications).toBe(0);
     } finally {
       await f
         .client()
-        .schedule()
-        .cancel(route)
+        .schedule.cancel(route)
         .catch(() => undefined);
       await subscription.unsubscribe().catch(() => undefined);
     }
@@ -203,8 +185,7 @@ describe("Schedule integration", () => {
       await expect(
         f
           .client()
-          .schedule()
-          .create(f.uniqueRoute("schedule"), "* * * * *", "broadcast", b("forbidden")),
+          .schedule.create(f.uniqueRoute("schedule"), "* * * * *", "broadcast", b("forbidden")),
       ).rejects.toBeTruthy();
     });
   });

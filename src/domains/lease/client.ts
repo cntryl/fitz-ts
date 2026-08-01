@@ -22,6 +22,7 @@ import {
 } from "../../frame/types";
 import { isRouteShape } from "../_routes";
 import { restoreMapEntriesAtomically } from "../internal/restore";
+import { createKeyedSingleFlight } from "../internal/keyed-single-flight";
 import { LeaseCodec } from "./codec";
 import { createBufferReader } from "../../core/buffer";
 import { parseStandardResponse } from "../../protocol/response";
@@ -50,9 +51,20 @@ type LeaseConnectionPort = RequestPort &
   RetryExecutionPort &
   Partial<ReconnectRestoreRequestPort>;
 
-export type LeaseClient = ReturnType<typeof createLeaseClient>;
+export interface LeaseClient {
+  acquire(route: string, ttlSecs: number): Promise<Lease>;
+  withLease<T>(
+    route: string,
+    ttlSecs: number,
+    callback: (signal: AbortSignal) => T | Promise<T>,
+    options?: WithLeaseOptions,
+  ): Promise<T>;
+  query(route: string): Promise<LeaseInfo>;
+  subscribe(route: string, handler: ChangeHandler): Promise<LeaseSubscription>;
+}
 
-export function createLeaseClient(connection: LeaseConnectionPort) {
+export function createLeaseClient(connection: LeaseConnectionPort): LeaseClient {
+  const registerSingleFlight = createKeyedSingleFlight<string, bigint>();
   const { requestFrame, requestReconnectFrame, runWithRetry } = createDomainClient(connection);
   const subscriptionsByRoute = new Map<string, LeaseSubscriptionState>();
   let initialized = false;
@@ -225,7 +237,7 @@ export function createLeaseClient(connection: LeaseConnectionPort) {
       return addLocalSubscription(route, existing.subId, handler);
     }
 
-    const subId = await subscribeWire(route);
+    const subId = await registerSingleFlight(route, () => subscribeWire(route));
     return addLocalSubscription(route, subId, handler);
   };
 

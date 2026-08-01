@@ -32,6 +32,7 @@ import {
 import { ScheduleError } from "../../core/errors";
 import { isRegistrationPatternShape, isRouteShape } from "../_routes";
 import { restoreMapEntriesAtomically } from "../internal/restore";
+import { createKeyedSingleFlight } from "../internal/keyed-single-flight";
 
 type ScheduleSubscriptionState = {
   subId: bigint;
@@ -44,9 +45,24 @@ type ScheduleConnectionPort = RequestPort &
   AsyncDispatchPort &
   Partial<ReconnectRestoreRequestPort>;
 
-export type ScheduleClient = ReturnType<typeof createScheduleClient>;
+export interface ScheduleClient {
+  create(
+    route: string,
+    cronExpr: string,
+    deliveryMode: ScheduleDeliveryMode,
+    payload?: Uint8Array,
+  ): Promise<string>;
+  cancel(route: string): Promise<void>;
+  list(offset?: bigint, limit?: bigint): Promise<[ScheduleEntry[], bigint]>;
+  waitForNotifications(
+    route: string,
+    options?: { signal?: AbortSignal },
+  ): AsyncIterable<ScheduleNotification>;
+  subscribe(pattern: string, handler: ScheduleHandler): Promise<ScheduleSubscription>;
+}
 
-export function createScheduleClient(connection: ScheduleConnectionPort) {
+export function createScheduleClient(connection: ScheduleConnectionPort): ScheduleClient {
+  const registerSingleFlight = createKeyedSingleFlight<string, bigint>();
   const { requestFrame, requestReconnectFrame } = createDomainClient(connection);
   const subscriptionsByPattern = new Map<string, ScheduleSubscriptionState>();
   const patternsBySubId = new Map<bigint, string>();
@@ -153,7 +169,7 @@ export function createScheduleClient(connection: ScheduleConnectionPort) {
       return addLocalSubscription(pattern, existing.subId, handler);
     }
 
-    const subId = await subscribeWire(pattern);
+    const subId = await registerSingleFlight(pattern, () => subscribeWire(pattern));
     return addLocalSubscription(pattern, subId, handler);
   };
 

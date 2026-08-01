@@ -12,7 +12,7 @@ describe("Stream integration", () => {
       const f = new TestFixture(transport, authMode);
       await f.connectOrFail();
 
-      const session = await f.client().stream().begin(f.uniqueRoute("stream"));
+      const session = await f.client().stream.begin(f.uniqueRoute("stream"));
       const offset1 = await session.append(0n, b("record-1"));
       const offset2 = await session.append(offset1 + 1n, b("record-2"));
       await session.commit("Sync");
@@ -26,13 +26,13 @@ describe("Stream integration", () => {
       await f.connectOrFail();
 
       const route = f.uniqueRoute("stream");
-      const session = await f.client().stream().begin(route);
+      const session = await f.client().stream.begin(route);
       await session.append(0n, Uint8Array.of(0));
       await session.append(1n, Uint8Array.of(1));
       await session.append(2n, Uint8Array.of(2));
       await session.commit("Sync");
 
-      const records = await f.client().stream().read(route, 0n, 10);
+      const records = await f.client().stream.read(route, 0n, 10);
       expect(records.length).toBeGreaterThanOrEqual(3);
       for (let i = 1; i < records.length; i += 1) {
         expect(records[i].offset).toBeGreaterThan(records[i - 1].offset);
@@ -44,7 +44,7 @@ describe("Stream integration", () => {
       await f.connectOrFail();
 
       const route = f.uniqueRoute("stream");
-      const session = await f.client().stream().begin(route);
+      const session = await f.client().stream.begin(route);
       await session.append(0n, b("alpha"), { discriminator: "proj.alpha" });
       await session.append(1n, b("beta"), { discriminator: "audit.beta" });
       await session.commit("Sync");
@@ -52,7 +52,7 @@ describe("Stream integration", () => {
       const filter: StreamFilterSet = {
         clauses: [{ kind: "Equals", value: "proj.alpha" }],
       };
-      const records = await f.client().stream().read(route, 0n, 10, { filter });
+      const records = await f.client().stream.read(route, 0n, 10, { filter });
 
       expect(records).toHaveLength(1);
       expect(Buffer.from(records[0].body).toString()).toBe("alpha");
@@ -63,7 +63,7 @@ describe("Stream integration", () => {
       await f.connectOrFail();
 
       const route = f.uniqueRoute("stream");
-      const session = await f.client().stream().begin(route);
+      const session = await f.client().stream.begin(route);
       await session.append(0n, b("alpha"), { discriminator: "proj.alpha" });
       await session.append(1n, b("beta"), { discriminator: "audit.beta" });
       await session.commit("Sync");
@@ -72,7 +72,7 @@ describe("Stream integration", () => {
         clauses: [{ kind: "Equals", value: "proj.alpha" }],
       };
 
-      const page = await f.client().stream().readPage(route, 0n, 10, { filter });
+      const page = await f.client().stream.readPage(route, 0n, 10, { filter });
       expect(page.items).toHaveLength(2);
       expect(page.items[0]).toMatchObject({ kind: "event" });
       expect(page.items[1]).toEqual({
@@ -85,7 +85,7 @@ describe("Stream integration", () => {
         hasMore: false,
       });
 
-      const records = await f.client().stream().read(route, 0n, 10, { filter });
+      const records = await f.client().stream.read(route, 0n, 10, { filter });
       expect(records).toHaveLength(1);
       expect(Buffer.from(records[0].body).toString()).toBe("alpha");
     });
@@ -95,11 +95,11 @@ describe("Stream integration", () => {
       await f.connectOrFail();
 
       const route = f.uniqueRoute("stream");
-      const session = await f.client().stream().begin(route);
+      const session = await f.client().stream.begin(route);
       await session.append(0n, b("first"));
       await session.commit("Sync");
 
-      const wrongSession = await f.client().stream().begin(route);
+      const wrongSession = await f.client().stream.begin(route);
       await expect(wrongSession.append(0n, b("second"))).rejects.toBeTruthy();
     });
 
@@ -108,11 +108,11 @@ describe("Stream integration", () => {
       await f.connectOrFail();
 
       const route = f.uniqueRoute("stream");
-      const session = await f.client().stream().begin(route);
+      const session = await f.client().stream.begin(route);
       await session.append(0n, b("ephemeral"));
       await session.rollback();
 
-      const records = await f.client().stream().read(route, 0n, 10);
+      const records = await f.client().stream.read(route, 0n, 10);
       expect(records).toEqual([]);
     });
 
@@ -121,12 +121,12 @@ describe("Stream integration", () => {
       await f.connectOrFail();
 
       const route = f.uniqueRoute("stream");
-      const session = await f.client().stream().begin(route);
+      const session = await f.client().stream.begin(route);
       await session.append(0n, b("first"));
       await session.append(1n, b("last-one"));
       await session.commit("Sync");
 
-      const record = await f.client().stream().peek(route);
+      const record = await f.client().stream.peek(route);
       expect(record).not.toBeNull();
       if (!record) {
         throw new Error("Expected a stream record");
@@ -140,11 +140,11 @@ describe("Stream integration", () => {
       await f.connectOrFail();
 
       const route = f.uniqueRoute("stream");
-      const session = await f.client().stream().begin(route);
+      const session = await f.client().stream.begin(route);
       await session.append(0n, b("data"));
       await session.commit("Sync");
 
-      const metadata = await f.client().stream().metadata(route);
+      const metadata = await f.client().stream.metadata(route);
       expect(metadata.recordCount).toBeGreaterThanOrEqual(1n);
     });
 
@@ -153,11 +153,11 @@ describe("Stream integration", () => {
       await f.connectOrFail();
 
       const route = f.uniqueRoute("stream");
-      const session = await f.client().stream().begin(route);
+      const session = await f.client().stream.begin(route);
       await session.append(0n, b("only"));
       await session.commit("Sync");
 
-      const read = f.client().stream().read(route, 999999n, 10);
+      const read = f.client().stream.read(route, 999999n, 10);
       try {
         const records = await read;
         expect(records).toEqual([]);
@@ -195,22 +195,19 @@ describe("Stream integration", () => {
         }, 5000);
       });
 
-      subscription = await f
-        .client()
-        .stream()
-        .subscribe(route, async (notif) => {
-          clearTimeout(timer);
-          resolveNotification({
-            route: notif.route,
-            event: notif.event,
-            firstResourceOffset: notif.firstResourceOffset,
-            firstAreaOffset: notif.firstAreaOffset,
-            firstRealmOffset: notif.firstRealmOffset,
-            batchSize: notif.batchSize,
-          });
+      subscription = await f.client().stream.subscribe(route, async (notif) => {
+        clearTimeout(timer);
+        resolveNotification({
+          route: notif.route,
+          event: notif.event,
+          firstResourceOffset: notif.firstResourceOffset,
+          firstAreaOffset: notif.firstAreaOffset,
+          firstRealmOffset: notif.firstRealmOffset,
+          batchSize: notif.batchSize,
         });
+      });
 
-      const session = await f.client().stream().begin(route);
+      const session = await f.client().stream.begin(route);
       await session.append(0n, b("notify"));
       await session.commit("Sync");
 
