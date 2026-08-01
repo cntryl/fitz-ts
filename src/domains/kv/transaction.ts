@@ -172,11 +172,8 @@ export function createKvTransaction(
     signal?: AbortSignal,
   ): Promise<AsyncIterable<Uint8Array>> => {
     const page = await scanPage(options, signal);
-    if (page.hasMore) {
-      throw new KvError(
-        "SCAN truncated: response has more keys but no continuation cursor",
-        "SCAN_TRUNCATED",
-      );
+    if (page.hasMore && options.limit === undefined) {
+      throw new KvError("SCAN truncated an unbounded response unexpectedly", "SCAN_TRUNCATED");
     }
 
     return createAsyncIterableIterator(createSliceIterator(page.keys));

@@ -21,11 +21,13 @@ export type ScheduleDeliveryMode = "broadcast" | "single";
  * Notification is the payload delivered when a schedule fires (SCHEDULE_NOTIFY 705)
  */
 export interface ScheduleNotification {
+  route: string;
   payload: Uint8Array;
 }
 
 export interface DecodedScheduleNotification {
   subId: bigint;
+  route: string;
   payload: Uint8Array;
 }
 

@@ -24,6 +24,23 @@ export interface KvScanPage {
   hasMore: boolean;
 }
 
+export interface KvNotification {
+  route: string;
+  mutationCount: bigint;
+}
+
+export type KvHandler = (notification: KvNotification) => void | Promise<void>;
+
+export type KvSubscription = ReturnType<typeof createKvSubscription>;
+
+export function createKvSubscription(
+  subId: bigint,
+  pattern: string,
+  unsubscribeFn: () => Promise<void>,
+) {
+  return { subId, pattern, unsubscribe: unsubscribeFn };
+}
+
 export interface KvBeginResponse {
   status: number;
   txId?: bigint;

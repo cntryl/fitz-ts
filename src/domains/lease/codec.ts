@@ -10,7 +10,7 @@ import {
   writeU64BENumberAt,
 } from "../../core/buffer";
 import { LeaseError, ProtocolError } from "../../core/errors";
-import { AcquireResponse, QueryResponse, SubscribeResponse, UnsubscribeResponse } from "./types";
+import { AcquireResponse, QueryResponse } from "./types";
 
 export const LeaseCodec = {
   /**
@@ -159,54 +159,18 @@ export const LeaseCodec = {
 
   /**
    * Encode SUBSCRIBE request
-   * Payload: [string pattern]
+   * Payload: [string route]
    */
-  encodeSubscribe(pattern: string): Uint8Array {
-    return getRouteEncoding(pattern).slice();
-  },
-
-  /**
-   * Decode SUBSCRIBE response
-   * Standard response: [u8 status=0][u64 subscription_id]
-   */
-  decodeSubscribeResponse(payload: Uint8Array): SubscribeResponse {
-    if (payload.length < 9) {
-      throw new ProtocolError(
-        `SUBSCRIBE response too short: got ${payload.length} bytes, expected >= 9`,
-        undefined,
-        { operation: "LEASE_SUBSCRIBE", payloadLength: payload.length },
-      );
-    }
-
-    const reader = createBufferReader(payload);
-    const status = reader.readU8();
-    if (status !== 0) {
-      return { status };
-    }
-    const subId = reader.readU64BE();
-
-    return { status, subId };
+  encodeSubscribe(route: string): Uint8Array {
+    return getRouteEncoding(route).slice();
   },
 
   /**
    * Encode UNSUBSCRIBE request
-   * Payload: [string pattern]
+   * Payload: [string route]
    */
-  encodeUnsubscribe(pattern: string): Uint8Array {
-    return getRouteEncoding(pattern).slice();
-  },
-
-  /**
-   * Decode UNSUBSCRIBE response
-   * Standard response: [u8 status=0]
-   */
-  decodeUnsubscribeResponse(payload: Uint8Array): UnsubscribeResponse {
-    if (payload.length === 0) {
-      return { status: 0 };
-    }
-
-    const reader = createBufferReader(payload);
-    return { status: reader.readU8() };
+  encodeUnsubscribe(route: string): Uint8Array {
+    return getRouteEncoding(route).slice();
   },
 
   /**
@@ -220,6 +184,12 @@ export const LeaseCodec = {
     const reader = createBufferReader(payload);
     const subId = reader.readU64BE();
     const route = reader.readRoute();
+    const notificationPayload = reader.readBytes(reader.readU32BE());
+    if (notificationPayload.length !== 0 || !reader.isEOF()) {
+      throw new ProtocolError("LEASE_NOTIFY payload must be empty", undefined, {
+        operation: "LEASE_NOTIFY",
+      });
+    }
 
     return { subId, route };
   },

@@ -54,7 +54,7 @@ class FakeQueueConnection {
     return () => undefined;
   }
 
-  notify(route: string = "queue://realm/area/resource/ready"): void {
+  notify(route: string = "queue://realm/area/resource"): void {
     this.handlers.get(MSG_QUEUE_NOTIFY)?.(encodeQueueNotification(7n, route));
   }
 
@@ -208,5 +208,8 @@ function encodeQueueNotification(subId: bigint, route: string): Uint8Array {
   const writer = createBufferWriter(64);
   writer.writeU64BE(subId);
   writer.writeRoute(route);
+  writer.writeU64BE(3n);
+  writer.writeU64BE(2n);
+  writer.writeU64BE(1n);
   return writer.getBuffer();
 }

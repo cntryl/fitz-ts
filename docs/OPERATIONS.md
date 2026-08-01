@@ -24,7 +24,7 @@ Caller-triggered abort during `connect({ signal })` fails the attempt without
 marking the client as auth rejected. A later `connect()` attempt may be made on
 the same client instance.
 
-After the client has established at least one authenticated session, transport loss moves it back through `RECONNECTING` and then `AUTHENTICATING` unless `reconnect.enabled` is set to `false`. Reconnect listeners are replayed during the reconnect authentication flow before the client reports `AUTHENTICATED`, so notice, queue, lease, and stream subscriptions are restored and RPC workers are re-registered before the connection is considered fully ready again.
+After the client has established at least one authenticated session, transport loss moves it back through `RECONNECTING` and then `AUTHENTICATING` unless `reconnect.enabled` is set to `false`. Reconnect listeners are replayed during the reconnect authentication flow before the client reports `AUTHENTICATED`, so KV, notice, queue, lease, schedule, and stream subscriptions are restored and RPC workers are re-registered before the connection is considered fully ready again.
 
 If application code calls `connect()` during that recovery window, the call
 waits for the active reconnect path to finish. It does not start a second dial,

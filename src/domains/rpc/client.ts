@@ -48,8 +48,9 @@ import {
 } from "../../core/errors";
 import { ConnectionState } from "../../core/types";
 import { createBufferWriter, readU128BEAt, utf8Encoder } from "../../core/buffer";
-import { isConcreteRouteShape } from "../_routes";
+import { isConcreteRouteShape, isRegistrationPatternShape, routeMatchesPattern } from "../_routes";
 import { restoreMapEntriesAtomically } from "../internal/restore";
+import { parseStandardResponse } from "../../protocol/response";
 
 type RpcConnectionPort = RequestPort &
   SendPort &
@@ -72,8 +73,41 @@ type RegisteredWorker = {
   options: Required<RegisterWorkerOptions>;
 };
 
+type RpcPatternSpecificity = readonly [
+  literalSegments: number,
+  singleWildcards: number,
+  doubleWildcards: number,
+  segmentCount: number,
+];
+
 const DEFAULT_WORKER_MAX_CONCURRENCY = 1;
 const MAX_WORKER_MAX_CONCURRENCY = 1024;
+
+function rpcPatternSpecificity(pattern: string): RpcPatternSpecificity {
+  const segments = pattern.slice(pattern.indexOf("://") + 3).split("/");
+  let literalSegments = 0;
+  let singleWildcards = 0;
+  let doubleWildcards = 0;
+
+  for (const segment of segments) {
+    if (segment === "*") singleWildcards++;
+    else if (segment === "**") doubleWildcards++;
+    else literalSegments++;
+  }
+
+  return [literalSegments, singleWildcards, doubleWildcards, segments.length];
+}
+
+function isMoreSpecificRpcPattern(candidate: string, current: string): boolean {
+  const candidateScore = rpcPatternSpecificity(candidate);
+  const currentScore = rpcPatternSpecificity(current);
+
+  if (candidateScore[0] !== currentScore[0]) return candidateScore[0] > currentScore[0];
+  if (candidateScore[1] !== currentScore[1]) return candidateScore[1] > currentScore[1];
+  if (candidateScore[2] !== currentScore[2]) return candidateScore[2] < currentScore[2];
+  if (candidateScore[3] !== currentScore[3]) return candidateScore[3] > currentScore[3];
+  return candidate < current;
+}
 
 type ManagedResponseWriter = ResponseWriter & {
   dispose(): void;
@@ -387,14 +421,12 @@ export function createRpcClient(connection: RpcConnectionPort) {
     request = requestFrame,
   ): Promise<void> => {
     const payload = RpcCodec.encodeSubscribeWorker(route, options.maxConcurrency);
-    const response = await request(MSG_RPC_SUBSCRIBE_WORKER, payload);
-    const decoded = RpcCodec.decodeSubscribeWorkerResponse(response);
-
-    if (decoded.status !== RpcStatus.Ok) {
+    const parsed = parseStandardResponse(await request(MSG_RPC_SUBSCRIBE_WORKER, payload));
+    if (!parsed.success) {
       throw new RpcError(
-        `RPC SUBSCRIBE_WORKER failed: status ${decoded.status}`,
+        `RPC SUBSCRIBE_WORKER failed: ${parsed.error ?? "unknown error"}`,
         "SUBSCRIBE_FAILED",
-        decoded.status,
+        parsed.errorCode,
       );
     }
 
@@ -406,7 +438,7 @@ export function createRpcClient(connection: RpcConnectionPort) {
     handler: RpcHandler,
     options?: RegisterWorkerOptions,
   ): Promise<RpcSubscription> => {
-    assertRpcRoute(route);
+    assertRpcRegistrationPattern(route);
     initRpcHandler();
     const normalizedOptions = normalizeRegisterWorkerOptions(options);
     await registerWorkerInternal(route, handler, normalizedOptions);
@@ -423,10 +455,9 @@ export function createRpcClient(connection: RpcConnectionPort) {
 
     try {
       const payload = RpcCodec.encodeUnsubscribeWorker(route);
-      const response = await requestFrame(MSG_RPC_UNSUBSCRIBE_WORKER, payload);
-      const decoded = RpcCodec.decodeUnsubscribeWorkerResponse(response);
+      const parsed = parseStandardResponse(await requestFrame(MSG_RPC_UNSUBSCRIBE_WORKER, payload));
 
-      if (decoded.status !== RpcStatus.Ok) {
+      if (!parsed.success) {
         return;
       }
     } catch {
@@ -503,7 +534,20 @@ export function createRpcClient(connection: RpcConnectionPort) {
   };
 
   const handleRpcRequest = (req: DecodedInboundRequest): void => {
-    const registration = workers.get(req.route);
+    let registration = workers.get(req.route);
+
+    if (!registration) {
+      let selectedPattern: string | undefined;
+      for (const [pattern, candidate] of workers) {
+        if (
+          routeMatchesPattern(req.route, pattern) &&
+          (selectedPattern === undefined || isMoreSpecificRpcPattern(pattern, selectedPattern))
+        ) {
+          selectedPattern = pattern;
+          registration = candidate;
+        }
+      }
+    }
 
     if (!registration) {
       return;
@@ -589,6 +633,15 @@ function assertRpcRoute(route: string): void {
   if (!isConcreteRouteShape(route, "rpc")) {
     throw new RpcError(
       `Invalid rpc route: ${route} (expected rpc://{realm}/{area}/{resource} or any other concrete rpc route, no empty segments or wildcards)`,
+      "INVALID_ROUTE",
+    );
+  }
+}
+
+function assertRpcRegistrationPattern(pattern: string): void {
+  if (!isRegistrationPatternShape(pattern, "rpc")) {
+    throw new RpcError(
+      `Invalid rpc worker pattern: ${pattern} (wildcards must be whole * or ** segments)`,
       "INVALID_ROUTE",
     );
   }

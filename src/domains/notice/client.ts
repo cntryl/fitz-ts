@@ -19,8 +19,10 @@ import {
   MSG_NOTICE_SUBSCRIBE,
   MSG_NOTICE_UNSUBSCRIBE,
 } from "../../frame/types";
-import { isRouteShape, isSelectorRouteShape } from "../_routes";
+import { isRegistrationPatternShape, isRouteShape } from "../_routes";
 import { restoreMapEntriesAtomically } from "../internal/restore";
+import { createBufferReader } from "../../core/buffer";
+import { parseStandardResponse } from "../../protocol/response";
 import { NoticeCodec } from "./codec";
 import { createNoticeSubscription, NoticeHandler, NoticeMsg, NoticeSubscription } from "./types";
 
@@ -98,13 +100,19 @@ export function createNoticeClient(connection: NoticeConnectionPort) {
   const subscribeWire = async (pattern: string, request = requestFrame): Promise<bigint> => {
     const payload = NoticeCodec.encodeSubscribe(pattern);
     const response = await request(MSG_NOTICE_SUBSCRIBE, payload);
-    const decoded = NoticeCodec.decodeSubscribeResponse(response);
-
-    if (decoded.subId === undefined) {
+    const parsed = parseStandardResponse(response);
+    if (!parsed.success) {
+      throw new NoticeError(
+        `SUBSCRIBE failed: ${parsed.error ?? "unknown error"}`,
+        "SUBSCRIBE_FAILED",
+        parsed.errorCode,
+      );
+    }
+    const reader = createBufferReader(parsed.data);
+    if (reader.readU8() !== 1 || reader.remainingBytes() !== 8) {
       throw new NoticeError("SUBSCRIBE response missing subId", "MISSING_SUB_ID");
     }
-
-    return decoded.subId;
+    return reader.readU64BE();
   };
 
   const addLocalSubscription = (
@@ -142,7 +150,14 @@ export function createNoticeClient(connection: NoticeConnectionPort) {
     patternsBySubId.delete(subscription.subId);
     pendingNotificationsBySubId.delete(subscription.subId);
     const payload = NoticeCodec.encodeUnsubscribe(subscription.subId);
-    await requestFrame(MSG_NOTICE_UNSUBSCRIBE, payload);
+    const parsed = parseStandardResponse(await requestFrame(MSG_NOTICE_UNSUBSCRIBE, payload));
+    if (!parsed.success) {
+      throw new NoticeError(
+        `UNSUBSCRIBE failed: ${parsed.error ?? "unknown error"}`,
+        "UNSUBSCRIBE_FAILED",
+        parsed.errorCode,
+      );
+    }
   };
 
   const initNotifyHandler = (): void => {
@@ -232,9 +247,9 @@ function assertNoticeRoute(route: string): void {
 }
 
 function assertNoticePattern(pattern: string): void {
-  if (!isSelectorRouteShape(pattern, "notice", 3, { allowRealmWildcard: true })) {
+  if (!isRegistrationPatternShape(pattern, "notice")) {
     throw new NoticeError(
-      `Invalid notice pattern: ${pattern} (expected notice://{realm}/{area}/{resource}, notice://{realm}/{area}/*, or notice://{realm}/**)`,
+      `Invalid notice pattern: ${pattern} (wildcards must be whole * or ** segments)`,
       "INVALID_ROUTE",
     );
   }

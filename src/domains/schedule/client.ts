@@ -30,7 +30,7 @@ import {
   createScheduleSubscription,
 } from "./types";
 import { ScheduleError } from "../../core/errors";
-import { isRouteShape } from "../_routes";
+import { isRegistrationPatternShape, isRouteShape } from "../_routes";
 import { restoreMapEntriesAtomically } from "../internal/restore";
 
 type ScheduleSubscriptionState = {
@@ -145,7 +145,7 @@ export function createScheduleClient(connection: ScheduleConnectionPort) {
     pattern: string,
     handler: ScheduleHandler,
   ): Promise<ScheduleSubscription> => {
-    assertConcreteScheduleRoute(pattern);
+    assertSchedulePattern(pattern);
 
     initNotifyHandler();
     const existing = subscriptionsByPattern.get(pattern);
@@ -217,6 +217,7 @@ export function createScheduleClient(connection: ScheduleConnectionPort) {
         const pattern = patternsBySubId.get(decoded.subId);
         if (!pattern) {
           queuePendingNotification(decoded.subId, {
+            route: decoded.route,
             payload: decoded.payload,
           });
           return;
@@ -225,12 +226,14 @@ export function createScheduleClient(connection: ScheduleConnectionPort) {
         const subscription = subscriptionsByPattern.get(pattern);
         if (!subscription) {
           queuePendingNotification(decoded.subId, {
+            route: decoded.route,
             payload: decoded.payload,
           });
           return;
         }
 
         const notification: ScheduleNotification = {
+          route: decoded.route,
           payload: decoded.payload,
         };
         dispatchNotification(subscription, notification);
@@ -324,6 +327,15 @@ function assertConcreteScheduleRoute(route: string): void {
   if (!isRouteShape(route, "schedule", 4)) {
     throw new ScheduleError(
       `Invalid schedule route: ${route} (expected schedule://{realm}/{area}/{resource}/{operation}, no empty segments or wildcards)`,
+      "INVALID_ROUTE",
+    );
+  }
+}
+
+function assertSchedulePattern(pattern: string): void {
+  if (!isRegistrationPatternShape(pattern, "schedule", 4)) {
+    throw new ScheduleError(
+      `Invalid schedule subscription pattern: ${pattern} (expected a whole-segment pattern capable of matching four segments)`,
       "INVALID_ROUTE",
     );
   }

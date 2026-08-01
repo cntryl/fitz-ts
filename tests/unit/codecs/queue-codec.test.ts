@@ -132,9 +132,10 @@ describe("QueueCodec", () => {
 
     it("should_decode_reserve_error_response_with_error_code", () => {
       // Arrange
-      const writer = createBufferWriter(8);
+      const writer = createBufferWriter(32);
       writer.writeU8(1); // status = error
-      writer.writeU8(4); // QueueNotFound
+      writer.writeU32BE(4); // QueueNotFound
+      writer.writeString("Queue not found");
       const response = writer.getBuffer();
 
       // Act
@@ -143,6 +144,7 @@ describe("QueueCodec", () => {
       // Assert
       expect(decoded.status).toBe(1);
       expect(decoded.errorCode).toBe(4);
+      expect(decoded.errorMessage).toBe("Queue not found");
     });
 
     it("should_decode_reserve_response_no_item", () => {
@@ -232,6 +234,23 @@ describe("QueueCodec", () => {
       // Assert
       expect(decoded.status).toBe(0);
       expect(decoded.subId).toBe(555n);
+    });
+
+    it("should_decode_typed_subscription_error_when_code_equals_remaining_length", () => {
+      // Arrange
+      const message = "x".repeat(4006);
+      const writer = createBufferWriter(4096);
+      writer.writeU8(1);
+      writer.writeU32BE(4010);
+      writer.writeString(message);
+
+      // Act
+      const decoded = QueueCodec.decodeSubscribeResponse(writer.getBuffer());
+
+      // Assert
+      expect(decoded.status).toBe(1);
+      expect(decoded.errorCode).toBe(4010);
+      expect(decoded.errorMessage).toBe(message);
     });
   });
 });

@@ -232,6 +232,29 @@ describe("RpcClient", () => {
     });
   });
 
+  it("should dispatch an overlapping RPC request to the most specific wildcard worker", async () => {
+    // Arrange
+    const connection = new FakeRpcConnection();
+    const client = createRpcClient(connection);
+    const broadWorker = vi.fn(async () => undefined);
+    const specificWorker = vi.fn(async () => undefined);
+    await client.registerWorker("rpc://realm/**", broadWorker);
+    await client.registerWorker("rpc://realm/orders/*", specificWorker);
+    const handler = connection.notificationHandlers.get(MSG_RPC_REQUEST);
+    if (!handler) throw new Error("Expected RPC request handler to be registered");
+
+    // Act
+    handler(
+      RpcCodec.encodeRequest(new Uint8Array(16), "rpc://realm/orders/create", new Uint8Array()),
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // Assert
+    expect(specificWorker).toHaveBeenCalledOnce();
+    expect(broadWorker).not.toHaveBeenCalled();
+  });
+
   it("returns a terminal backpressure response when local worker dispatch is saturated", async () => {
     const connection = new FakeRpcConnection();
     const client = createRpcClient(connection);

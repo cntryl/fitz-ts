@@ -153,6 +153,9 @@ function encodeQueueNotification(subId: bigint, route: string): Uint8Array {
   const writer = createBufferWriter(128);
   writer.writeU64BE(subId);
   writer.writeString(route);
+  writer.writeU64BE(3n);
+  writer.writeU64BE(2n);
+  writer.writeU64BE(1n);
   return writer.getBuffer();
 }
 
@@ -160,12 +163,14 @@ function encodeLeaseNotification(subId: bigint, route: string): Uint8Array {
   const writer = createBufferWriter(128);
   writer.writeU64BE(subId);
   writer.writeString(route);
+  writer.writeU32BE(0);
   return writer.getBuffer();
 }
 
-function encodeScheduleNotification(subId: bigint, payload: Uint8Array): Uint8Array {
+function encodeScheduleNotification(subId: bigint, route: string, payload: Uint8Array): Uint8Array {
   const writer = createBufferWriter(128);
   writer.writeU64BE(subId);
+  writer.writeString(route);
   writer.writeU32BE(payload.length);
   writer.writeBytes(payload);
   return writer.getBuffer();
@@ -307,12 +312,12 @@ describe("Subscription Multiplexing", () => {
     await connection.reconnect();
     expect(connection.countRequests(MSG_QUEUE_SUBSCRIBE)).toBe(2);
 
-    connection.emitNotification(MSG_QUEUE_NOTIFY, encodeQueueNotification(21n, `${pattern}/ready`));
+    connection.emitNotification(MSG_QUEUE_NOTIFY, encodeQueueNotification(21n, pattern));
     await connection.flushHandlers();
     expect(firstRoutes).toEqual([pattern]);
     expect(secondRoutes).toEqual([pattern, pattern]);
 
-    connection.emitNotification(MSG_QUEUE_NOTIFY, encodeQueueNotification(22n, `${pattern}/ready`));
+    connection.emitNotification(MSG_QUEUE_NOTIFY, encodeQueueNotification(22n, pattern));
     await connection.flushHandlers();
     expect(firstRoutes).toEqual([pattern]);
     expect(secondRoutes).toEqual([pattern, pattern, pattern]);
@@ -330,12 +335,12 @@ describe("Subscription Multiplexing", () => {
     const client = createLeaseClient(connection);
     const firstRoutes: string[] = [];
     const secondRoutes: string[] = [];
-    const pattern = "lease://realm/area/resource";
+    const route = "lease://realm/area/resource";
 
-    const first = await client.subscribe(pattern, async (notification) => {
+    const first = await client.subscribe(route, async (notification) => {
       firstRoutes.push(notification.route);
     });
-    const second = await client.subscribe(pattern, async (notification) => {
+    const second = await client.subscribe(route, async (notification) => {
       secondRoutes.push(notification.route);
     });
 
@@ -343,26 +348,26 @@ describe("Subscription Multiplexing", () => {
     expect(second.subId).toBe(31n);
     expect(connection.countRequests(MSG_LEASE_SUBSCRIBE)).toBe(1);
 
-    connection.emitNotification(MSG_LEASE_NOTIFY, encodeLeaseNotification(31n, pattern));
+    connection.emitNotification(MSG_LEASE_NOTIFY, encodeLeaseNotification(31n, route));
     await connection.flushHandlers();
-    expect(firstRoutes).toEqual([pattern]);
-    expect(secondRoutes).toEqual([pattern]);
+    expect(firstRoutes).toEqual([route]);
+    expect(secondRoutes).toEqual([route]);
 
     await first.unsubscribe();
     expect(connection.countRequests(MSG_LEASE_UNSUBSCRIBE)).toBe(0);
 
-    connection.emitNotification(MSG_LEASE_NOTIFY, encodeLeaseNotification(31n, pattern));
+    connection.emitNotification(MSG_LEASE_NOTIFY, encodeLeaseNotification(31n, route));
     await connection.flushHandlers();
-    expect(firstRoutes).toEqual([pattern]);
-    expect(secondRoutes).toEqual([pattern, pattern]);
+    expect(firstRoutes).toEqual([route]);
+    expect(secondRoutes).toEqual([route, route]);
 
     await connection.reconnect();
     expect(connection.countRequests(MSG_LEASE_SUBSCRIBE)).toBe(2);
 
-    connection.emitNotification(MSG_LEASE_NOTIFY, encodeLeaseNotification(32n, pattern));
+    connection.emitNotification(MSG_LEASE_NOTIFY, encodeLeaseNotification(32n, route));
     await connection.flushHandlers();
-    expect(firstRoutes).toEqual([pattern]);
-    expect(secondRoutes).toEqual([pattern, pattern, pattern]);
+    expect(firstRoutes).toEqual([route]);
+    expect(secondRoutes).toEqual([route, route, route]);
 
     await second.unsubscribe();
     expect(connection.countRequests(MSG_LEASE_UNSUBSCRIBE)).toBe(1);
@@ -392,7 +397,7 @@ describe("Subscription Multiplexing", () => {
 
     connection.emitNotification(
       MSG_SCHEDULE_NOTIFY,
-      encodeScheduleNotification(41n, utf8Encoder.encode("first")),
+      encodeScheduleNotification(41n, pattern, utf8Encoder.encode("first")),
     );
     await connection.flushHandlers();
     expect(firstPayloads).toEqual(["first"]);
@@ -403,7 +408,7 @@ describe("Subscription Multiplexing", () => {
 
     connection.emitNotification(
       MSG_SCHEDULE_NOTIFY,
-      encodeScheduleNotification(41n, utf8Encoder.encode("second")),
+      encodeScheduleNotification(41n, pattern, utf8Encoder.encode("second")),
     );
     await connection.flushHandlers();
     expect(firstPayloads).toEqual(["first"]);
@@ -414,7 +419,7 @@ describe("Subscription Multiplexing", () => {
 
     connection.emitNotification(
       MSG_SCHEDULE_NOTIFY,
-      encodeScheduleNotification(41n, utf8Encoder.encode("stale")),
+      encodeScheduleNotification(41n, pattern, utf8Encoder.encode("stale")),
     );
     await connection.flushHandlers();
     expect(firstPayloads).toEqual(["first"]);
@@ -422,7 +427,7 @@ describe("Subscription Multiplexing", () => {
 
     connection.emitNotification(
       MSG_SCHEDULE_NOTIFY,
-      encodeScheduleNotification(42n, utf8Encoder.encode("after")),
+      encodeScheduleNotification(42n, pattern, utf8Encoder.encode("after")),
     );
     await connection.flushHandlers();
     expect(firstPayloads).toEqual(["first"]);

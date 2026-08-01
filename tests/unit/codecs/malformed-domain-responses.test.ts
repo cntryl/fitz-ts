@@ -2,7 +2,6 @@ import { describe, expect, it } from "vite-plus/test";
 
 import { KvCodec } from "../../../src/domains/kv/codec";
 import { LeaseCodec } from "../../../src/domains/lease/codec";
-import { NoticeCodec } from "../../../src/domains/notice/codec";
 import { QueueCodec } from "../../../src/domains/queue/codec";
 import { RpcCodec } from "../../../src/domains/rpc/codec";
 import { ScheduleCodec } from "../../../src/domains/schedule/codec";
@@ -28,12 +27,6 @@ describe("malformed domain responses", () => {
       () => LeaseCodec.decodeAcquireResponse(new Uint8Array()),
       "ACQUIRE response too short",
       "PROTOCOL_ERROR",
-    ],
-    [
-      "notice",
-      () => NoticeCodec.decodeSubscribeResponse(new Uint8Array()),
-      "SUBSCRIBE response too short",
-      undefined,
     ],
     [
       "stream",

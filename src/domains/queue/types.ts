@@ -78,6 +78,9 @@ export function createQueueItem(
  */
 export interface AvailabilityNotification {
   route: string;
+  readyMessages: bigint;
+  delayedMessages: bigint;
+  inflightMessages: bigint;
 }
 
 /**

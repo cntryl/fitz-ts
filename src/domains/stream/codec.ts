@@ -341,33 +341,10 @@ export const StreamCodec = {
     return writer.getBufferView();
   },
 
-  decodeSubscribeResponse(payload: Uint8Array): {
-    status: number;
-    subId?: bigint;
-  } {
-    const reader = createBufferReader(payload);
-    const status = reader.readU8();
-    if (status !== 0 || reader.isEOF()) {
-      return { status };
-    }
-
-    const hasValue = reader.readU8();
-    if (hasValue !== 1 || reader.isEOF()) {
-      return { status };
-    }
-
-    return { status, subId: reader.readU64BE() };
-  },
-
   encodeUnsubscribe(pattern: string): Uint8Array {
     const writer = createBufferWriter(128);
     writer.writeRoute(pattern);
     return writer.getBufferView();
-  },
-
-  decodeUnsubscribeResponse(payload: Uint8Array): { status: number } {
-    const reader = createBufferReader(payload);
-    return { status: reader.readU8() };
   },
 
   decodeNotification(payload: Uint8Array): {

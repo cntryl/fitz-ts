@@ -8,6 +8,31 @@ const b = (value: string) => Buffer.from(value);
 
 describe("KV integration", () => {
   runWithBothTransports(({ transport, authMode }) => {
+    it("should deliver the exact KV route for a wildcard subscription", async () => {
+      const f = new TestFixture(transport, authMode);
+      await f.connectOrFail();
+      const uniqueParts = f.uniqueRoute("kv").slice("kv://".length).split("/");
+      const realm = uniqueParts[0]!;
+      const uniqueArea = uniqueParts.at(-1)!;
+      const route = `kv://${realm}/${uniqueArea}/resource`;
+      let resolveNotification: ((value: { route: string; mutationCount: bigint }) => void) | null =
+        null;
+      const notification = new Promise<{ route: string; mutationCount: bigint }>((resolve) => {
+        resolveNotification = resolve;
+      });
+      const subscription = await f
+        .client()
+        .kv()
+        .subscribe(`kv://${realm}/${uniqueArea}/**`, async (value) => resolveNotification?.(value));
+      f.addCleanup(() => subscription.unsubscribe());
+
+      const tx = await f.client().kv().begin(route, { durability: "Sync" });
+      await tx.put(b("key"), b("value"));
+      await tx.commit();
+
+      await expect(notification).resolves.toEqual({ route, mutationCount: 1n });
+    });
+
     it("should open and commit transaction", async () => {
       const f = new TestFixture(transport, authMode);
       await f.connectOrFail();

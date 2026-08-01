@@ -38,7 +38,9 @@ class FakeScheduleConsumerConnection {
   }
 
   notify(payload: Uint8Array): void {
-    this.handlers.get(MSG_SCHEDULE_NOTIFY)?.(encodeScheduleNotification(11n, payload));
+    this.handlers.get(MSG_SCHEDULE_NOTIFY)?.(
+      encodeScheduleNotification(11n, "schedule://realm/area/resource/run", payload),
+    );
   }
 }
 
@@ -112,9 +114,10 @@ describe("ScheduleClient waitForNotifications", () => {
   });
 });
 
-function encodeScheduleNotification(subId: bigint, payload: Uint8Array): Uint8Array {
+function encodeScheduleNotification(subId: bigint, route: string, payload: Uint8Array): Uint8Array {
   const writer = createBufferWriter(32);
   writer.writeU64BE(subId);
+  writer.writeString(route);
   writer.writeU32BE(payload.length);
   writer.writeBytes(payload);
   return writer.getBuffer();

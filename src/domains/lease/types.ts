@@ -25,7 +25,7 @@ export type LeaseSubscription = ReturnType<typeof createLeaseSubscription>;
 
 export function createLeaseSubscription(
   subId: bigint,
-  pattern: string,
+  route: string,
   unsubscribeFn: (subId: bigint) => Promise<void>,
 ) {
   const unsubscribe = async (): Promise<void> => {
@@ -34,7 +34,7 @@ export function createLeaseSubscription(
 
   return {
     subId,
-    pattern,
+    route,
     unsubscribe,
   };
 }

@@ -22,7 +22,7 @@ import {
   MSG_QUEUE_SUBSCRIBE,
   MSG_QUEUE_UNSUBSCRIBE,
 } from "../../frame/types";
-import { isRouteShape, isSelectorRouteShape } from "../_routes";
+import { isRegistrationPatternShape, isRouteShape, isSelectorRouteShape } from "../_routes";
 import { restoreMapEntriesAtomically } from "../internal/restore";
 import { formatStatusName } from "../internal/status";
 import { QueueCodec } from "./codec";
@@ -242,7 +242,7 @@ export function createQueueClient(connection: QueueConnectionPort) {
   };
 
   const subscribeWire = async (pattern: string, request = requestFrame): Promise<bigint> => {
-    const payload = QueueCodec.encodeSubscribe(wireWatchPattern(pattern));
+    const payload = QueueCodec.encodeSubscribe(pattern);
     const response = await request(MSG_QUEUE_SUBSCRIBE, payload);
     const decoded = QueueCodec.decodeSubscribeResponse(response);
     checkStatus(decoded, "SUBSCRIBE");
@@ -289,7 +289,7 @@ export function createQueueClient(connection: QueueConnectionPort) {
     subscriptionsByPattern.delete(pattern);
     patternsBySubId.delete(subscription.subId);
     pendingNotificationsBySubId.delete(subscription.subId);
-    const payload = QueueCodec.encodeUnsubscribe(wireWatchPattern(pattern));
+    const payload = QueueCodec.encodeUnsubscribe(pattern);
     const response = await requestFrame(MSG_QUEUE_UNSUBSCRIBE, payload);
     const decoded = QueueCodec.decodeUnsubscribeResponse(response);
     checkStatus(decoded, "UNSUBSCRIBE");
@@ -303,8 +303,14 @@ export function createQueueClient(connection: QueueConnectionPort) {
     notificationHandlerRegistered = true;
     connection.registerNotificationHandler(MSG_QUEUE_NOTIFY, (payload) => {
       try {
-        const { subId, route } = QueueCodec.decodeNotification(payload);
-        const notification: AvailabilityNotification = { route: publicQueueRoute(route) };
+        const { subId, route, readyMessages, delayedMessages, inflightMessages } =
+          QueueCodec.decodeNotification(payload);
+        const notification: AvailabilityNotification = {
+          route,
+          readyMessages,
+          delayedMessages,
+          inflightMessages,
+        };
         const pattern = patternsBySubId.get(subId);
         if (!pattern) {
           queuePendingNotification(subId, notification);
@@ -364,22 +370,6 @@ export function createQueueClient(connection: QueueConnectionPort) {
         await handler(notification);
       });
     }
-  };
-
-  const wireWatchPattern = (pattern: string): string => {
-    if (pattern.endsWith("/ready")) {
-      return pattern;
-    }
-
-    return `${pattern}/ready`;
-  };
-
-  const publicQueueRoute = (route: string): string => {
-    if (!route.endsWith("/ready")) {
-      return route;
-    }
-
-    return route.slice(0, -"/ready".length);
   };
 
   const checkStatus = (
@@ -443,9 +433,9 @@ function assertQueueReserveRoute(route: string): void {
 }
 
 function assertQueueSubscriptionPattern(pattern: string): void {
-  if (!isSelectorRouteShape(pattern, "queue", 3, { allowRealmWildcard: true })) {
+  if (!isRegistrationPatternShape(pattern, "queue", 3)) {
     throw new QueueError(
-      `Invalid queue pattern: ${pattern} (expected queue://{realm}/{area}/{resource}, queue://{realm}/{area}/*, or queue://{realm}/**)`,
+      `Invalid queue pattern: ${pattern} (expected a whole-segment pattern capable of matching three segments)`,
       "INVALID_ROUTE",
     );
   }

@@ -102,36 +102,13 @@ describe("LeaseCodec", () => {
   describe("SUBSCRIBE encoding", () => {
     it("should_encode_subscribe_with_pattern", () => {
       // Arrange
-      const pattern = "lease://acme/resources/*";
+      const route = "lease://acme/resources/database";
 
       // Act
-      const encoded = LeaseCodec.encodeSubscribe(pattern);
+      const encoded = LeaseCodec.encodeSubscribe(route);
 
       // Assert
       expect(encoded).toBeInstanceOf(Uint8Array);
-    });
-  });
-
-  describe("SUBSCRIBE decoding", () => {
-    it("should_decode_subscribe_response_with_sub_id", () => {
-      // Arrange
-      const writer = createBufferWriter(16);
-      writer.writeU8(0); // status = success
-      writer.writeU64BE(222n); // subId
-      const response = writer.getBuffer();
-
-      // Act
-      const decoded = LeaseCodec.decodeSubscribeResponse(response);
-
-      // Assert
-      expect(decoded.status).toBe(0);
-      expect(decoded.subId).toBe(222n);
-    });
-
-    it("throws ProtocolError for short subscribe responses", () => {
-      expect(() => LeaseCodec.decodeSubscribeResponse(new Uint8Array([0]))).toThrowError(
-        ProtocolError,
-      );
     });
   });
 
@@ -163,6 +140,7 @@ describe("LeaseCodec", () => {
       const writer = createBufferWriter(32);
       writer.writeU64BE(222n); // subId
       writer.writeString("lease://acme/resources/db_connection");
+      writer.writeU32BE(0);
       const payload = writer.getBuffer();
 
       // Act

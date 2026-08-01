@@ -194,6 +194,29 @@ export const KvCodec = {
     return { status, keys, hasMore };
   },
 
+  encodeSubscribe(pattern: string): Uint8Array {
+    return getRouteEncoding(pattern).slice();
+  },
+
+  encodeUnsubscribe(pattern: string): Uint8Array {
+    return getRouteEncoding(pattern).slice();
+  },
+
+  decodeNotification(payload: Uint8Array): {
+    subId: bigint;
+    route: string;
+    mutationCount: bigint;
+  } {
+    const reader = createBufferReader(payload);
+    const subId = reader.readU64BE();
+    const route = reader.readRoute();
+    const mutationCount = reader.readU64BE();
+    if (!reader.isEOF()) {
+      throw new CodecError("KV_NOTIFY payload has trailing bytes");
+    }
+    return { subId, route, mutationCount };
+  },
+
   encodeDurability(durability: DurabilityMode): number {
     switch (durability) {
       case "Buffered":

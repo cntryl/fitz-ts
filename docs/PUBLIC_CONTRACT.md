@@ -29,7 +29,7 @@ contractual.
 - Calling `connect()` while the client is already connecting or reconnecting
   waits for that in-flight lifecycle. It does not create a second transport or
   replace cached domain clients.
-- Reconnect replays notice, queue, lease, schedule, and stream subscriptions.
+- Reconnect replays KV, notice, queue, lease, schedule, and stream subscriptions.
 - Reconnect re-registers RPC workers before reporting `AUTHENTICATED`.
 - In-flight request or iterator work from the pre-disconnect connection is
   failed; callers must reacquire fresh handles after reconnect.
@@ -66,6 +66,22 @@ contractual.
   subscription and must not duplicate broker-side registration.
 - `QueueItem`, `Lease`, `KvTransaction`, and `StreamSession` handles from the
   pre-disconnect session are stale after reconnect and fail fast.
+
+## Subscription Registrations
+
+- KV, Queue, Stream, Notice, RPC worker, and Schedule registrations accept
+  exact routes and whole-segment `*` or `**` patterns, including wildcard
+  realms. Partial wildcards, empty segments, and wrong schemes are rejected.
+- KV, Queue, and Stream patterns must be capable of matching three concrete
+  segments; Schedule patterns must match four; Notice and RPC have flexible
+  depth.
+- The broker permits 128 wildcard registrations per domain and session. Exact
+  registrations do not count toward the cap, and duplicate original strings
+  are idempotent.
+- Lease subscriptions accept only an exact
+  `lease://realm/area/resource` route.
+- Every notification carries its exact concrete route. Queue availability
+  notifications also carry ready, delayed, and inflight counts.
 
 ## Packaging
 

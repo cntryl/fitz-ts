@@ -43,9 +43,11 @@ import {
   MSG_STREAM_UNSUBSCRIBE,
   MSG_STREAM_NOTIFY,
 } from "../../frame/types";
-import { isRouteShape, isSelectorRouteShape } from "../_routes";
+import { isRegistrationPatternShape, isRouteShape } from "../_routes";
 import { restoreMapEntriesAtomically } from "../internal/restore";
 import { formatStatusName } from "../internal/status";
+import { createBufferReader } from "../../core/buffer";
+import { parseStandardResponse } from "../../protocol/response";
 
 type StreamSubscriptionState = {
   subId: bigint;
@@ -273,15 +275,26 @@ export function createStreamClient(connection: StreamConnectionPort) {
 
   const subscribeWire = async (pattern: string, request = requestFrame): Promise<bigint> => {
     const payload = StreamCodec.encodeSubscribe(pattern);
-    const response = await request(MSG_STREAM_SUBSCRIBE, payload);
-    const decoded = StreamCodec.decodeSubscribeResponse(response);
-    checkStatus(decoded.status, "SUBSCRIBE");
-
-    if (decoded.subId === undefined) {
+    const parsed = parseStandardResponse(await request(MSG_STREAM_SUBSCRIBE, payload));
+    if (!parsed.success) {
+      throw new StreamError(
+        `SUBSCRIBE failed: ${parsed.error ?? "unknown error"}`,
+        "SUBSCRIBE_FAILED",
+        parsed.errorCode,
+      );
+    }
+    const reader = createBufferReader(parsed.data);
+    if (reader.readU8() !== 1 || reader.remainingBytes() < 8) {
       throw new StreamError("SUBSCRIBE response missing subId", "MISSING_SESSION_ID");
     }
-
-    return decoded.subId;
+    const subId = reader.readU64BE();
+    if (!reader.isEOF()) {
+      const dataLength = reader.readU32BE();
+      if (dataLength !== 0 || !reader.isEOF()) {
+        throw new StreamError("SUBSCRIBE response has unexpected data", "INVALID_RESPONSE");
+      }
+    }
+    return subId;
   };
 
   const addLocalSubscription = (
@@ -319,9 +332,14 @@ export function createStreamClient(connection: StreamConnectionPort) {
     patternsBySubId.delete(subscription.subId);
     pendingNotificationsBySubId.delete(subscription.subId);
     const payload = StreamCodec.encodeUnsubscribe(pattern);
-    const response = await requestFrame(MSG_STREAM_UNSUBSCRIBE, payload);
-    const decoded = StreamCodec.decodeUnsubscribeResponse(response);
-    checkStatus(decoded.status, "UNSUBSCRIBE");
+    const parsed = parseStandardResponse(await requestFrame(MSG_STREAM_UNSUBSCRIBE, payload));
+    if (!parsed.success) {
+      throw new StreamError(
+        `UNSUBSCRIBE failed: ${parsed.error ?? "unknown error"}`,
+        "UNSUBSCRIBE_FAILED",
+        parsed.errorCode,
+      );
+    }
   };
 
   const initNotifyHandler = (): void => {
@@ -475,9 +493,9 @@ function assertStreamRoute(route: string): void {
 }
 
 function assertStreamPattern(pattern: string): void {
-  if (!isSelectorRouteShape(pattern, "stream", 3, { allowRealmWildcard: true })) {
+  if (!isRegistrationPatternShape(pattern, "stream", 3)) {
     throw new StreamError(
-      `Invalid stream pattern: ${pattern} (expected stream://{realm}/{area}/{resource}, stream://{realm}/{area}/*, or stream://{realm}/**)`,
+      `Invalid stream pattern: ${pattern} (expected a whole-segment pattern capable of matching three segments)`,
       "INVALID_ROUTE",
     );
   }

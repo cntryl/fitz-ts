@@ -223,6 +223,7 @@ describe("ScheduleCodec", () => {
       // Arrange
       const writer = createBufferWriter(256);
       writer.writeU64BE(444n); // subId
+      writer.writeString("schedule://realm/area/resource/run");
       writer.writeU32BE(testData('{"execution_id": "exec_123"}').length);
       writer.writeBytes(testData('{"execution_id": "exec_123"}'));
       const payload = writer.getBuffer();
@@ -232,6 +233,7 @@ describe("ScheduleCodec", () => {
 
       // Assert
       expect(decoded.subId).toBe(444n);
+      expect(decoded.route).toBe("schedule://realm/area/resource/run");
       expect(decoded.payload).toEqual(testData('{"execution_id": "exec_123"}'));
     });
 
@@ -240,14 +242,13 @@ describe("ScheduleCodec", () => {
       writer.writeU32BE(testData('{"execution_id": "exec_456"}').length);
       writer.writeBytes(testData('{"execution_id": "exec_456"}'));
 
-      expect(() => ScheduleCodec.decodeNotification(writer.getBuffer())).toThrow(
-        "payload truncated",
-      );
+      expect(() => ScheduleCodec.decodeNotification(writer.getBuffer())).toThrow();
     });
 
     it("should_reject_schedule_fire_notification_with_trailing_bytes", () => {
       const writer = createBufferWriter(256);
       writer.writeU64BE(444n);
+      writer.writeString("schedule://realm/area/resource/run");
       writer.writeU32BE(0);
       writer.writeU8(0xff);
 

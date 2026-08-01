@@ -116,20 +116,20 @@ function encodeQueueSuccess(messageId: bigint): Uint8Array {
   return payload;
 }
 
-function encodeQueueErrorMessage(message: string): Uint8Array {
+function encodeQueueError(errorCode: number, message: string): Uint8Array {
   const messageBytes = new TextEncoder().encode(message);
-  const payload = new Uint8Array(5 + messageBytes.length);
+  const payload = new Uint8Array(9 + messageBytes.length);
   payload[0] = 1;
-  payload[1] = (messageBytes.length >> 24) & 0xff;
-  payload[2] = (messageBytes.length >> 16) & 0xff;
-  payload[3] = (messageBytes.length >> 8) & 0xff;
-  payload[4] = messageBytes.length & 0xff;
-  payload.set(messageBytes, 5);
+  payload[1] = (errorCode >> 24) & 0xff;
+  payload[2] = (errorCode >> 16) & 0xff;
+  payload[3] = (errorCode >> 8) & 0xff;
+  payload[4] = errorCode & 0xff;
+  payload[5] = (messageBytes.length >> 24) & 0xff;
+  payload[6] = (messageBytes.length >> 16) & 0xff;
+  payload[7] = (messageBytes.length >> 8) & 0xff;
+  payload[8] = messageBytes.length & 0xff;
+  payload.set(messageBytes, 9);
   return payload;
-}
-
-function encodeQueueErrorCode(errorCode: number): Uint8Array {
-  return Uint8Array.of(1, errorCode);
 }
 
 function encodeLeaseQueryFree(): Uint8Array {
@@ -330,7 +330,8 @@ describe("Connection resilience", () => {
         activeTransport.pushRead(
           FrameCodec.encodeFrame(
             MSG_QUEUE_ENQUEUE,
-            encodeQueueErrorMessage(
+            encodeQueueError(
+              4,
               'Failed to commit transaction: WriteStall("Memory budget exceeded")',
             ),
           ),
@@ -371,7 +372,7 @@ describe("Connection resilience", () => {
     transport.onFrame = async (frame, activeTransport) => {
       if (frame.messageType === MSG_QUEUE_ENQUEUE) {
         activeTransport.pushRead(
-          FrameCodec.encodeFrame(MSG_QUEUE_ENQUEUE, encodeQueueErrorCode(3)),
+          FrameCodec.encodeFrame(MSG_QUEUE_ENQUEUE, encodeQueueError(3, "invalid lease token")),
         );
       }
     };

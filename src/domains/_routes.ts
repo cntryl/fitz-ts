@@ -18,6 +18,79 @@ export function isConcreteRouteShape(route: string, scheme: string): boolean {
   return start >= 0 && scanConcrete(route, start, 0);
 }
 
+export function isRegistrationPatternShape(
+  route: string,
+  scheme: string,
+  requiredSegments = 0,
+): boolean {
+  const start = pathStart(route, scheme, false);
+  if (start < 0 || requiredSegments < 0) return false;
+
+  let segmentCount = 0;
+  let doubleWildcardCount = 0;
+  let segmentStart = start;
+  for (let index = start; index <= route.length; index++) {
+    if (index !== route.length && route.charCodeAt(index) !== 47) continue;
+    const length = index - segmentStart;
+    if (length === 0) return false;
+    const single = length === 1 && route.charCodeAt(segmentStart) === 42;
+    const double =
+      length === 2 &&
+      route.charCodeAt(segmentStart) === 42 &&
+      route.charCodeAt(segmentStart + 1) === 42;
+    if (!single && !double && containsAsterisk(route, segmentStart, index)) return false;
+    if (double) doubleWildcardCount++;
+    segmentCount++;
+    segmentStart = index + 1;
+  }
+
+  if (requiredSegments === 0) return true;
+  if (doubleWildcardCount === 0) return segmentCount === requiredSegments;
+  return segmentCount - doubleWildcardCount <= requiredSegments;
+}
+
+export function routeMatchesPattern(route: string, pattern: string): boolean {
+  const routeMarker = route.indexOf("://");
+  const patternMarker = pattern.indexOf("://");
+  if (
+    routeMarker < 1 ||
+    patternMarker < 1 ||
+    route.slice(0, routeMarker) !== pattern.slice(0, patternMarker)
+  )
+    return false;
+  const routeSegments = routeSegmentsOf(route);
+  const patternSegments = routeSegmentsOf(pattern);
+  if (!routeSegments || !patternSegments) return false;
+
+  let routeIndex = 0;
+  let patternIndex = 0;
+  let lastDoubleWildcard = -1;
+  let lastDoubleMatch = 0;
+  while (routeIndex < routeSegments.length) {
+    const segment = patternSegments[patternIndex];
+    if (segment === "*" || segment === routeSegments[routeIndex]) {
+      routeIndex++;
+      patternIndex++;
+      continue;
+    }
+    if (segment === "**") {
+      lastDoubleWildcard = patternIndex++;
+      lastDoubleMatch = routeIndex;
+      continue;
+    }
+    if (lastDoubleWildcard < 0) return false;
+    routeIndex = ++lastDoubleMatch;
+    patternIndex = lastDoubleWildcard + 1;
+  }
+  while (patternSegments[patternIndex] === "**") patternIndex++;
+  return patternIndex === patternSegments.length;
+}
+
+function routeSegmentsOf(route: string): string[] | undefined {
+  const marker = route.indexOf("://");
+  return marker < 1 ? undefined : route.slice(marker + 3).split("/");
+}
+
 export function isSelectorRouteShape(
   route: string,
   scheme: string,

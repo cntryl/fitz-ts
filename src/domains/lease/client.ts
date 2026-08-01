@@ -23,6 +23,8 @@ import {
 import { isRouteShape } from "../_routes";
 import { restoreMapEntriesAtomically } from "../internal/restore";
 import { LeaseCodec } from "./codec";
+import { createBufferReader } from "../../core/buffer";
+import { parseStandardResponse } from "../../protocol/response";
 import {
   ChangeHandler,
   ChangeNotification,
@@ -52,17 +54,17 @@ export type LeaseClient = ReturnType<typeof createLeaseClient>;
 
 export function createLeaseClient(connection: LeaseConnectionPort) {
   const { requestFrame, requestReconnectFrame, runWithRetry } = createDomainClient(connection);
-  const subscriptionsByPattern = new Map<string, LeaseSubscriptionState>();
+  const subscriptionsByRoute = new Map<string, LeaseSubscriptionState>();
   let initialized = false;
   let nextHandlerId = 1;
 
   connection.onReconnect(async () => {
-    if (subscriptionsByPattern.size === 0) {
+    if (subscriptionsByRoute.size === 0) {
       return;
     }
 
-    await restoreMapEntriesAtomically(subscriptionsByPattern, async (pattern, state) => {
-      const subId = await subscribeWire(pattern, requestReconnectFrame);
+    await restoreMapEntriesAtomically(subscriptionsByRoute, async (route, state) => {
+      const subId = await subscribeWire(route, requestReconnectFrame);
       return {
         subId,
         handlers: new Map(state.handlers),
@@ -215,50 +217,55 @@ export function createLeaseClient(connection: LeaseConnectionPort) {
     );
   };
 
-  const subscribe = async (pattern: string, handler: ChangeHandler): Promise<LeaseSubscription> => {
-    assertExactLeaseRoute(pattern);
+  const subscribe = async (route: string, handler: ChangeHandler): Promise<LeaseSubscription> => {
+    assertExactLeaseRoute(route);
     initNotifyHandler();
-    const existing = subscriptionsByPattern.get(pattern);
+    const existing = subscriptionsByRoute.get(route);
     if (existing) {
-      return addLocalSubscription(pattern, existing.subId, handler);
+      return addLocalSubscription(route, existing.subId, handler);
     }
 
-    const subId = await subscribeWire(pattern);
-    return addLocalSubscription(pattern, subId, handler);
+    const subId = await subscribeWire(route);
+    return addLocalSubscription(route, subId, handler);
   };
 
-  const subscribeWire = async (pattern: string, request = requestFrame): Promise<bigint> => {
-    const payload = LeaseCodec.encodeSubscribe(pattern);
-    const response = await request(MSG_LEASE_SUBSCRIBE, payload);
-    const decoded = LeaseCodec.decodeSubscribeResponse(response);
-
-    if (decoded.subId === undefined) {
+  const subscribeWire = async (route: string, request = requestFrame): Promise<bigint> => {
+    const payload = LeaseCodec.encodeSubscribe(route);
+    const parsed = parseStandardResponse(await request(MSG_LEASE_SUBSCRIBE, payload));
+    if (!parsed.success) {
+      throw new LeaseError(
+        `SUBSCRIBE failed: ${parsed.error ?? "unknown error"}`,
+        "SUBSCRIBE_FAILED",
+        parsed.errorCode,
+      );
+    }
+    const reader = createBufferReader(parsed.data);
+    if (reader.remainingBytes() !== 8) {
       throw new LeaseError("SUBSCRIBE failed", "SUBSCRIBE_FAILED");
     }
-
-    return decoded.subId;
+    return reader.readU64BE();
   };
 
   const addLocalSubscription = (
-    pattern: string,
+    route: string,
     subId: bigint,
     handler: ChangeHandler,
   ): LeaseSubscription => {
     const handlerId = nextHandlerId++;
-    let subscription = subscriptionsByPattern.get(pattern);
+    let subscription = subscriptionsByRoute.get(route);
     if (!subscription) {
       subscription = { subId, handlers: new Map() };
-      subscriptionsByPattern.set(pattern, subscription);
+      subscriptionsByRoute.set(route, subscription);
     }
 
     subscription.handlers.set(handlerId, handler);
-    return createLeaseSubscription(subId, pattern, async () => {
-      await unsubscribe(pattern, handlerId);
+    return createLeaseSubscription(subId, route, async () => {
+      await unsubscribe(route, handlerId);
     });
   };
 
-  const unsubscribe = async (pattern: string, handlerId: number): Promise<void> => {
-    const subscription = subscriptionsByPattern.get(pattern);
+  const unsubscribe = async (route: string, handlerId: number): Promise<void> => {
+    const subscription = subscriptionsByRoute.get(route);
     if (!subscription) {
       return;
     }
@@ -268,9 +275,16 @@ export function createLeaseClient(connection: LeaseConnectionPort) {
       return;
     }
 
-    subscriptionsByPattern.delete(pattern);
-    const payload = LeaseCodec.encodeUnsubscribe(pattern);
-    await requestFrame(MSG_LEASE_UNSUBSCRIBE, payload);
+    subscriptionsByRoute.delete(route);
+    const payload = LeaseCodec.encodeUnsubscribe(route);
+    const parsed = parseStandardResponse(await requestFrame(MSG_LEASE_UNSUBSCRIBE, payload));
+    if (!parsed.success) {
+      throw new LeaseError(
+        `UNSUBSCRIBE failed: ${parsed.error ?? "unknown error"}`,
+        "UNSUBSCRIBE_FAILED",
+        parsed.errorCode,
+      );
+    }
   };
 
   const initNotifyHandler = (): void => {
@@ -282,7 +296,7 @@ export function createLeaseClient(connection: LeaseConnectionPort) {
     connection.registerNotificationHandler(MSG_LEASE_NOTIFY, (payload) => {
       try {
         const { route } = LeaseCodec.decodeNotification(payload);
-        const subscription = subscriptionsByPattern.get(route);
+        const subscription = subscriptionsByRoute.get(route);
         if (!subscription) {
           return;
         }

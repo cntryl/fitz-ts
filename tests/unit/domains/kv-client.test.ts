@@ -6,8 +6,11 @@ import {
   MSG_KV_BEGIN,
   MSG_KV_COMMIT,
   MSG_KV_GET,
+  MSG_KV_NOTIFY,
   MSG_KV_ROLLBACK,
   MSG_KV_SCAN,
+  MSG_KV_SUBSCRIBE,
+  MSG_KV_UNSUBSCRIBE,
 } from "../../../src/frame/types";
 import { createKvClient } from "../../../src/domains/kv/client";
 
@@ -16,6 +19,8 @@ class FakeKvConnection {
   public lastSignal: AbortSignal | undefined;
   public responses = new Map<number, Uint8Array[]>();
   private disconnectListeners = new Set<() => void>();
+  private reconnectListeners = new Set<() => void | Promise<void>>();
+  private notificationHandlers = new Map<number, (payload: Uint8Array) => void>();
 
   async request(
     messageType: number,
@@ -62,6 +67,21 @@ class FakeKvConnection {
     };
   }
 
+  onReconnect(listener: () => void | Promise<void>): () => void {
+    this.reconnectListeners.add(listener);
+    return () => {
+      this.reconnectListeners.delete(listener);
+    };
+  }
+
+  registerNotificationHandler(messageType: number, handler: (payload: Uint8Array) => void): void {
+    this.notificationHandlers.set(messageType, handler);
+  }
+
+  dispatchAsyncHandler(task: () => void | Promise<void>): void {
+    void Promise.resolve().then(task);
+  }
+
   disconnect(): void {
     for (const listener of this.disconnectListeners) {
       listener();
@@ -77,6 +97,31 @@ class FakeKvConnection {
 
     this.responses.set(messageType, [response]);
   }
+
+  emitNotification(messageType: number, payload: Uint8Array): void {
+    const handler = this.notificationHandlers.get(messageType);
+    if (!handler) throw new Error(`No notification handler registered for ${messageType}`);
+    handler(payload);
+  }
+}
+
+function encodeSubscriptionResponse(subscriptionId: bigint): Uint8Array {
+  const writer = createBufferWriter();
+  writer.writeU8(0);
+  writer.writeU64BE(subscriptionId);
+  return writer.getBuffer();
+}
+
+function encodeKvNotification(
+  subscriptionId: bigint,
+  route: string,
+  mutationCount: bigint,
+): Uint8Array {
+  const writer = createBufferWriter();
+  writer.writeU64BE(subscriptionId);
+  writer.writeString(route);
+  writer.writeU64BE(mutationCount);
+  return writer.getBuffer();
 }
 
 function encodeScanResponse(keys: Uint8Array[], hasMore: boolean): Uint8Array {
@@ -108,6 +153,42 @@ async function expectKvRouteFailure(action: Promise<unknown>): Promise<void> {
 }
 
 describe("KvClient", () => {
+  it("subscribes with a wildcard and delivers the exact concrete KV route", async () => {
+    const connection = new FakeKvConnection();
+    connection.respond(MSG_KV_SUBSCRIBE, encodeSubscriptionResponse(42n));
+    connection.respond(MSG_KV_UNSUBSCRIBE, new Uint8Array([0]));
+    const client = createKvClient(connection);
+    let received: { route: string; mutationCount: bigint } | undefined;
+
+    const subscription = await client.subscribe("kv://*/area/**", async (notification) => {
+      received = notification;
+    });
+    connection.emitNotification(
+      MSG_KV_NOTIFY,
+      encodeKvNotification(42n, "kv://realm/area/resource", 3n),
+    );
+    await Promise.resolve();
+
+    expect(subscription.subId).toBe(42n);
+    expect(received).toEqual({ route: "kv://realm/area/resource", mutationCount: 3n });
+    await subscription.unsubscribe();
+    expect(connection.lastRequest?.messageType).toBe(MSG_KV_UNSUBSCRIBE);
+  });
+
+  it("preserves the broker KV subscription error code", async () => {
+    const connection = new FakeKvConnection();
+    const writer = createBufferWriter();
+    writer.writeU8(1);
+    writer.writeU32BE(1012);
+    writer.writeString("invalid pattern");
+    connection.respond(MSG_KV_SUBSCRIBE, writer.getBuffer());
+    const client = createKvClient(connection);
+
+    await expect(
+      client.subscribe("kv://realm/area/resource", async () => undefined),
+    ).rejects.toMatchObject({ domainCode: 1012 });
+  });
+
   it("encodes the explicitly requested Sync durability in BEGIN payload", async () => {
     const connection = new FakeKvConnection();
     const client = createKvClient(connection);
@@ -214,7 +295,7 @@ describe("KvClient", () => {
     expect(connection.lastSignal).toBe(controller.signal);
   });
 
-  it("exposes scanPage hasMore and rejects truncated scan convenience results", async () => {
+  it("exposes scanPage hasMore and returns an explicitly limited scan", async () => {
     const connection = new FakeKvConnection();
     const client = createKvClient(connection);
 
@@ -229,6 +310,11 @@ describe("KvClient", () => {
     });
 
     connection.respond(MSG_KV_SCAN, encodeScanResponse([new Uint8Array([2])], true));
+    const limited: Uint8Array[] = [];
+    for await (const key of await tx.scan({ limit: 1 })) limited.push(key);
+    expect(limited).toEqual([new Uint8Array([2])]);
+
+    connection.respond(MSG_KV_SCAN, encodeScanResponse([new Uint8Array([3])], true));
     await expect(tx.scan()).rejects.toMatchObject({
       code: "KV_SCAN_TRUNCATED",
     });

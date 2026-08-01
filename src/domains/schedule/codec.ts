@@ -178,7 +178,7 @@ export const ScheduleCodec = {
 
   /**
    * Decode NOTIFY notification (MSG_SCHEDULE_NOTIFY 705)
-   * Payload: [subscription_id: u64][payload: bytes]
+   * Payload: [subscription_id: u64][exact_route: string][payload: bytes]
    */
   decodeNotification(payload: Uint8Array): DecodedScheduleNotification {
     if (payload.length < 12) {
@@ -187,6 +187,7 @@ export const ScheduleCodec = {
 
     const reader = createBufferReader(payload);
     const subId = reader.readU64BE();
+    const route = reader.readString();
     const payloadLength = reader.readU32BE();
     if (reader.remainingBytes() < payloadLength) {
       throw new Error("SCHEDULE_NOTIFY payload truncated");
@@ -197,7 +198,7 @@ export const ScheduleCodec = {
       throw new Error("SCHEDULE_NOTIFY payload has trailing bytes");
     }
 
-    return { subId, payload: notificationPayload };
+    return { subId, route, payload: notificationPayload };
   },
 };
 
