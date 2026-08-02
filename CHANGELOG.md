@@ -6,6 +6,10 @@ The format is based on Keep a Changelog and the project follows Semantic Version
 
 ## [Unreleased]
 
+### Changed
+
+- Breaking: `ScheduleDeliveryMode` now uses `"Broadcast" | "Single"`. The wire values remain `0` and `1`; callers should replace lowercase mode literals with the PascalCase forms.
+
 ## [0.0.13] - 2026-08-01
 
 ### Changed

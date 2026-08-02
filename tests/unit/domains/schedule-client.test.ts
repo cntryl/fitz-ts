@@ -53,7 +53,7 @@ describe("ScheduleClient route validation", () => {
     const client = createScheduleClient(connection);
 
     await expect(
-      client.create("schedule://realm/area/resource/run", "0 0 * * *", "broadcast"),
+      client.create("schedule://realm/area/resource/run", "0 0 * * *", "Broadcast"),
     ).resolves.toBe("schedule://realm/area/resource/run");
     expect(connection.requestCalls).toHaveLength(1);
   });
@@ -63,7 +63,7 @@ describe("ScheduleClient route validation", () => {
     const client = createScheduleClient(connection);
 
     await expectScheduleRouteFailure(
-      client.create("schedule://realm/area/resource", "0 0 * * *", "broadcast"),
+      client.create("schedule://realm/area/resource", "0 0 * * *", "Broadcast"),
     );
     expect(connection.requestCalls).toHaveLength(0);
   });
@@ -73,7 +73,7 @@ describe("ScheduleClient route validation", () => {
     const client = createScheduleClient(connection);
 
     await expectScheduleRouteFailure(
-      client.create("queue://realm/area/resource/run", "0 0 * * *", "broadcast"),
+      client.create("queue://realm/area/resource/run", "0 0 * * *", "Broadcast"),
     );
     expect(connection.requestCalls).toHaveLength(0);
   });
@@ -122,7 +122,7 @@ describe("ScheduleClient domain errors", () => {
     const client = createScheduleClient(new FakeScheduleConnection(response));
 
     await expect(
-      client.create("schedule://realm/area/resource/run", "0 0 * * *", "single"),
+      client.create("schedule://realm/area/resource/run", "0 0 * * *", "Single"),
     ).rejects.toMatchObject({
       domainCode: 7008,
       code: "SCHEDULE_REQUEST_FAILED",

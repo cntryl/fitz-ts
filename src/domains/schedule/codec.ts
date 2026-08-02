@@ -203,13 +203,13 @@ export const ScheduleCodec = {
 };
 
 function encodeDeliveryMode(deliveryMode: ScheduleDeliveryMode): number {
-  if (deliveryMode === "broadcast") return 0;
-  if (deliveryMode === "single") return 1;
+  if (deliveryMode === "Broadcast") return 0;
+  if (deliveryMode === "Single") return 1;
   throw new Error(`Invalid schedule delivery mode: ${String(deliveryMode)}`);
 }
 
 function decodeDeliveryMode(value: number): ScheduleDeliveryMode {
-  if (value === 0) return "broadcast";
-  if (value === 1) return "single";
+  if (value === 0) return "Broadcast";
+  if (value === 1) return "Single";
   throw new Error(`Invalid schedule delivery mode byte: ${value}`);
 }

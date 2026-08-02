@@ -15,7 +15,7 @@ export interface ScheduleEntry {
   payload: Uint8Array;
 }
 
-export type ScheduleDeliveryMode = "broadcast" | "single";
+export type ScheduleDeliveryMode = "Broadcast" | "Single";
 
 /**
  * Notification is the payload delivered when a schedule fires (SCHEDULE_NOTIFY 705)

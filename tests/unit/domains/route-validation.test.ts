@@ -295,7 +295,7 @@ describe("route validation", () => {
     const client = createScheduleClient(connection as unknown as Connection);
 
     await expectRouteValidationFailure(
-      client.create("queue://example/app/jobs/run", "0 0 * * *", "broadcast"),
+      client.create("queue://example/app/jobs/run", "0 0 * * *", "Broadcast"),
       ScheduleError,
       "SCHEDULE_INVALID_ROUTE",
       "expected schedule://",
@@ -308,7 +308,7 @@ describe("route validation", () => {
     const client = createScheduleClient(connection as unknown as Connection);
 
     await expectRouteValidationFailure(
-      client.create("schedule://example/jobs/nightly", "0 0 * * *", "broadcast"),
+      client.create("schedule://example/jobs/nightly", "0 0 * * *", "Broadcast"),
       ScheduleError,
       "SCHEDULE_INVALID_ROUTE",
       "expected schedule://",

@@ -16,7 +16,7 @@ describe("ScheduleCodec", () => {
       const payload = testData('{"bucket": "s3://backups"}');
 
       // Act
-      const encoded = ScheduleCodec.encodeCreate(route, cronExpr, "broadcast", payload);
+      const encoded = ScheduleCodec.encodeCreate(route, cronExpr, "Broadcast", payload);
 
       // Assert
       expect(encoded).toBeInstanceOf(Uint8Array);
@@ -28,7 +28,7 @@ describe("ScheduleCodec", () => {
       const encoded = ScheduleCodec.encodeCreate(
         "schedule://test/jobs/job/run",
         "*/5 * * * *",
-        "single",
+        "Single",
         new Uint8Array(0),
       );
 
@@ -37,8 +37,8 @@ describe("ScheduleCodec", () => {
     });
 
     it.each([
-      ["broadcast", 0],
-      ["single", 1],
+      ["Broadcast", 0],
+      ["Single", 1],
     ] as const)("should_encode_%s_delivery_mode_as_%i", (mode, expected) => {
       const encoded = ScheduleCodec.encodeCreate(
         "schedule://test/jobs/job/run",
@@ -148,7 +148,7 @@ describe("ScheduleCodec", () => {
       expect(decoded.entries).toHaveLength(1);
       expect(decoded.entries[0].route).toBe("schedule://acme/jobs/job1/run");
       expect(decoded.entries[0].cron).toBe("0 0 * * *");
-      expect(decoded.entries[0].deliveryMode).toBe("single");
+      expect(decoded.entries[0].deliveryMode).toBe("Single");
       expect(decoded.entries[0].payload).toEqual(testData("payload1"));
     });
 
@@ -270,7 +270,7 @@ describe("ScheduleCodec", () => {
         const encoded = ScheduleCodec.encodeCreate(
           "schedule://test/jobs/job/run",
           cron,
-          "broadcast",
+          "Broadcast",
           new Uint8Array(0),
         );
         expect(encoded).toBeInstanceOf(Uint8Array);

@@ -14,7 +14,7 @@ describe("Schedule integration", () => {
 
       const id = await f
         .client()
-        .schedule.create(f.uniqueRoute("schedule"), "*/5 * * * *", "broadcast", b("task-payload"));
+        .schedule.create(f.uniqueRoute("schedule"), "*/5 * * * *", "Broadcast", b("task-payload"));
 
       expect(id.length).toBeGreaterThan(0);
     });
@@ -26,7 +26,7 @@ describe("Schedule integration", () => {
       await expect(
         f
           .client()
-          .schedule.create(f.uniqueRoute("schedule"), "not a cron", "broadcast", b("payload")),
+          .schedule.create(f.uniqueRoute("schedule"), "not a cron", "Broadcast", b("payload")),
       ).rejects.toBeTruthy();
     });
 
@@ -35,7 +35,7 @@ describe("Schedule integration", () => {
       await f.connectOrFail();
 
       const route = f.uniqueRoute("schedule");
-      await f.client().schedule.create(route, "0 9 * * 1", "broadcast", b("weekly"));
+      await f.client().schedule.create(route, "0 9 * * 1", "Broadcast", b("weekly"));
       await expect(f.client().schedule.cancel(route)).resolves.toBeUndefined();
     });
 
@@ -45,8 +45,8 @@ describe("Schedule integration", () => {
 
       const route = f.uniqueRoute("schedule");
       const secondRoute = route.replace(/\/run$/, "/send");
-      await f.client().schedule.create(route, "0 9 * * 1", "broadcast", b("s1"));
-      await f.client().schedule.create(secondRoute, "0 12 * * *", "broadcast", b("s2"));
+      await f.client().schedule.create(route, "0 9 * * 1", "Broadcast", b("s1"));
+      await f.client().schedule.create(secondRoute, "0 12 * * *", "Broadcast", b("s2"));
 
       const [entries, totalCount] = await f.client().schedule.list(0n, 100n);
       expect(Array.isArray(entries)).toBe(true);
@@ -101,7 +101,7 @@ describe("Schedule integration", () => {
     });
 
     try {
-      await f.client().schedule.create(route, "* * * * *", "broadcast", b("every-minute"));
+      await f.client().schedule.create(route, "* * * * *", "Broadcast", b("every-minute"));
       await secondNotification;
 
       expect(receivedAt[1] - receivedAt[0]).toBeGreaterThanOrEqual(50_000);
@@ -139,7 +139,7 @@ describe("Schedule integration", () => {
     });
 
     try {
-      await f.client().schedule.create(route, cron, "broadcast", b("constrained"));
+      await f.client().schedule.create(route, cron, "Broadcast", b("constrained"));
       await notification;
 
       expect(new Date().getUTCHours()).toBe(hour);
@@ -163,7 +163,7 @@ describe("Schedule integration", () => {
     });
 
     try {
-      await f.client().schedule.create(route, "* * * * *", "broadcast", b("not-yet"));
+      await f.client().schedule.create(route, "* * * * *", "Broadcast", b("not-yet"));
       await sleep(2_000);
 
       expect(notifications).toBe(0);
@@ -185,7 +185,7 @@ describe("Schedule integration", () => {
       await expect(
         f
           .client()
-          .schedule.create(f.uniqueRoute("schedule"), "* * * * *", "broadcast", b("forbidden")),
+          .schedule.create(f.uniqueRoute("schedule"), "* * * * *", "Broadcast", b("forbidden")),
       ).rejects.toBeTruthy();
     });
   });
