@@ -103,11 +103,16 @@ export function createStreamSession(
 
   const isOpen = (): boolean => !closed;
 
+  const asyncDispose = async (): Promise<void> => {
+    await rollback();
+  };
+
   return {
     append,
     commit,
     rollback,
     isOpen,
+    [Symbol.asyncDispose]: asyncDispose,
   };
 }
 

@@ -34,6 +34,10 @@ import { parseStandardResponse } from "../../protocol/response";
 import { createBufferReader } from "../../core/buffer";
 import { restoreMapEntriesAtomically } from "../internal/restore";
 import { createKeyedSingleFlight } from "../internal/keyed-single-flight";
+import {
+  createSubscriptionIterator,
+  type SubscriptionIteratorOptions,
+} from "../internal/subscription-iterator";
 
 type KvConnectionPort = RequestPort &
   DisconnectListenerPort &
@@ -48,6 +52,10 @@ type KvSubscriptionState = { subId: bigint; handlers: Map<number, KvHandler> };
 export interface KvClient {
   begin(route: string, options: KvBeginOptions): Promise<KvTransaction>;
   subscribe(pattern: string, handler: KvHandler): Promise<KvSubscription>;
+  subscribeIterator(
+    pattern: string,
+    options?: SubscriptionIteratorOptions,
+  ): AsyncIterable<KvNotification>;
 }
 
 export function createKvClient(connection: KvConnectionPort): KvClient {
@@ -174,9 +182,16 @@ export function createKvClient(connection: KvConnectionPort): KvClient {
     return createKvSubscription(state.subId, pattern, async () => unsubscribe(pattern, handlerId));
   };
 
+  const subscribeIterator = (
+    pattern: string,
+    iteratorOptions?: SubscriptionIteratorOptions,
+  ): AsyncIterable<KvNotification> =>
+    createSubscriptionIterator((handler) => subscribe(pattern, handler), iteratorOptions);
+
   return {
     begin,
     subscribe,
+    subscribeIterator,
   };
 }
 

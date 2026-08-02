@@ -394,32 +394,24 @@ describe("Connection", () => {
     await connection.close();
   });
 
-  it("retries reconnect when a restore listener fails", async () => {
+  it("should authenticate the reconnected session when a restore listener fails", async () => {
     const first = new FakeTransport();
     const second = new FakeTransport();
-    const third = new FakeTransport();
-    const factory = vi
-      .fn<() => Transport>()
-      .mockReturnValueOnce(first)
-      .mockReturnValueOnce(second)
-      .mockReturnValueOnce(third);
-    let restoreAttempts = 0;
+    const factory = vi.fn<() => Transport>().mockReturnValueOnce(first).mockReturnValueOnce(second);
+    const restore = vi.fn(async () => {
+      throw new Error("restore failed");
+    });
 
     const connection = createConnection(factory, async () => "jwt-token", {
       authSettleDelayMs: 0,
       reconnect: {
         enabled: true,
-        maxAttempts: 2,
+        maxAttempts: 1,
         backoffMs: 0,
         maxBackoffMs: 0,
       },
     });
-    connection.onReconnect(async () => {
-      restoreAttempts += 1;
-      if (restoreAttempts === 1) {
-        throw new Error("restore failed");
-      }
-    });
+    connection.onReconnect(restore);
 
     await connection.connect();
     await confirmSession(connection, first);
@@ -427,8 +419,8 @@ describe("Connection", () => {
 
     await vi.waitFor(() => {
       expect(connection.isConnected()).toBe(true);
-      expect(factory).toHaveBeenCalledTimes(3);
-      expect(restoreAttempts).toBe(2);
+      expect(factory).toHaveBeenCalledTimes(2);
+      expect(restore).toHaveBeenCalledTimes(1);
     });
 
     await connection.close();
@@ -572,7 +564,7 @@ describe("Connection", () => {
     await connection.connect();
 
     const subscriptionPromise = notice.subscribe("notice://realm/area/resource", async (msg) => {
-      received.push(Buffer.from(msg.body).toString());
+      received.push(new TextDecoder().decode(msg.body));
     });
 
     await vi.waitFor(() => {
@@ -607,7 +599,7 @@ describe("Connection", () => {
         encodeNoticeNotification(
           2n,
           "notice://realm/area/resource",
-          Buffer.from("after-reconnect"),
+          new TextEncoder().encode("after-reconnect"),
         ),
       ),
     );
@@ -861,7 +853,7 @@ describe("Connection", () => {
     expect(factory).toHaveBeenCalledTimes(1);
   });
 
-  it("treats a late close before the first server frame as inferred auth rejection", async () => {
+  it("should reconnect after a settled session drops before the first server frame", async () => {
     const first = new FakeTransport();
     const second = new FakeTransport();
     const events: FitzLifecycleEvent[] = [];
@@ -882,18 +874,17 @@ describe("Connection", () => {
     });
 
     await connection.connect();
-    first.fail(new Error("server closed during silent auth"));
+    first.fail(new Error("network lost after silent auth settled"));
 
     await vi.waitFor(() => {
-      expect(connection.getState()).toBe("CLOSED");
-      expect(factory).toHaveBeenCalledTimes(1);
+      expect(connection.isConnected()).toBe(true);
+      expect(factory).toHaveBeenCalledTimes(2);
     });
 
-    await expect(connection.waitUntilReady(undefined, 1)).rejects.toBeInstanceOf(
-      AuthenticationError,
-    );
-    expect(second.connected).toBe(false);
-    expect(events.some((event) => event.event === "auth_rejected")).toBe(true);
+    expect(second.connected).toBe(true);
+    expect(events.some((event) => event.event === "auth_rejected")).toBe(false);
+
+    await connection.close();
   });
 
   it("returns to DISCONNECTED after a transport dial failure so callers can retry", async () => {

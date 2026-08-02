@@ -33,6 +33,10 @@ import { ScheduleError } from "../../core/errors";
 import { isRegistrationPatternShape, isRouteShape } from "../_routes";
 import { restoreMapEntriesAtomically } from "../internal/restore";
 import { createKeyedSingleFlight } from "../internal/keyed-single-flight";
+import {
+  createSubscriptionIterator,
+  type SubscriptionIteratorOptions,
+} from "../internal/subscription-iterator";
 
 type ScheduleSubscriptionState = {
   subId: bigint;
@@ -59,6 +63,10 @@ export interface ScheduleClient {
     options?: { signal?: AbortSignal },
   ): AsyncIterable<ScheduleNotification>;
   subscribe(pattern: string, handler: ScheduleHandler): Promise<ScheduleSubscription>;
+  subscribeIterator(
+    pattern: string,
+    options?: SubscriptionIteratorOptions,
+  ): AsyncIterable<ScheduleNotification>;
 }
 
 export function createScheduleClient(connection: ScheduleConnectionPort): ScheduleClient {
@@ -172,6 +180,12 @@ export function createScheduleClient(connection: ScheduleConnectionPort): Schedu
     const subId = await registerSingleFlight(pattern, () => subscribeWire(pattern));
     return addLocalSubscription(pattern, subId, handler);
   };
+
+  const subscribeIterator = (
+    pattern: string,
+    iteratorOptions?: SubscriptionIteratorOptions,
+  ): AsyncIterable<ScheduleNotification> =>
+    createSubscriptionIterator((handler) => subscribe(pattern, handler), iteratorOptions);
 
   const subscribeWire = async (pattern: string, request = requestFrame): Promise<bigint> => {
     const response = await request(MSG_SCHEDULE_SUBSCRIBE, ScheduleCodec.encodeSubscribe(pattern));
@@ -331,6 +345,7 @@ export function createScheduleClient(connection: ScheduleConnectionPort): Schedu
     cancel,
     list,
     subscribe,
+    subscribeIterator,
     waitForNotifications,
   };
 }

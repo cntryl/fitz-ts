@@ -262,6 +262,7 @@ describe("Subscription Multiplexing", () => {
 
     await connection.reconnect();
     expect(connection.countRequests(MSG_NOTICE_SUBSCRIBE)).toBe(2);
+    expect(second.subId).toBe(12n);
 
     connection.emitNotification(
       MSG_NOTICE_NOTIFY,

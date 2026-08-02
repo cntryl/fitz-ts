@@ -26,6 +26,10 @@ import { createBufferReader } from "../../core/buffer";
 import { parseStandardResponse } from "../../protocol/response";
 import { NoticeCodec } from "./codec";
 import { createNoticeSubscription, NoticeHandler, NoticeMsg, NoticeSubscription } from "./types";
+import {
+  createSubscriptionIterator,
+  type SubscriptionIteratorOptions,
+} from "../internal/subscription-iterator";
 
 type NoticeSubscriptionState = {
   subId: bigint;
@@ -43,6 +47,10 @@ type NoticeConnectionPort = RequestPort &
 export interface NoticeClient {
   publish(route: string, body: Uint8Array): Promise<void>;
   subscribe(pattern: string, handler: NoticeHandler): Promise<NoticeSubscription>;
+  subscribeIterator(
+    pattern: string,
+    options?: SubscriptionIteratorOptions,
+  ): AsyncIterable<NoticeMsg>;
 }
 
 export function createNoticeClient(connection: NoticeConnectionPort): NoticeClient {
@@ -102,6 +110,12 @@ export function createNoticeClient(connection: NoticeConnectionPort): NoticeClie
     return addLocalSubscription(pattern, subId, handler);
   };
 
+  const subscribeIterator = (
+    pattern: string,
+    iteratorOptions?: SubscriptionIteratorOptions,
+  ): AsyncIterable<NoticeMsg> =>
+    createSubscriptionIterator((handler) => subscribe(pattern, handler), iteratorOptions);
+
   const subscribeWire = async (pattern: string, request = requestFrame): Promise<bigint> => {
     const payload = NoticeCodec.encodeSubscribe(pattern);
     const response = await request(MSG_NOTICE_SUBSCRIBE, payload);
@@ -135,9 +149,13 @@ export function createNoticeClient(connection: NoticeConnectionPort): NoticeClie
 
     subscription.handlers.set(handlerId, handler);
     flushPendingNotifications(subId);
-    return createNoticeSubscription(subId, pattern, async (_subId: bigint) => {
-      await unsubscribe(pattern, handlerId);
-    });
+    return createNoticeSubscription(
+      () => subscriptionsByPattern.get(pattern)?.subId ?? subId,
+      pattern,
+      async () => {
+        await unsubscribe(pattern, handlerId);
+      },
+    );
   };
 
   const unsubscribe = async (pattern: string, handlerId: number): Promise<void> => {
@@ -235,6 +253,7 @@ export function createNoticeClient(connection: NoticeConnectionPort): NoticeClie
   return {
     publish,
     subscribe,
+    subscribeIterator,
   };
 }
 

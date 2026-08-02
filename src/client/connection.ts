@@ -920,10 +920,7 @@ export function createConnection(
   };
 
   const isUnconfirmedSessionLoss = (): boolean => {
-    return (
-      !sessionConfirmed &&
-      (state === ConnectionState.Authenticating || state === ConnectionState.Authenticated)
-    );
+    return !sessionConfirmed && state === ConnectionState.Authenticating;
   };
 
   const createInferredAuthenticationError = (error: unknown): AuthenticationError => {

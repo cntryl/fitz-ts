@@ -337,4 +337,19 @@ describe("KvClient", () => {
     await expect(tx.rollback()).resolves.toBeUndefined();
     expect(tx.isOpen()).toBe(false);
   });
+
+  it("should roll back an open transaction when asynchronously disposed", async () => {
+    // Arrange
+    const connection = new FakeKvConnection();
+    const client = createKvClient(connection);
+    const tx = await client.begin("kv://realm/area/resource", { durability: "Sync" });
+    connection.respond(MSG_KV_ROLLBACK, new Uint8Array([0]));
+
+    // Act
+    await tx[Symbol.asyncDispose]();
+
+    // Assert
+    expect(tx.isOpen()).toBe(false);
+    expect(connection.lastRequest?.messageType).toBe(MSG_KV_ROLLBACK);
+  });
 });

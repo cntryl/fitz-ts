@@ -23,6 +23,10 @@ import {
 import { isRouteShape } from "../_routes";
 import { restoreMapEntriesAtomically } from "../internal/restore";
 import { createKeyedSingleFlight } from "../internal/keyed-single-flight";
+import {
+  createSubscriptionIterator,
+  type SubscriptionIteratorOptions,
+} from "../internal/subscription-iterator";
 import { LeaseCodec } from "./codec";
 import { createBufferReader } from "../../core/buffer";
 import { parseStandardResponse } from "../../protocol/response";
@@ -61,6 +65,10 @@ export interface LeaseClient {
   ): Promise<T>;
   query(route: string): Promise<LeaseInfo>;
   subscribe(route: string, handler: ChangeHandler): Promise<LeaseSubscription>;
+  subscribeIterator(
+    route: string,
+    options?: SubscriptionIteratorOptions,
+  ): AsyncIterable<ChangeNotification>;
 }
 
 export function createLeaseClient(connection: LeaseConnectionPort): LeaseClient {
@@ -241,6 +249,15 @@ export function createLeaseClient(connection: LeaseConnectionPort): LeaseClient 
     return addLocalSubscription(route, subId, handler);
   };
 
+  const subscribeIterator = (
+    route: string,
+    iteratorOptions?: SubscriptionIteratorOptions,
+  ): AsyncIterable<ChangeNotification> =>
+    createSubscriptionIterator(
+      (handler) => subscribe(route, async (notification) => handler(notification)),
+      iteratorOptions,
+    );
+
   const subscribeWire = async (route: string, request = requestFrame): Promise<bigint> => {
     const payload = LeaseCodec.encodeSubscribe(route);
     const parsed = parseStandardResponse(await request(MSG_LEASE_SUBSCRIBE, payload));
@@ -330,6 +347,7 @@ export function createLeaseClient(connection: LeaseConnectionPort): LeaseClient 
     withLease,
     query,
     subscribe,
+    subscribeIterator,
   };
 }
 

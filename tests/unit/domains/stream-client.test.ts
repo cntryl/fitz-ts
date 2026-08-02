@@ -167,6 +167,20 @@ describe("StreamClient", () => {
     expect(session.isOpen()).toBe(false);
   });
 
+  it("should roll back an open stream session when asynchronously disposed", async () => {
+    // Arrange
+    const connection = new FakeStreamConnection("success");
+    const client = createStreamClient(connection as unknown as Connection);
+    const session = await client.begin("stream://realm/area/resource");
+    connection.respond(MSG_STREAM_ROLLBACK, new Uint8Array([0]));
+
+    // Act
+    await session[Symbol.asyncDispose]();
+
+    // Assert
+    expect(session.isOpen()).toBe(false);
+  });
+
   it("encodes read filter options", async () => {
     const connection = new FakeStreamConnection("success");
     const client = createStreamClient(connection as unknown as Connection);
@@ -239,7 +253,7 @@ describe("StreamClient", () => {
     const records = await client.read("stream://realm/area/resource", 4n, 10);
     expect(records).toHaveLength(1);
     expect(records[0].offset).toBe(4n);
-    expect(Buffer.from(records[0].body).toString("hex")).toBe("010203");
+    expect(Array.from(records[0].body)).toEqual([1, 2, 3]);
   });
 });
 

@@ -1,6 +1,7 @@
 import {
   ConnectionError,
   FitzError,
+  RequestQueueFullError,
   TimeoutError,
   TransportError,
   isRetryable,
@@ -72,6 +73,7 @@ export function isTransientRetryError(error: unknown): boolean {
     error instanceof TimeoutError ||
     error instanceof TransportError ||
     error instanceof ConnectionError ||
+    error instanceof RequestQueueFullError ||
     isRetryable(error)
   );
 }

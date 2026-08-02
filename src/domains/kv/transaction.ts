@@ -2,6 +2,8 @@
  * KV transaction wrapper.
  */
 
+import "../../core/async-dispose";
+
 import type { DisconnectListenerPort, RequestPort, RetryExecutionPort } from "../base";
 import type { RetryOperation } from "../../client/resilience";
 import { KvCodec } from "./codec";
@@ -208,6 +210,10 @@ export function createKvTransaction(
 
   const isOpen = (): boolean => !closed;
 
+  const asyncDispose = async (): Promise<void> => {
+    await rollback();
+  };
+
   return {
     put,
     insert,
@@ -220,5 +226,6 @@ export function createKvTransaction(
     rollback,
     getTxId,
     isOpen,
+    [Symbol.asyncDispose]: asyncDispose,
   };
 }

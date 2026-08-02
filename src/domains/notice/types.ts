@@ -22,16 +22,18 @@ export type NoticeHandler = (msg: NoticeMsg) => Promise<void> | void;
 export type NoticeSubscription = ReturnType<typeof createNoticeSubscription>;
 
 export function createNoticeSubscription(
-  subId: bigint,
+  getSubId: () => bigint,
   pattern: string,
-  unsubscribeFn: (subId: bigint) => Promise<void>,
+  unsubscribeFn: () => Promise<void>,
 ) {
   const unsubscribe = async (): Promise<void> => {
-    await unsubscribeFn(subId);
+    await unsubscribeFn();
   };
 
   return {
-    subId,
+    get subId(): bigint {
+      return getSubId();
+    },
     pattern,
     unsubscribe,
   };

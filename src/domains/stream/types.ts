@@ -6,6 +6,8 @@
  * 3. Commit() or Rollback() to finalize
  */
 
+import "../../core/async-dispose";
+
 /**
  * Stream record with offset, timestamp, and payload
  */
@@ -164,6 +166,7 @@ export interface StreamSession {
    * Check if session is still open
    */
   isOpen(): boolean;
+  [Symbol.asyncDispose](): Promise<void>;
 }
 
 /**

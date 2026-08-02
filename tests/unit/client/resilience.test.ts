@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 
 import { createConnection } from "../../../src/client/connection";
+import { shouldRetryOperation } from "../../../src/client/resilience";
 import { ConnectionError, RequestQueueFullError } from "../../../src/core/errors";
 import { Frame, FrameCodec } from "../../../src/frame/codec";
 import { MSG_LEASE_QUERY, MSG_QUEUE_ENQUEUE } from "../../../src/frame/types";
@@ -269,6 +270,10 @@ describe("Connection resilience", () => {
       ConnectionError,
     );
     await connection.close();
+  });
+
+  it("should retry replayable reads after local request queue backpressure", () => {
+    expect(shouldRetryOperation("replayable_read", new RequestQueueFullError())).toBe(true);
   });
 
   it("retries a replayable read after transient transport loss", async () => {
