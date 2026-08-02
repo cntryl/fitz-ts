@@ -6,6 +6,8 @@ The format is based on Keep a Changelog and the project follows Semantic Version
 
 ## [Unreleased]
 
+## [0.0.13] - 2026-08-01
+
 ### Changed
 
 - Breaking: domain accessors are readonly lazy properties (`client.kv`, `client.queue`, `client.rpc`, `client.lease`, `client.notice`, `client.stream`, and `client.schedule`) instead of methods.
