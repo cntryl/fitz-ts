@@ -304,10 +304,12 @@ describe("Transport integration", () => {
         const nextPromise = iterator.next();
 
         await sleep(100);
-        await worker.client().close();
+        const nextResult = expect(nextPromise).rejects.toHaveProperty("name", "AbortError");
+        const closePromise = worker.client().close();
         controller.abort();
+        await closePromise;
 
-        await expect(nextPromise).rejects.toHaveProperty("name", "AbortError");
+        await nextResult;
         await sleep(300);
         expect(warn).not.toHaveBeenCalled();
         expect(error).not.toHaveBeenCalled();

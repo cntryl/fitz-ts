@@ -4,11 +4,23 @@ All notable changes to this project will be documented in this file.
 
 The format is based on Keep a Changelog and the project follows Semantic Versioning.
 
-## [Unreleased]
+## [0.0.14] - 2026-08-03
+
+### Added
+
+- Abort-aware async iterator subscription APIs for KV, Lease, Notice, and Schedule that unsubscribe when iteration ends.
+- Async disposal for KV transactions and Stream sessions, with automatic rollback of open work.
 
 ### Changed
 
 - Breaking: `ScheduleDeliveryMode` now uses `"Broadcast" | "Single"`. The wire values remain `0` and `1`; callers should replace lowercase mode literals with the PascalCase forms.
+- Reconnect listener failures are reported through observability and isolated so one domain restore failure does not prevent the reconnected session from becoming usable.
+
+### Fixed
+
+- Reconnect established sessions after transport loss instead of inferring an authentication rejection before the next server frame.
+- Retry replayable reads after local request-queue backpressure.
+- Keep Notice subscription IDs synchronized after broker re-registration.
 
 ## [0.0.13] - 2026-08-01
 
