@@ -82,6 +82,12 @@ contractual.
   `lease://realm/area/resource` route.
 - Every notification carries its exact concrete route. Queue availability
   notifications also carry ready, delayed, and inflight counts.
+- Queue reserve and Stream read/last selectors use the same whole-segment pattern
+  contract as subscriptions. Every reserved Queue item and every Stream read or
+  last item carries the exact concrete matched route; Stream event records carry
+  it as well. Route-less reserve/read/last responses are not supported. If any item
+  contains an invalid concrete route, the entire response fails closed; the
+  client never returns a partial reservation or read batch.
 
 ## Packaging
 

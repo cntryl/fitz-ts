@@ -203,6 +203,7 @@ function encodeWrappedReadResponse(
   const data = createBufferWriter(128);
   data.writeU32BE(items.length);
   for (const item of items) {
+    data.writeRoute("stream://realm/area/resource");
     data.writeBytes(item);
   }
   data.writeU64BE(lastOffset);

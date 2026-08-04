@@ -5,6 +5,7 @@
 import { describe, it, expect } from "vite-plus/test";
 import { QueueCodec } from "../../../src/domains/queue/codec";
 import { createBufferReader, createBufferWriter } from "../../../src/core/buffer";
+import { QueueError } from "../../../src/core/errors";
 import { testData } from "../helpers/test-utils";
 
 describe("QueueCodec", () => {
@@ -110,6 +111,7 @@ describe("QueueCodec", () => {
       const writer = createBufferWriter(256);
       writer.writeU8(0); // status
       writer.writeU32BE(1); // leaseCount = 1
+      writer.writeRoute("queue://prod/app/tasks");
       writer.writeU64BE(100n); // itemId
       writer.writeU64BE(777n); // token
       writer.writeU32BE(testData('{"msg": "hello"}').length);
@@ -126,8 +128,27 @@ describe("QueueCodec", () => {
         throw new Error("Expected reserve items");
       }
       expect(items).toHaveLength(1);
+      expect(items[0].route).toBe("queue://prod/app/tasks");
       expect(items[0].id).toBe(100n);
       expect(items[0].token).toBe(777n);
+    });
+
+    it("should_reject_wildcard_route_in_reserve_response", () => {
+      const writer = createBufferWriter(128);
+      writer.writeU8(0);
+      writer.writeU32BE(1);
+      writer.writeRoute("queue://*/app/*");
+      writer.writeU64BE(100n);
+      writer.writeU64BE(777n);
+      writer.writeU32BE(0);
+
+      try {
+        QueueCodec.decodeReserveResponse(writer.getBuffer());
+        throw new Error("expected decode to fail");
+      } catch (error) {
+        expect(error).toBeInstanceOf(QueueError);
+        expect((error as QueueError).code).toBe("QUEUE_RESERVE_INVALID_RESPONSE");
+      }
     });
 
     it("should_decode_reserve_error_response_with_error_code", () => {

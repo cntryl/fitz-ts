@@ -959,7 +959,7 @@ describe(`Fitz conformance — fitz-ts [transport=${TRANSPORT}, auth=${AUTH_MODE
         expect(records).toHaveLength(1);
         expect(records[0].offset).toBe(firstOffset);
         expect(Buffer.from(records[0].body).toString()).toBe("alpha");
-        evidence.push("compatibility read returned only the matching discriminator record");
+        evidence.push("event-only read returned only the matching discriminator record");
 
         const page = await client.stream.readPage(route, 0n, 10, { filter });
         expect(page.items).toHaveLength(2);

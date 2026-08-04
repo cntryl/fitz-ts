@@ -12,6 +12,7 @@ import "../../core/async-dispose";
  * Stream record with offset, timestamp, and payload
  */
 export interface StreamRecord {
+  route: string;
   offset: bigint;
   timestamp: bigint;
   body: Uint8Array;
@@ -67,17 +68,20 @@ export interface StreamReadCursor {
 
 export interface StreamReadEvent {
   kind: "event";
+  route: string;
   record: StreamRecord;
 }
 
 export interface StreamReadFiltered {
   kind: "filtered";
+  route: string;
   offset: bigint;
   reason?: StreamFilteredReason;
 }
 
 export interface StreamReadFilteredRange {
   kind: "filtered_range";
+  route: string;
   fromOffset: bigint;
   toOffset: bigint;
   reason?: StreamFilteredReason;

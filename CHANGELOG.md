@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on Keep a Changelog and the project follows Semantic Versioning.
 
+## [Unreleased]
+
+### Changed
+
+- Breaking: Queue reserve, Stream read, and Stream last responses now require a concrete route for every returned item. `QueueItem`, `StreamReadItem`, and `StreamRecord` expose that route, and Queue reserves plus Stream reads/peeks accept any whole-segment pattern capable of matching three segments.
+
 ## [0.0.14] - 2026-08-03
 
 ### Added

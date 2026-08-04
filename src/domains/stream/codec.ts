@@ -15,6 +15,8 @@ import {
   type BufferReader,
   type BufferWriter,
 } from "../../core/buffer";
+import { StreamError } from "../../core/errors";
+import { isRouteShape } from "../_routes";
 import {
   StreamCommitMode,
   StreamCommitPayload,
@@ -245,7 +247,14 @@ export const StreamCodec = {
     const items: StreamReadItem[] = [];
 
     for (let i = 0; i < count; i++) {
-      items.push(this.decodeStreamReadItem(reader));
+      const concreteRoute = reader.readRoute();
+      if (!isRouteShape(concreteRoute, "stream", 3)) {
+        throw new StreamError(
+          `READ response contains invalid concrete stream route: ${concreteRoute}`,
+          "READ_INVALID_RESPONSE",
+        );
+      }
+      items.push(this.decodeStreamReadItem(reader, concreteRoute));
     }
 
     const cursor: StreamReadCursor = {
@@ -284,7 +293,17 @@ export const StreamCodec = {
     }
 
     const reader = createBufferReader(decoded.data);
-    const record = this.decodeStreamRecord(reader);
+    const concreteRoute = reader.readRoute();
+    if (!isRouteShape(concreteRoute, "stream", 3)) {
+      throw new StreamError(
+        `LAST response contains invalid concrete stream route: ${concreteRoute}`,
+        "LAST_INVALID_RESPONSE",
+      );
+    }
+    const record = this.decodeStreamRecord(reader, concreteRoute);
+    if (!reader.isEOF()) {
+      throw new StreamError("LAST response has trailing bytes", "LAST_INVALID_RESPONSE");
+    }
 
     return { status: decoded.status, record };
   },
@@ -373,7 +392,7 @@ export const StreamCodec = {
     };
   },
 
-  decodeStreamRecord(reader: BufferReader): StreamRecord {
+  decodeStreamRecord(reader: BufferReader, route: string): StreamRecord {
     const offset = reader.readU64BE();
     const areaOffset = reader.readOptionalU64();
     const realmOffset = reader.readOptionalU64();
@@ -382,6 +401,7 @@ export const StreamCodec = {
     const timestamp = reader.readU64BE();
 
     return {
+      route,
       offset,
       timestamp,
       body,
@@ -395,20 +415,26 @@ export const StreamCodec = {
     return items.flatMap((item) => (item.kind === "event" ? [item.record] : []));
   },
 
-  decodeStreamReadItem(reader: BufferReader): StreamReadItem {
+  decodeStreamReadItem(reader: BufferReader, route: string): StreamReadItem {
     const tag = reader.readU8();
     switch (tag) {
       case 0:
-        return { kind: "event", record: this.decodeStreamRecord(reader) };
+        return {
+          kind: "event",
+          route,
+          record: this.decodeStreamRecord(reader, route),
+        };
       case 1:
         return {
           kind: "filtered",
+          route,
           offset: reader.readU64BE(),
           reason: this.decodeStreamFilteredReason(reader),
         };
       case 2:
         return {
           kind: "filtered_range",
+          route,
           fromOffset: reader.readU64BE(),
           toOffset: reader.readU64BE(),
           reason: this.decodeStreamFilteredReason(reader),

@@ -180,10 +180,10 @@ describe("route validation", () => {
     const client = createQueueClient(connection as unknown as Connection);
 
     await expectRouteValidationFailure(
-      client.reserve("queue://example/area/**", 30),
+      client.reserve("queue://example/area/bad*", 30),
       QueueError,
       "QUEUE_INVALID_ROUTE",
-      "expected queue://",
+      "whole-segment pattern",
     );
     expect(connection.lastRequest).toBeNull();
   });
@@ -303,7 +303,7 @@ describe("route validation", () => {
     expect(connection.lastRequest).toBeNull();
   });
 
-  it("should reject legacy schedule route arity given a three-segment route when validation runs", async () => {
+  it("should reject obsolete schedule route arity given a three-segment route when validation runs", async () => {
     const connection = new FakeConnection(new Uint8Array([0]));
     const client = createScheduleClient(connection as unknown as Connection);
 

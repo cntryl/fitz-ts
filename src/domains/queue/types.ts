@@ -67,6 +67,7 @@ export function createQueueItem(
   };
 
   return {
+    route,
     body,
     extend,
     complete,
@@ -151,6 +152,7 @@ export interface QueueEnqueueResponse {
 export interface QueueReserveResponse {
   status: number;
   items?: Array<{
+    route: string;
     id: bigint;
     token: bigint;
     body: Uint8Array;

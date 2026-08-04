@@ -11,6 +11,8 @@ import {
   type BufferReader,
 } from "../../core/buffer";
 import { parseStandardResponse } from "../../protocol/response";
+import { QueueError } from "../../core/errors";
+import { isRouteShape } from "../_routes";
 import {
   QueueEnqueueResponse,
   QueueReserveResponse,
@@ -106,7 +108,7 @@ export const QueueCodec = {
 
   /**
    * Decode RESERVE response.
-   * Payload: [status: u8][lease_count: u32]([message_id: u64][lease_token: u64][body_len: u32][body: bytes] ...)
+   * Payload: [status: u8][lease_count: u32]([route: string][message_id: u64][lease_token: u64][body_len: u32][body: bytes] ...)
    */
   decodeReserveResponse(payload: Uint8Array): QueueReserveResponse {
     const response = parseQueueResponse(payload);
@@ -120,15 +122,22 @@ export const QueueCodec = {
     }
 
     const leaseCount = reader.readU32BE();
-    const items: Array<{ id: bigint; token: bigint; body: Uint8Array }> = [];
+    const items: Array<{ route: string; id: bigint; token: bigint; body: Uint8Array }> = [];
 
     for (let i = 0; i < leaseCount; i++) {
+      const route = reader.readRoute();
+      if (!isRouteShape(route, "queue", 3)) {
+        throw new QueueError(
+          `RESERVE response contains invalid concrete queue route: ${route}`,
+          "RESERVE_INVALID_RESPONSE",
+        );
+      }
       const id = reader.readU64BE();
       const token = reader.readU64BE();
       const bodyLen = reader.readU32BE();
       const body = reader.readBytes(bodyLen);
 
-      items.push({ id, token, body });
+      items.push({ route, id, token, body });
     }
 
     return { status: 0, items };

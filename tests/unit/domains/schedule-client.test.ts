@@ -58,7 +58,7 @@ describe("ScheduleClient route validation", () => {
     expect(connection.requestCalls).toHaveLength(1);
   });
 
-  it("rejects legacy three-segment routes in create before sending", async () => {
+  it("rejects obsolete three-segment routes in create before sending", async () => {
     const connection = new FakeScheduleConnection();
     const client = createScheduleClient(connection);
 

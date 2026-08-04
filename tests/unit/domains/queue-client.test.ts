@@ -66,11 +66,33 @@ class FakeQueueConnection {
 }
 
 describe("QueueClient reserveWhenAvailable", () => {
+  it("returns each concrete queue route given a wildcard reserve selector", async () => {
+    const connection = new FakeQueueConnection();
+    connection.reserveResponses.push(
+      encodeQueueReserveResponse([
+        {
+          route: "queue://acme/cats/cat",
+          id: 1n,
+          token: 2n,
+          body: new Uint8Array([3]),
+        },
+      ]),
+    );
+    const client = createQueueClient(connection);
+
+    const items = await client.reserve("queue://*/cats/*", 30, 1);
+
+    expect(items).toHaveLength(1);
+    expect(items[0].route).toBe("queue://acme/cats/cat");
+  });
+
   it("reserves before waiting and wakes after an empty reserve", async () => {
     const connection = new FakeQueueConnection();
     connection.reserveResponses.push(
       encodeQueueReserveResponse([]),
-      encodeQueueReserveResponse([{ id: 1n, token: 2n, body: new Uint8Array([3]) }]),
+      encodeQueueReserveResponse([
+        { route: "queue://realm/area/resource", id: 1n, token: 2n, body: new Uint8Array([3]) },
+      ]),
     );
     const client = createQueueClient(connection);
     const iterator = client
@@ -102,7 +124,9 @@ describe("QueueClient reserveWhenAvailable", () => {
     const connection = new FakeQueueConnection();
     connection.reserveResponses.push(
       encodeQueueReserveResponse([]),
-      encodeQueueReserveResponse([{ id: 1n, token: 2n, body: new Uint8Array([4]) }]),
+      encodeQueueReserveResponse([
+        { route: "queue://realm/area/resource", id: 1n, token: 2n, body: new Uint8Array([4]) },
+      ]),
     );
     connection.onReserve = () => {
       if (
@@ -129,7 +153,9 @@ describe("QueueClient reserveWhenAvailable", () => {
     const connection = new FakeQueueConnection();
     connection.reserveResponses.push(
       encodeQueueReserveResponse([]),
-      encodeQueueReserveResponse([{ id: 1n, token: 2n, body: new Uint8Array([5]) }]),
+      encodeQueueReserveResponse([
+        { route: "queue://realm/area/resource", id: 1n, token: 2n, body: new Uint8Array([5]) },
+      ]),
     );
     const client = createQueueClient(connection);
     const iterator = client
@@ -190,12 +216,13 @@ function encodeQueueSubscribeResponse(subId: bigint): Uint8Array {
 }
 
 function encodeQueueReserveResponse(
-  items: Array<{ id: bigint; token: bigint; body: Uint8Array }>,
+  items: Array<{ route: string; id: bigint; token: bigint; body: Uint8Array }>,
 ): Uint8Array {
   const writer = createBufferWriter(64);
   writer.writeU8(0);
   writer.writeU32BE(items.length);
   for (const item of items) {
+    writer.writeRoute(item.route);
     writer.writeU64BE(item.id);
     writer.writeU64BE(item.token);
     writer.writeU32BE(item.body.length);

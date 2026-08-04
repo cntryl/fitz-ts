@@ -6,6 +6,7 @@
 
 import { describe, it, expect } from "vite-plus/test";
 import { StreamCodec } from "../../../src/domains/stream/codec";
+import { StreamError } from "../../../src/core/errors";
 import {
   createBufferReader,
   createBufferWriter,
@@ -70,6 +71,7 @@ function encodeReadResponse(
   const data = createBufferWriter(512);
   data.writeU32BE(items.length);
   for (const item of items) {
+    data.writeRoute(item.route);
     switch (item.kind) {
       case "event":
         data.writeU8(0);
@@ -121,12 +123,15 @@ function writeFilteredReason(
   }
 }
 
-function encodeLastResponse(record: Uint8Array): Uint8Array {
+function encodeLastResponse(route: string, record: Uint8Array): Uint8Array {
+  const data = createBufferWriter(route.length + record.length + 8);
+  data.writeString(route);
+  data.writeBytes(record);
   const writer = createBufferWriter(320);
   writer.writeU8(0);
   writer.writeU8(0);
-  writer.writeU32BE(record.length);
-  writer.writeBytes(record);
+  writer.writeU32BE(data.getLength());
+  writer.writeBytes(data.getBuffer());
   return writer.getBuffer();
 }
 
@@ -426,7 +431,9 @@ describe("StreamCodec", () => {
         clauses: [{ kind: "Equals", value: "proj.alpha" }],
       };
 
-      const encoded = StreamCodec.encodeRead("stream://test/events", 0n, 10, { filter });
+      const encoded = StreamCodec.encodeRead("stream://test/events", 0n, 10, {
+        filter,
+      });
       const reader = createBufferReader(encoded);
 
       expect(reader.readRoute()).toBe("stream://test/events");
@@ -448,7 +455,9 @@ describe("StreamCodec", () => {
         [
           {
             kind: "event",
+            route: "stream://prod/app/record-1",
             record: {
+              route: "stream://prod/app/record-1",
               offset: 100n,
               areaOffset: 200n,
               realmOffset: 300n,
@@ -459,7 +468,9 @@ describe("StreamCodec", () => {
           },
           {
             kind: "event",
+            route: "stream://prod/app/record-2",
             record: {
+              route: "stream://prod/app/record-2",
               offset: 101n,
               areaOffset: 201n,
               realmOffset: 301n,
@@ -526,11 +537,13 @@ describe("StreamCodec", () => {
         [
           {
             kind: "filtered",
+            route: "stream://prod/app/record-1",
             offset: 44n,
             reason: "server_filter",
           },
           {
             kind: "filtered_range",
+            route: "stream://prod/app/record-2",
             fromOffset: 45n,
             toOffset: 48n,
             reason: "server_filter",
@@ -547,11 +560,13 @@ describe("StreamCodec", () => {
       expect(decoded.items).toHaveLength(2);
       expect(decoded.items[0]).toEqual({
         kind: "filtered",
+        route: "stream://prod/app/record-1",
         offset: 44n,
         reason: "server_filter",
       });
       expect(decoded.items[1]).toEqual({
         kind: "filtered_range",
+        route: "stream://prod/app/record-2",
         fromOffset: 45n,
         toOffset: 48n,
         reason: "server_filter",
@@ -561,12 +576,35 @@ describe("StreamCodec", () => {
         hasMore: true,
       });
     });
+
+    it("should_reject_wildcard_route_in_read_response", () => {
+      const response = encodeReadResponse(
+        [
+          {
+            kind: "filtered",
+            route: "stream://*/app/*",
+            offset: 44n,
+            reason: "server_filter",
+          },
+        ],
+        { lastResourceOffset: 44n, hasMore: false },
+      );
+
+      try {
+        StreamCodec.decodeReadResponse(response);
+        throw new Error("expected decode to fail");
+      } catch (error) {
+        expect(error).toBeInstanceOf(StreamError);
+        expect((error as StreamError).code).toBe("STREAM_READ_INVALID_RESPONSE");
+      }
+    });
   });
 
   describe("LAST decoding", () => {
     it("should_decode_last_response_with_record", () => {
       // Arrange
       const response = encodeLastResponse(
+        "stream://prod/app/events",
         encodeStreamRecord({
           offset: 500n,
           areaOffset: 501n,
@@ -582,9 +620,25 @@ describe("StreamCodec", () => {
 
       // Assert
       expect(decoded.status).toBe(0);
+      expect(decoded.record?.route).toBe("stream://prod/app/events");
       expect(decoded.record?.offset).toBe(500n);
       expect(decoded.record?.timestamp).toBe(999n);
       expect(Buffer.from(decoded.record?.body ?? new Uint8Array()).toString()).toBe("last-record");
+    });
+
+    it("should_reject_wildcard_route_in_last_response", () => {
+      const response = encodeLastResponse(
+        "stream://*/app/events",
+        encodeStreamRecord({
+          offset: 1n,
+          body: testData("invalid"),
+          timestamp: 2n,
+        }),
+      );
+
+      expect(() => StreamCodec.decodeLastResponse(response)).toThrowError(
+        expect.objectContaining({ code: "STREAM_LAST_INVALID_RESPONSE" }),
+      );
     });
   });
 

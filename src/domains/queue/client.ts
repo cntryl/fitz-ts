@@ -22,7 +22,7 @@ import {
   MSG_QUEUE_SUBSCRIBE,
   MSG_QUEUE_UNSUBSCRIBE,
 } from "../../frame/types";
-import { isRegistrationPatternShape, isRouteShape, isSelectorRouteShape } from "../_routes";
+import { isRegistrationPatternShape, isRouteShape } from "../_routes";
 import { restoreMapEntriesAtomically } from "../internal/restore";
 import { createKeyedSingleFlight } from "../internal/keyed-single-flight";
 import { formatStatusName } from "../internal/status";
@@ -237,7 +237,7 @@ export function createQueueClient(connection: QueueConnectionPort): QueueClient 
     checkStatus(decoded, "RESERVE");
 
     return (decoded.items ?? []).map((item) =>
-      createQueueItem(item.id, item.token, item.body, route, connection),
+      createQueueItem(item.id, item.token, item.body, item.route, connection),
     );
   };
 
@@ -439,9 +439,9 @@ function assertQueueRoute(route: string): void {
 }
 
 function assertQueueReserveRoute(route: string): void {
-  if (!isSelectorRouteShape(route, "queue", 3)) {
+  if (!isRegistrationPatternShape(route, "queue", 3)) {
     throw new QueueError(
-      `Invalid queue route: ${route} (expected queue://{realm}/{area}/{resource} or queue://{realm}/{area}/*, no empty segments or wildcards)`,
+      `Invalid queue selector: ${route} (expected a whole-segment pattern capable of matching three segments)`,
       "INVALID_ROUTE",
     );
   }

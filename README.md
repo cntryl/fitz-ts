@@ -120,7 +120,7 @@ const page = await client.stream.readPage("stream://realm/app/events", 0n, 100, 
   maxBytes: 64_000n,
 });
 
-// read() keeps the compatibility projection and returns event records only.
+// read() is the event-only projection of readPage().
 // readPage() exposes synthetic filtered markers and cursor metadata.
 void records;
 void page.cursor.lastResourceOffset;

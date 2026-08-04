@@ -248,7 +248,7 @@ export function createStreamClient(connection: StreamConnectionPort): StreamClie
   };
 
   const peek = async (route: string): Promise<StreamRecord | null> => {
-    assertStreamRoute(route);
+    assertStreamPattern(route);
     return runWithRetry(
       {
         domain: "stream",
