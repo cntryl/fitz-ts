@@ -193,6 +193,7 @@ describe("Subscription Multiplexing", () => {
     const connection = new FakeSubscriptionConnection([
       [MSG_KV_SUBSCRIBE, encodeStatusOnlyResponse()],
       [MSG_KV_SUBSCRIBE, encodeQueueSubIdResponse(7n)],
+      [MSG_KV_SUBSCRIBE, encodeQueueSubIdResponse(8n)],
       [MSG_KV_UNSUBSCRIBE, encodeStatusOnlyResponse()],
     ]);
     const client = createKvClient(connection);
@@ -212,6 +213,9 @@ describe("Subscription Multiplexing", () => {
     expect(first.subId).toBe(7n);
     expect(second.subId).toBe(7n);
     expect(connection.countRequests(MSG_KV_SUBSCRIBE)).toBe(2);
+    await connection.reconnect();
+    expect(first.subId).toBe(8n);
+    expect(second.subId).toBe(8n);
     await first.unsubscribe();
     expect(connection.countRequests(MSG_KV_UNSUBSCRIBE)).toBe(0);
     await second.unsubscribe();
@@ -399,6 +403,8 @@ describe("Subscription Multiplexing", () => {
 
     await connection.reconnect();
     expect(connection.countRequests(MSG_LEASE_SUBSCRIBE)).toBe(2);
+    expect(first.subId).toBe(32n);
+    expect(second.subId).toBe(32n);
 
     connection.emitNotification(MSG_LEASE_NOTIFY, encodeLeaseNotification(32n, route));
     await connection.flushHandlers();
@@ -453,6 +459,8 @@ describe("Subscription Multiplexing", () => {
 
     await connection.reconnect();
     expect(connection.countRequests(MSG_SCHEDULE_SUBSCRIBE)).toBe(2);
+    expect(first.subId).toBe(42n);
+    expect(second.subId).toBe(42n);
 
     connection.emitNotification(
       MSG_SCHEDULE_NOTIFY,

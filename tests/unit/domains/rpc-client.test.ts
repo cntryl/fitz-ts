@@ -30,6 +30,8 @@ class FakeRpcConnection {
   public sendCalls: Array<{ messageType: number; payload: Uint8Array }> = [];
   public lastSignal: AbortSignal | undefined;
   public asyncDispatchAccepted = true;
+  public rpcResponse: Uint8Array = new Uint8Array([0]);
+  public requestError: Error | undefined;
   private state = ConnectionState.Authenticated;
   private readonly disconnectListeners = new Set<() => void>();
   private readonly reconnectListeners = new Set<() => void | Promise<void>>();
@@ -39,6 +41,7 @@ class FakeRpcConnection {
     payload: Uint8Array,
     signal?: AbortSignal,
   ): Promise<Uint8Array> {
+    if (this.requestError) throw this.requestError;
     this.lastRequest = { messageType, payload };
     this.requestCalls.push({ messageType, payload });
     this.lastSignal = signal;
@@ -49,7 +52,7 @@ class FakeRpcConnection {
     }
 
     if (messageType === 300 || messageType === 301) {
-      return new Uint8Array([0]);
+      return this.rpcResponse;
     }
     throw new Error(`Unexpected request message type ${messageType}`);
   }
@@ -306,6 +309,40 @@ describe("RpcClient", () => {
 
     await connection.reconnect();
     expect(connection.countRequests(MSG_RPC_SUBSCRIBE_WORKER)).toBe(1);
+  });
+
+  it("surfaces a typed error when worker unregistration is rejected", async () => {
+    const connection = new FakeRpcConnection();
+    const client = createRpcClient(connection);
+    const subscription = await client.registerWorker(
+      "rpc://realm/area/method",
+      async () => undefined,
+    );
+    const writer = createBufferWriter();
+    writer.writeU8(1);
+    writer.writeU32BE(3002);
+    writer.writeString("worker not found");
+    connection.rpcResponse = writer.getBuffer();
+
+    await expect(subscription.unsubscribe()).rejects.toMatchObject({
+      name: "RpcError",
+      code: "RPC_UNSUBSCRIBE_FAILED",
+      domainCode: 3002,
+    });
+  });
+
+  it("propagates transport errors when worker unregistration fails", async () => {
+    const connection = new FakeRpcConnection();
+    const client = createRpcClient(connection);
+    const subscription = await client.registerWorker(
+      "rpc://realm/area/method",
+      async () => undefined,
+    );
+    connection.requestError = new ConnectionError("connection lost");
+
+    await expect(subscription.unsubscribe()).rejects.toMatchObject({
+      name: "ConnectionError",
+    });
   });
 
   it("should reject worker registration given maxConcurrency outside 1..1024 when subscribe is called", async () => {

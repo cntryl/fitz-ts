@@ -34,11 +34,17 @@ export type KvHandler = (notification: KvNotification) => void | Promise<void>;
 export type KvSubscription = ReturnType<typeof createKvSubscription>;
 
 export function createKvSubscription(
-  subId: bigint,
+  getSubId: () => bigint,
   pattern: string,
   unsubscribeFn: () => Promise<void>,
 ) {
-  return { subId, pattern, unsubscribe: unsubscribeFn };
+  return {
+    get subId(): bigint {
+      return getSubId();
+    },
+    pattern,
+    unsubscribe: unsubscribeFn,
+  };
 }
 
 export interface KvBeginResponse {

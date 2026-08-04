@@ -183,11 +183,11 @@ export function createKvTransaction(
 
   const commit = async (signal?: AbortSignal): Promise<void> => {
     ensureOpen();
+    closed = true;
+    unsubscribeDisconnect();
     const payload = KvCodec.encodeCommit(txId, route);
     const response = await connection.request(MSG_KV_COMMIT, payload, signal);
     checkStatus(KvCodec.decodeStatusResponse(response).status, "COMMIT");
-    closed = true;
-    unsubscribeDisconnect();
   };
 
   const rollback = async (signal?: AbortSignal): Promise<void> => {

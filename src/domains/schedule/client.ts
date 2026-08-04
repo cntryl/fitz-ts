@@ -209,9 +209,13 @@ export function createScheduleClient(connection: ScheduleConnectionPort): Schedu
 
     subscription.handlers.set(handlerId, handler);
     flushPendingNotifications(subId);
-    return createScheduleSubscription(subId, pattern, async () => {
-      await unsubscribe(pattern, handlerId);
-    });
+    return createScheduleSubscription(
+      () => subscriptionsByPattern.get(pattern)?.subId ?? subId,
+      pattern,
+      async () => {
+        await unsubscribe(pattern, handlerId);
+      },
+    );
   };
 
   const unsubscribe = async (pattern: string, handlerId: number): Promise<void> => {

@@ -24,16 +24,18 @@ export type ChangeHandler = (notif: ChangeNotification) => Promise<void>;
 export type LeaseSubscription = ReturnType<typeof createLeaseSubscription>;
 
 export function createLeaseSubscription(
-  subId: bigint,
+  getSubId: () => bigint,
   route: string,
-  unsubscribeFn: (subId: bigint) => Promise<void>,
+  unsubscribeFn: () => Promise<void>,
 ) {
   const unsubscribe = async (): Promise<void> => {
-    await unsubscribeFn(subId);
+    await unsubscribeFn();
   };
 
   return {
-    subId,
+    get subId(): bigint {
+      return getSubId();
+    },
     route,
     unsubscribe,
   };

@@ -179,7 +179,11 @@ export function createKvClient(connection: KvConnectionPort): KvClient {
       }));
     const handlerId = nextHandlerId++;
     state.handlers.set(handlerId, handler);
-    return createKvSubscription(state.subId, pattern, async () => unsubscribe(pattern, handlerId));
+    return createKvSubscription(
+      () => subscriptionsByPattern.get(pattern)?.subId ?? state.subId,
+      pattern,
+      async () => unsubscribe(pattern, handlerId),
+    );
   };
 
   const subscribeIterator = (

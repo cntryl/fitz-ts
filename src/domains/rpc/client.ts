@@ -463,16 +463,14 @@ export function createRpcClient(connection: RpcConnectionPort): RpcClient {
 
   const unregisterWorker = async (route: string): Promise<void> => {
     workers.delete(route);
-
-    try {
-      const payload = RpcCodec.encodeUnsubscribeWorker(route);
-      const parsed = parseStandardResponse(await requestFrame(MSG_RPC_UNSUBSCRIBE_WORKER, payload));
-
-      if (!parsed.success) {
-        return;
-      }
-    } catch {
-      return;
+    const payload = RpcCodec.encodeUnsubscribeWorker(route);
+    const parsed = parseStandardResponse(await requestFrame(MSG_RPC_UNSUBSCRIBE_WORKER, payload));
+    if (!parsed.success) {
+      throw new RpcError(
+        `RPC UNSUBSCRIBE_WORKER failed: ${parsed.error ?? "unknown error"}`,
+        "UNSUBSCRIBE_FAILED",
+        parsed.errorCode,
+      );
     }
   };
 

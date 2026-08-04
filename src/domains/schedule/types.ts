@@ -43,7 +43,7 @@ export type ScheduleHandler = (notification: ScheduleNotification) => void | Pro
 export type ScheduleSubscription = ReturnType<typeof createScheduleSubscription>;
 
 export function createScheduleSubscription(
-  subId: bigint,
+  getSubId: () => bigint,
   pattern: string,
   unsubscribeFn: () => Promise<void>,
 ) {
@@ -52,7 +52,9 @@ export function createScheduleSubscription(
   };
 
   return {
-    subId,
+    get subId(): bigint {
+      return getSubId();
+    },
     pattern,
     unsubscribe,
   };

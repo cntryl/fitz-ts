@@ -320,7 +320,7 @@ describe("KvClient", () => {
     });
   });
 
-  it("leaves a transaction usable after a failed commit", async () => {
+  it("closes a transaction after a failed commit without rolling back during disposal", async () => {
     const connection = new FakeKvConnection();
     const client = createKvClient(connection);
 
@@ -328,14 +328,15 @@ describe("KvClient", () => {
       durability: "Sync",
     });
     connection.respond(MSG_KV_COMMIT, new Uint8Array([3]));
-    connection.respond(MSG_KV_ROLLBACK, new Uint8Array([0]));
 
     await expect(tx.commit()).rejects.toMatchObject({
       code: "KV_COMMIT",
     });
-    expect(tx.isOpen()).toBe(true);
-    await expect(tx.rollback()).resolves.toBeUndefined();
     expect(tx.isOpen()).toBe(false);
+    await expect(tx.rollback()).resolves.toBeUndefined();
+    await expect(tx[Symbol.asyncDispose]()).resolves.toBeUndefined();
+    expect(tx.isOpen()).toBe(false);
+    expect(connection.lastRequest?.messageType).toBe(MSG_KV_COMMIT);
   });
 
   it("should roll back an open transaction when asynchronously disposed", async () => {

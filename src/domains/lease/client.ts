@@ -288,9 +288,13 @@ export function createLeaseClient(connection: LeaseConnectionPort): LeaseClient 
     }
 
     subscription.handlers.set(handlerId, handler);
-    return createLeaseSubscription(subId, route, async () => {
-      await unsubscribe(route, handlerId);
-    });
+    return createLeaseSubscription(
+      () => subscriptionsByRoute.get(route)?.subId ?? subId,
+      route,
+      async () => {
+        await unsubscribe(route, handlerId);
+      },
+    );
   };
 
   const unsubscribe = async (route: string, handlerId: number): Promise<void> => {

@@ -107,9 +107,6 @@ export interface ConnectWhenReadyOptions {
   maxBackoffMs?: number;
 }
 
-export type TxMode = "ReadOnly" | "ReadWrite";
-export type DurabilityMode = "None" | "Async" | "Sync";
-
 /**
  * Deferred is a Promise wrapper that exposes resolve/reject
  */
