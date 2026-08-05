@@ -242,6 +242,7 @@ describe("public surface", () => {
       "ScheduleHandler",
       "ScheduleSubscription",
       "ScheduleStatus",
+      "ScheduleListPage",
     ]);
   });
 

@@ -17,6 +17,7 @@ import {
   ScheduleCreateResponse,
   ScheduleCancelResponse,
   ScheduleListResponse,
+  ScheduleListPage,
   ScheduleSubscribeResponse,
   ScheduleUnsubscribeResponse,
 } from "./types";
@@ -94,6 +95,47 @@ export const ScheduleCodec = {
     buffer[bufferOffset++] = 1;
     writeU64BEAt(buffer, bufferOffset, limit);
     return buffer;
+  },
+
+  encodeListPage(cursor?: string, limit?: bigint): Uint8Array {
+    if (limit !== undefined && (limit < 1n || limit > 1000n))
+      throw new Error("schedule LIST_PAGE limit must be between 1 and 1000");
+    const cursorBytes = cursor === undefined ? undefined : utf8Encoder.encode(cursor);
+    const buffer = new Uint8Array(
+      1 + (cursorBytes ? 4 + cursorBytes.length : 0) + 1 + (limit === undefined ? 0 : 8),
+    );
+    let offset = 0;
+    buffer[offset++] = cursorBytes ? 1 : 0;
+    if (cursorBytes) {
+      offset = writeU32BEAt(buffer, offset, cursorBytes.length);
+      buffer.set(cursorBytes, offset);
+      offset += cursorBytes.length;
+    }
+    buffer[offset++] = limit === undefined ? 0 : 1;
+    if (limit !== undefined) writeU64BEAt(buffer, offset, limit);
+    return buffer;
+  },
+
+  decodeListPage(data: Uint8Array): ScheduleListPage {
+    const reader = createBufferReader(data);
+    if (reader.readU8() !== 1) throw new Error("LIST_PAGE response has unsupported version");
+    const hasMoreByte = reader.readU8();
+    if (hasMoreByte !== 0 && hasMoreByte !== 1)
+      throw new Error("LIST_PAGE response has invalid has_more flag");
+    const continuation = reader.readOptionalString() ?? undefined;
+    const entries: ScheduleEntry[] = [];
+    while (true) {
+      const sentinel = reader.readU8();
+      if (sentinel === 0) break;
+      if (sentinel !== 1) throw new Error("LIST_PAGE response has invalid entry sentinel");
+      const route = reader.readString();
+      const cron = reader.readString();
+      const deliveryMode = decodeDeliveryMode(reader.readU8());
+      const payload = reader.readBytes(reader.readU32BE());
+      entries.push({ id: route, route, cron, deliveryMode, payload });
+    }
+    if (!reader.isEOF()) throw new Error("LIST_PAGE response has trailing bytes");
+    return { entries, hasMore: hasMoreByte === 1, continuation };
   },
 
   /**

@@ -129,6 +129,9 @@ export function createQueueClient(connection: QueueConnectionPort): QueueClient 
     waitSeconds: number = 0,
   ): Promise<QueueItem[]> => {
     assertQueueReserveRoute(route);
+    if (!Number.isInteger(batchSize) || batchSize < 0 || batchSize > 1024) {
+      throw new QueueError("RESERVE batch size must be between 0 and 1024", "INVALID_BATCH_SIZE");
+    }
     if (waitSeconds <= 0) {
       return reserveOnce(route, leaseSeconds, batchSize);
     }
@@ -233,7 +236,7 @@ export function createQueueClient(connection: QueueConnectionPort): QueueClient 
   ): Promise<QueueItem[]> => {
     const payload = QueueCodec.encodeReserve(route, leaseSeconds, batchSize);
     const response = await requestFrame(MSG_QUEUE_RESERVE, payload, signal);
-    const decoded = QueueCodec.decodeReserveResponse(response);
+    const decoded = QueueCodec.decodeReserveResponse(response, route);
     checkStatus(decoded, "RESERVE");
 
     return (decoded.items ?? []).map((item) =>

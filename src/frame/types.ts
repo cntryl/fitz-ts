@@ -75,6 +75,7 @@ export const MSG_STREAM_NOTIFY = 609; // Server -> Client only
 export const MSG_SCHEDULE_CREATE = 700;
 export const MSG_SCHEDULE_CANCEL = 701;
 export const MSG_SCHEDULE_LIST = 702;
+export const MSG_SCHEDULE_LIST_PAGE = 707;
 export const MSG_SCHEDULE_SUBSCRIBE = 703;
 export const MSG_SCHEDULE_UNSUBSCRIBE = 704;
 export const MSG_SCHEDULE_NOTIFY = 705; // Server -> Client only

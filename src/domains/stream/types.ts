@@ -18,6 +18,7 @@ export interface StreamRecord {
   body: Uint8Array;
   areaOffset?: bigint;
   realmOffset?: bigint;
+  globalOffset?: bigint;
   metadata?: Uint8Array;
 }
 
@@ -56,6 +57,10 @@ export interface StreamAppendOptions {
 export interface StreamReadOptions {
   maxBytes?: bigint;
   filter?: StreamFilterSet;
+  cursorFingerprint?: bigint;
+  capturedWatermark?: bigint;
+  /** @deprecated use cursorFingerprint/capturedWatermark */
+  resumeRealm?: string;
   signal?: AbortSignal;
 }
 
@@ -63,6 +68,11 @@ export interface StreamReadCursor {
   lastResourceOffset: bigint;
   lastAreaOffset?: bigint;
   lastRealmOffset?: bigint;
+  lastGlobalOffset?: bigint;
+  cursorFingerprint?: bigint;
+  capturedWatermark?: bigint;
+  /** @deprecated retained for legacy cursor consumers */
+  currentRealm?: string;
   hasMore: boolean;
 }
 

@@ -14,6 +14,7 @@ import {
   MSG_SCHEDULE_CANCEL,
   MSG_SCHEDULE_CREATE,
   MSG_SCHEDULE_LIST,
+  MSG_SCHEDULE_LIST_PAGE,
   MSG_SCHEDULE_NOTIFY,
   MSG_SCHEDULE_SUBSCRIBE,
   MSG_SCHEDULE_UNSUBSCRIBE,
@@ -27,6 +28,7 @@ import {
   ScheduleHandler,
   ScheduleNotification,
   ScheduleSubscription,
+  ScheduleListPage,
   createScheduleSubscription,
 } from "./types";
 import { ScheduleError } from "../../core/errors";
@@ -58,6 +60,8 @@ export interface ScheduleClient {
   ): Promise<string>;
   cancel(route: string): Promise<void>;
   list(offset?: bigint, limit?: bigint): Promise<[ScheduleEntry[], bigint]>;
+  listPage(cursor?: string, limit?: bigint): Promise<ScheduleListPage>;
+  listBySelector(selector: string): Promise<ScheduleEntry[]>;
   waitForNotifications(
     route: string,
     options?: { signal?: AbortSignal },
@@ -128,6 +132,27 @@ export function createScheduleClient(connection: ScheduleConnectionPort): Schedu
     const response = await requestFrame(MSG_SCHEDULE_LIST, ScheduleCodec.encodeList(offset, limit));
     const decoded = ScheduleCodec.decodeListResponse(assertSuccess(response, "LIST"));
     return [decoded.entries, decoded.totalCount];
+  };
+
+  const listPage = async (cursor?: string, limit?: bigint): Promise<ScheduleListPage> => {
+    const response = await requestFrame(
+      MSG_SCHEDULE_LIST_PAGE,
+      ScheduleCodec.encodeListPage(cursor, limit),
+    );
+    return ScheduleCodec.decodeListPage(assertSuccess(response, "LIST_PAGE"));
+  };
+
+  const listBySelector = async (selector: string): Promise<ScheduleEntry[]> => {
+    if (!isScheduleSelector(selector))
+      throw new ScheduleError("invalid schedule selector", "INVALID_ROUTE");
+    const entries: ScheduleEntry[] = [];
+    let cursor: string | undefined;
+    do {
+      const page = await listPage(cursor);
+      entries.push(...page.entries.filter((entry) => routeMatchesSchedule(entry.route, selector)));
+      cursor = page.hasMore ? page.continuation : undefined;
+    } while (cursor !== undefined);
+    return entries;
   };
 
   const waitForNotifications = async function* (
@@ -348,6 +373,8 @@ export function createScheduleClient(connection: ScheduleConnectionPort): Schedu
     create,
     cancel,
     list,
+    listPage,
+    listBySelector,
     subscribe,
     subscribeIterator,
     waitForNotifications,
@@ -365,6 +392,54 @@ function assertConcreteScheduleRoute(route: string): void {
       "INVALID_ROUTE",
     );
   }
+}
+
+function routeMatchesSchedule(route: string, selector: string): boolean {
+  const routeParts = route.split("://")[1]?.split("/") ?? [];
+  const selectorParts = selector.split("://")[1]?.split("/") ?? [];
+  if (selectorParts.length === 2 && selectorParts[1] === "**") {
+    return routeParts.length === 4 && routeParts[0] === selectorParts[0];
+  }
+  if (selectorParts.length === 3) {
+    return (
+      routeParts.length === 4 &&
+      selectorParts.every((part, i) => part === "*" || part === routeParts[i])
+    );
+  }
+  return (
+    routeParts.length === selectorParts.length &&
+    selectorParts.every((part, i) => part === "*" || part === routeParts[i])
+  );
+}
+
+function isScheduleSelector(selector: string): boolean {
+  if (!selector.startsWith("schedule://")) return false;
+  const parts = selector.slice("schedule://".length).split("/");
+  if (
+    parts.length === 2 &&
+    parts[1] === "**" &&
+    parts[0] !== undefined &&
+    parts[0] !== "" &&
+    !parts[0].includes("*")
+  )
+    return true;
+  if (parts.length === 3 && parts.every((part) => part.length > 0)) {
+    const [realm, area, resource] = parts as [string, string, string];
+    return (
+      !realm.includes("*") &&
+      (area === "*" || !area.includes("*")) &&
+      (resource === "*" || !resource.includes("*"))
+    );
+  }
+  if (parts.length !== 4 || parts.some((part) => part.length === 0)) return false;
+  const [realm, area, resource, operation] = parts as [string, string, string, string];
+  const literal = (part: string) => !part.includes("*");
+  const wild = (part: string) => part === "*";
+  return (
+    (literal(realm) && literal(area) && literal(resource) && literal(operation)) ||
+    (literal(realm) && literal(area) && literal(resource) && wild(operation)) ||
+    (literal(realm) && wild(area) && wild(resource) && wild(operation))
+  );
 }
 
 function assertSchedulePattern(pattern: string): void {

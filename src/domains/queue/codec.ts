@@ -12,7 +12,7 @@ import {
 } from "../../core/buffer";
 import { parseStandardResponse } from "../../protocol/response";
 import { QueueError } from "../../core/errors";
-import { isRouteShape } from "../_routes";
+import { isRouteShape, routeMatchesPattern } from "../_routes";
 import {
   QueueEnqueueResponse,
   QueueReserveResponse,
@@ -110,7 +110,7 @@ export const QueueCodec = {
    * Decode RESERVE response.
    * Payload: [status: u8][lease_count: u32]([route: string][message_id: u64][lease_token: u64][body_len: u32][body: bytes] ...)
    */
-  decodeReserveResponse(payload: Uint8Array): QueueReserveResponse {
+  decodeReserveResponse(payload: Uint8Array, selector?: string): QueueReserveResponse {
     const response = parseQueueResponse(payload);
     if (response.status !== 0) {
       return response;
@@ -124,11 +124,20 @@ export const QueueCodec = {
     const leaseCount = reader.readU32BE();
     const items: Array<{ route: string; id: bigint; token: bigint; body: Uint8Array }> = [];
 
+    const wildcard = selector?.includes("*") === true;
     for (let i = 0; i < leaseCount; i++) {
-      const route = reader.readRoute();
+      const route = wildcard ? reader.readRoute() : selector;
+      if (!route)
+        throw new QueueError("RESERVE response missing concrete route", "RESERVE_INVALID_RESPONSE");
       if (!isRouteShape(route, "queue", 3)) {
         throw new QueueError(
           `RESERVE response contains invalid concrete queue route: ${route}`,
+          "RESERVE_INVALID_RESPONSE",
+        );
+      }
+      if (wildcard && selector && !routeMatchesPattern(route, selector)) {
+        throw new QueueError(
+          `RESERVE response route does not match selector: ${route}`,
           "RESERVE_INVALID_RESPONSE",
         );
       }
@@ -140,6 +149,8 @@ export const QueueCodec = {
       items.push({ route, id, token, body });
     }
 
+    if (!reader.isEOF())
+      throw new QueueError("RESERVE response has trailing bytes", "RESERVE_INVALID_RESPONSE");
     return { status: 0, items };
   },
 

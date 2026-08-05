@@ -65,6 +65,7 @@ function encodeReadResponse(
     lastResourceOffset: bigint;
     lastAreaOffset?: bigint;
     lastRealmOffset?: bigint;
+    currentRealm?: string;
     hasMore: boolean;
   },
 ): Uint8Array {
@@ -93,6 +94,7 @@ function encodeReadResponse(
   data.writeU64BE(cursor.lastResourceOffset);
   writeOptionalU64(data, cursor.lastAreaOffset);
   writeOptionalU64(data, cursor.lastRealmOffset);
+  data.writeOptionalString(cursor.currentRealm);
   data.writeU8(cursor.hasMore ? 1 : 0);
 
   const writer = createBufferWriter(560);
@@ -408,6 +410,8 @@ describe("StreamCodec", () => {
       expect(reader.readU64BE()).toBe(25n);
       expect(reader.readU8()).toBe(0);
       expect(reader.readU8()).toBe(0);
+      expect(reader.readU8()).toBe(0);
+      expect(reader.readU8()).toBe(0);
       expect(reader.isEOF()).toBe(true);
     });
 
@@ -422,6 +426,8 @@ describe("StreamCodec", () => {
       expect(reader.readU64BE()).toBe(25n);
       expect(reader.readU8()).toBe(1);
       expect(reader.readU64BE()).toBe(1024n);
+      expect(reader.readU8()).toBe(0);
+      expect(reader.readU8()).toBe(0);
       expect(reader.readU8()).toBe(0);
       expect(reader.isEOF()).toBe(true);
     });
@@ -444,6 +450,23 @@ describe("StreamCodec", () => {
       const filterLength = reader.readU32BE();
       const filterBytes = reader.readBytes(filterLength);
       expect(decodeStreamFilterSet(filterBytes)).toEqual(filter);
+      expect(reader.readU8()).toBe(0);
+      expect(reader.readU8()).toBe(0);
+      expect(reader.isEOF()).toBe(true);
+    });
+
+    it("should_encode_global_read_resume_realm", () => {
+      const encoded = StreamCodec.encodeRead("stream://**", 42n, 10, {
+        resumeRealm: "acme",
+      });
+      const reader = createBufferReader(encoded);
+
+      expect(reader.readRoute()).toBe("stream://**");
+      expect(reader.readU64BE()).toBe(42n);
+      expect(reader.readU64BE()).toBe(10n);
+      expect(reader.readU8()).toBe(0);
+      expect(reader.readU8()).toBe(0);
+      expect(reader.readOptionalString()).toBe("acme");
       expect(reader.isEOF()).toBe(true);
     });
   });
@@ -518,6 +541,7 @@ describe("StreamCodec", () => {
       // Arrange
       const response = encodeReadResponse([], {
         lastResourceOffset: 0n,
+        currentRealm: "acme",
         hasMore: false,
       });
 
@@ -528,6 +552,7 @@ describe("StreamCodec", () => {
       expect(decoded.items).toHaveLength(0);
       expect(decoded.cursor).toMatchObject({
         lastResourceOffset: 0n,
+        currentRealm: "acme",
         hasMore: false,
       });
     });

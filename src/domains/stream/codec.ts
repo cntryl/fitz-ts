@@ -176,7 +176,7 @@ export const StreamCodec = {
 
   /**
    * Encode READ request
-   * Payload: [route: string][start_offset: u64][limit: u64][has_max_bytes: u8][max_bytes?: u64][has_filter: u8][filter_length?: u32_be][filter?: custom]
+   * Payload: [route][start][limit][optional max_bytes][optional filter][optional cursor_fingerprint][optional captured_watermark]
    */
   encodeRead(
     route: string,
@@ -185,6 +185,8 @@ export const StreamCodec = {
     options?: StreamReadOptions,
   ): Uint8Array {
     const routeBytes = getRouteEncoding(route);
+    const resumeRealmBytes =
+      options?.resumeRealm === undefined ? undefined : getRouteEncoding(options.resumeRealm);
     const hasMaxBytes = options?.maxBytes !== undefined;
     const filter = options?.filter;
     const hasFilter = filter !== undefined && filter.clauses.length > 0;
@@ -203,7 +205,13 @@ export const StreamCodec = {
         1 +
         (hasMaxBytes ? 8 : 0) +
         1 +
-        (filterBytes ? 4 + filterBytes.length : 0),
+        (filterBytes ? 4 + filterBytes.length : 0) +
+        (resumeRealmBytes
+          ? 1 + resumeRealmBytes.length
+          : 1 +
+            (options?.cursorFingerprint === undefined ? 0 : 8) +
+            1 +
+            (options?.capturedWatermark === undefined ? 0 : 8)),
     );
     let offset = 0;
 
@@ -220,6 +228,18 @@ export const StreamCodec = {
     if (filterBytes) {
       offset = writeU32BEAt(buffer, offset, filterBytes.length);
       buffer.set(filterBytes, offset);
+      offset += filterBytes.length;
+    }
+    if (resumeRealmBytes) {
+      buffer[offset++] = 1;
+      buffer.set(resumeRealmBytes, offset);
+    } else {
+      buffer[offset++] = options?.cursorFingerprint === undefined ? 0 : 1;
+      if (options?.cursorFingerprint !== undefined)
+        offset = writeU64BEAt(buffer, offset, options.cursorFingerprint);
+      buffer[offset++] = options?.capturedWatermark === undefined ? 0 : 1;
+      if (options?.capturedWatermark !== undefined)
+        writeU64BEAt(buffer, offset, options.capturedWatermark);
     }
     return buffer;
   },
@@ -228,7 +248,10 @@ export const StreamCodec = {
    * Decode READ response
    * Payload: [status: u8][has_session_id: u8][session_id?: u64][data: bytes]
    */
-  decodeReadResponse(payload: Uint8Array): {
+  decodeReadResponse(
+    payload: Uint8Array,
+    selector?: string,
+  ): {
     status: number;
     items: StreamReadItem[];
     cursor?: StreamReadCursor;
@@ -243,6 +266,7 @@ export const StreamCodec = {
     }
 
     const reader = createBufferReader(decoded.data);
+    const extended = isGlobalSelector(selector);
     const count = reader.readU32BE();
     const items: StreamReadItem[] = [];
 
@@ -254,15 +278,35 @@ export const StreamCodec = {
           "READ_INVALID_RESPONSE",
         );
       }
-      items.push(this.decodeStreamReadItem(reader, concreteRoute));
+      items.push(this.decodeStreamReadItem(reader, concreteRoute, extended));
     }
 
-    const cursor: StreamReadCursor = {
-      lastResourceOffset: reader.readU64BE(),
-      lastAreaOffset: reader.readOptionalU64() ?? undefined,
-      lastRealmOffset: reader.readOptionalU64() ?? undefined,
-      hasMore: reader.readU8() === 1,
+    const hasGlobal = extended;
+    const cursorStart = reader.getOffset();
+    const parseCursor = (withCurrentRealm: boolean): StreamReadCursor => {
+      reader.setOffset(cursorStart);
+      const cursor: StreamReadCursor = {
+        lastResourceOffset: reader.readU64BE(),
+        lastAreaOffset: reader.readOptionalU64() ?? undefined,
+        lastRealmOffset: reader.readOptionalU64() ?? undefined,
+        hasMore: false,
+      };
+      if (withCurrentRealm) cursor.currentRealm = reader.readOptionalString() ?? undefined;
+      if (extended) cursor.lastGlobalOffset = reader.readOptionalU64() ?? undefined;
+      cursor.hasMore = reader.readU8() === 1;
+      if (hasGlobal) {
+        cursor.cursorFingerprint = reader.readOptionalU64() ?? undefined;
+        cursor.capturedWatermark = reader.readOptionalU64() ?? undefined;
+      }
+      return cursor;
     };
+    let cursor: StreamReadCursor;
+    try {
+      cursor = parseCursor(true);
+      if (!reader.isEOF()) throw new Error("current-realm layout has trailing bytes");
+    } catch {
+      cursor = parseCursor(false);
+    }
 
     if (!reader.isEOF()) {
       throw new Error("READ response has trailing bytes");
@@ -300,7 +344,7 @@ export const StreamCodec = {
         "LAST_INVALID_RESPONSE",
       );
     }
-    const record = this.decodeStreamRecord(reader, concreteRoute);
+    const record = this.decodeStreamRecord(reader, concreteRoute, false);
     if (!reader.isEOF()) {
       throw new StreamError("LAST response has trailing bytes", "LAST_INVALID_RESPONSE");
     }
@@ -392,10 +436,11 @@ export const StreamCodec = {
     };
   },
 
-  decodeStreamRecord(reader: BufferReader, route: string): StreamRecord {
+  decodeStreamRecord(reader: BufferReader, route: string, extended = false): StreamRecord {
     const offset = reader.readU64BE();
     const areaOffset = reader.readOptionalU64();
     const realmOffset = reader.readOptionalU64();
+    const globalOffset = extended ? reader.readOptionalU64() : undefined;
     const body = reader.readBytes(reader.readU32BE());
     const metadata = this.readOptionalBytes(reader);
     const timestamp = reader.readU64BE();
@@ -407,6 +452,7 @@ export const StreamCodec = {
       body,
       areaOffset,
       realmOffset,
+      globalOffset,
       metadata,
     };
   },
@@ -415,14 +461,14 @@ export const StreamCodec = {
     return items.flatMap((item) => (item.kind === "event" ? [item.record] : []));
   },
 
-  decodeStreamReadItem(reader: BufferReader, route: string): StreamReadItem {
+  decodeStreamReadItem(reader: BufferReader, route: string, extended = false): StreamReadItem {
     const tag = reader.readU8();
     switch (tag) {
       case 0:
         return {
           kind: "event",
           route,
-          record: this.decodeStreamRecord(reader, route),
+          record: this.decodeStreamRecord(reader, route, extended),
         };
       case 1:
         return {
@@ -502,6 +548,12 @@ export const StreamCodec = {
     return { status, sessionId, data };
   },
 };
+
+function isGlobalSelector(selector?: string): boolean {
+  if (!selector) return false;
+  if (selector === "stream://**") return true;
+  return selector.startsWith("stream://*/");
+}
 
 function encodeStreamFilterSet(filter: StreamFilterSet, writer: BufferWriter): void {
   writer.writeU8(0);

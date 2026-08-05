@@ -8,7 +8,8 @@ The format is based on Keep a Changelog and the project follows Semantic Version
 
 ### Changed
 
-- Breaking: Queue reserve, Stream read, and Stream last responses now require a concrete route for every returned item. `QueueItem`, `StreamReadItem`, and `StreamRecord` expose that route, and Queue reserves plus Stream reads/peeks accept any whole-segment pattern capable of matching three segments.
+- Breaking: Stream READ and SUBSCRIBE now accept only concrete resource, area (`realm/area/*`), realm (`realm/*/*`), or global (`stream://**`) selectors. READ cursors expose `currentRealm`, and global continuation requests accept `resumeRealm`. Stream LAST is concrete-route only.
+- Breaking: Queue reserve, Stream read, and Stream last responses now require a concrete route for every returned item. `QueueItem`, `StreamReadItem`, and `StreamRecord` expose that route.
 
 ## [0.0.14] - 2026-08-03
 

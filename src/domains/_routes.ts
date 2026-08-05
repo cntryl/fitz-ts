@@ -48,6 +48,34 @@ export function isRegistrationPatternShape(
   return segmentCount - doubleWildcardCount <= requiredSegments;
 }
 
+export function isStreamSelectorShape(route: string): boolean {
+  const start = pathStart(route, "stream", false);
+  if (start < 0) return false;
+  if (new TextEncoder().encode(route).length > 512) return false;
+  if (route === "stream://**") return true;
+  const segments = route.slice(start).split("/");
+  if (
+    segments.length === 2 &&
+    segments[1] === "**" &&
+    segments[0] !== undefined &&
+    segments[0] !== "*" &&
+    !segments[0].includes("*")
+  )
+    return true;
+  if (segments.length !== 3 || segments.some((segment) => segment.length === 0)) return false;
+  const realm = segments[0]!;
+  const area = segments[1]!;
+  const resource = segments[2]!;
+  const literal = (s: string) => !s.includes("*");
+  const wild = (s: string) => s === "*";
+  return (
+    (literal(realm) && literal(area) && literal(resource)) ||
+    (literal(realm) && literal(area) && wild(resource)) ||
+    (literal(realm) && wild(area) && wild(resource)) ||
+    (wild(realm) && wild(area) && wild(resource))
+  );
+}
+
 export function routeMatchesPattern(route: string, pattern: string): boolean {
   const routeMarker = route.indexOf("://");
   const patternMarker = pattern.indexOf("://");

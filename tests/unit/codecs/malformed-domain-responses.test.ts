@@ -12,7 +12,11 @@ describe("malformed domain responses", () => {
     ["kv", () => KvCodec.decodeBeginResponse(new Uint8Array()), "Buffer overflow", undefined],
     [
       "queue",
-      () => QueueCodec.decodeReserveResponse(new Uint8Array([0, 0, 0, 0, 1])),
+      () =>
+        QueueCodec.decodeReserveResponse(
+          new Uint8Array([0, 0, 0, 0, 1]),
+          "queue://realm/area/resource",
+        ),
       "Buffer overflow",
       undefined,
     ],

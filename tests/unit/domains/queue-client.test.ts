@@ -69,14 +69,17 @@ describe("QueueClient reserveWhenAvailable", () => {
   it("returns each concrete queue route given a wildcard reserve selector", async () => {
     const connection = new FakeQueueConnection();
     connection.reserveResponses.push(
-      encodeQueueReserveResponse([
-        {
-          route: "queue://acme/cats/cat",
-          id: 1n,
-          token: 2n,
-          body: new Uint8Array([3]),
-        },
-      ]),
+      encodeQueueReserveResponse(
+        [
+          {
+            route: "queue://acme/cats/cat",
+            id: 1n,
+            token: 2n,
+            body: new Uint8Array([3]),
+          },
+        ],
+        true,
+      ),
     );
     const client = createQueueClient(connection);
 
@@ -217,12 +220,13 @@ function encodeQueueSubscribeResponse(subId: bigint): Uint8Array {
 
 function encodeQueueReserveResponse(
   items: Array<{ route: string; id: bigint; token: bigint; body: Uint8Array }>,
+  includeRoute = false,
 ): Uint8Array {
   const writer = createBufferWriter(64);
   writer.writeU8(0);
   writer.writeU32BE(items.length);
   for (const item of items) {
-    writer.writeRoute(item.route);
+    if (includeRoute) writer.writeRoute(item.route);
     writer.writeU64BE(item.id);
     writer.writeU64BE(item.token);
     writer.writeU32BE(item.body.length);

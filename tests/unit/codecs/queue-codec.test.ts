@@ -111,7 +111,6 @@ describe("QueueCodec", () => {
       const writer = createBufferWriter(256);
       writer.writeU8(0); // status
       writer.writeU32BE(1); // leaseCount = 1
-      writer.writeRoute("queue://prod/app/tasks");
       writer.writeU64BE(100n); // itemId
       writer.writeU64BE(777n); // token
       writer.writeU32BE(testData('{"msg": "hello"}').length);
@@ -119,7 +118,7 @@ describe("QueueCodec", () => {
       const response = writer.getBuffer();
 
       // Act
-      const decoded = QueueCodec.decodeReserveResponse(response);
+      const decoded = QueueCodec.decodeReserveResponse(response, "queue://prod/app/tasks");
 
       // Assert
       expect(decoded.status).toBe(0);
@@ -143,7 +142,7 @@ describe("QueueCodec", () => {
       writer.writeU32BE(0);
 
       try {
-        QueueCodec.decodeReserveResponse(writer.getBuffer());
+        QueueCodec.decodeReserveResponse(writer.getBuffer(), "queue://*/app/*");
         throw new Error("expected decode to fail");
       } catch (error) {
         expect(error).toBeInstanceOf(QueueError);

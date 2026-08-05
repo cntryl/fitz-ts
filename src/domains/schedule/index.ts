@@ -11,6 +11,7 @@ export type {
   ScheduleCreateResponse,
   ScheduleCancelResponse,
   ScheduleListResponse,
+  ScheduleListPage,
   ScheduleSubscribeResponse,
   ScheduleUnsubscribeResponse,
   ScheduleSubscription,

@@ -201,6 +201,8 @@ describe("StreamClient", () => {
     const filterLength = reader.readU32BE();
     expect(filterLength).toBeGreaterThan(0);
     expect(reader.readBytes(filterLength)).toBeInstanceOf(Uint8Array);
+    expect(reader.readU8()).toBe(0);
+    expect(reader.readU8()).toBe(0);
     expect(reader.isEOF()).toBe(true);
   });
 
@@ -256,6 +258,7 @@ describe("StreamClient", () => {
       lastResourceOffset: 5n,
       lastAreaOffset: 8n,
       lastRealmOffset: 12n,
+      currentRealm: undefined,
       hasMore: false,
     });
 
@@ -286,13 +289,37 @@ describe("StreamClient", () => {
     const connection = new FakeStreamConnection("success", readResponse);
     const client = createStreamClient(connection as unknown as Connection);
 
-    const page = await client.readPage("stream://*/area/*", 0n, 2);
+    const page = await client.readPage("stream://realm/area/*", 0n, 2);
 
     expect(page.items[0]).toMatchObject({
       route: "stream://realm/area/orders",
       record: { route: "stream://realm/area/orders" },
     });
     expect(page.items[1]).toMatchObject({ route: "stream://realm/area/audits" });
+  });
+
+  it("matches the server stream selector grammar", async () => {
+    const connection = new FakeStreamConnection(
+      "success",
+      encodeWrappedReadResponse([], {
+        lastResourceOffset: 0n,
+        global: true,
+        hasMore: false,
+      }),
+    );
+    const client = createStreamClient(connection as unknown as Connection);
+    const realmClient = createStreamClient(
+      new FakeStreamConnection(
+        "success",
+        encodeWrappedReadResponse([], { lastResourceOffset: 0n, hasMore: false }),
+      ) as unknown as Connection,
+    );
+
+    await expect(client.readPage("stream://**", 0n, 1)).resolves.toBeDefined();
+    await expect(realmClient.readPage("stream://realm/*/*", 0n, 1)).resolves.toBeDefined();
+    await expect(client.readPage("stream://*/area/*", 0n, 1)).rejects.toMatchObject({
+      code: "STREAM_INVALID_ROUTE",
+    });
   });
 });
 
@@ -356,6 +383,11 @@ function encodeWrappedReadResponse(
     lastResourceOffset: bigint;
     lastAreaOffset?: bigint;
     lastRealmOffset?: bigint;
+    currentRealm?: string;
+    global?: boolean;
+    lastGlobalOffset?: bigint;
+    cursorFingerprint?: bigint;
+    capturedWatermark?: bigint;
     hasMore: boolean;
   },
 ): Uint8Array {
@@ -374,7 +406,13 @@ function encodeWrappedReadResponse(
   if (cursor.lastRealmOffset !== undefined) {
     data.writeU64BE(cursor.lastRealmOffset);
   }
+  data.writeOptionalString(cursor.currentRealm);
+  if (cursor.global) writeOptionalU64(data, cursor.lastGlobalOffset);
   data.writeU8(cursor.hasMore ? 1 : 0);
+  if (cursor.global) {
+    writeOptionalU64(data, cursor.cursorFingerprint);
+    writeOptionalU64(data, cursor.capturedWatermark);
+  }
 
   const writer = createBufferWriter(320);
   writer.writeU8(0);

@@ -71,6 +71,12 @@ export interface ScheduleListResponse {
   entries: ScheduleEntry[];
 }
 
+export interface ScheduleListPage {
+  entries: ScheduleEntry[];
+  hasMore: boolean;
+  continuation?: string;
+}
+
 export interface ScheduleSubscribeResponse {
   subId: bigint;
 }

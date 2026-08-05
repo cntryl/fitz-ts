@@ -82,12 +82,20 @@ contractual.
   `lease://realm/area/resource` route.
 - Every notification carries its exact concrete route. Queue availability
   notifications also carry ready, delayed, and inflight counts.
-- Queue reserve and Stream read/last selectors use the same whole-segment pattern
-  contract as subscriptions. Every reserved Queue item and every Stream read or
+- Queue reserve accepts general whole-segment patterns capable of matching three
+  segments. Stream read and subscribe accept concrete resources, `realm/area/*`,
+  `realm/*/*`, or `stream://**`; Stream last is concrete-route only. Every reserved Queue item and every Stream read or
   last item carries the exact concrete matched route; Stream event records carry
   it as well. Route-less reserve/read/last responses are not supported. If any item
   contains an invalid concrete route, the entire response fails closed; the
   client never returns a partial reservation or read batch.
+
+Stream READ/SUBSCRIBE use the finite ten-shape selector matrix (including
+realm/resource and global filters), with only `realm/**` and `stream://**` as
+canonical aliases. Global READ cursors carry optional `lastGlobalOffset`,
+`cursorFingerprint`, and `capturedWatermark`; continuation sends the latter
+two values back as optional u64 fields. Schedule `LIST_PAGE` is message 707,
+with versioned continuation and a 1..1000 limit.
 
 ## Packaging
 

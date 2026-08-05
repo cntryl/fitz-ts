@@ -257,21 +257,21 @@ describe("route validation", () => {
     expect(connection.lastRequest).toBeNull();
   });
 
-  it("accepts stream subscription patterns capable of matching three segments", async () => {
+  it("accepts stream area subscription selectors", async () => {
     const connection = new FakeConnection(new Uint8Array([0, 1, ...u64Bytes(7n)]));
     const client = createStreamClient(connection as unknown as Connection);
 
-    const subscription = await client.subscribe("stream://example/area/**", async () => undefined);
+    const subscription = await client.subscribe("stream://example/area/*", async () => undefined);
 
     expect(subscription.subId).toBe(7n);
     expect(connection.lastRequest).not.toBeNull();
   });
 
-  it("accepts stream realm wildcard selectors", async () => {
+  it("accepts stream realm read selectors", async () => {
     const connection = new FakeConnection(new Uint8Array([0]));
     const client = createStreamClient(connection as unknown as Connection);
 
-    const records = await client.read("stream://example/**", 0n);
+    const records = await client.read("stream://example/*/*", 0n);
 
     expect(records).toEqual([]);
     expect(connection.lastRequest?.messageType).toBe(MSG_STREAM_READ);

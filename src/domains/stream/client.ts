@@ -43,7 +43,7 @@ import {
   MSG_STREAM_UNSUBSCRIBE,
   MSG_STREAM_NOTIFY,
 } from "../../frame/types";
-import { isRegistrationPatternShape, isRouteShape } from "../_routes";
+import { isRouteShape, isStreamSelectorShape } from "../_routes";
 import { restoreMapEntriesAtomically } from "../internal/restore";
 import { createKeyedSingleFlight } from "../internal/keyed-single-flight";
 import { formatStatusName } from "../internal/status";
@@ -159,7 +159,7 @@ export function createStreamClient(connection: StreamConnectionPort): StreamClie
       async () => {
         const payload = StreamCodec.encodeRead(route, startOffset, limit, options);
         const response = await requestFrame(MSG_STREAM_READ, payload, options?.signal);
-        const decoded = StreamCodec.decodeReadResponse(response);
+        const decoded = StreamCodec.decodeReadResponse(response, route);
 
         checkStatus(decoded.status, "READ");
 
@@ -169,6 +169,9 @@ export function createStreamClient(connection: StreamConnectionPort): StreamClie
             lastResourceOffset: startOffset,
             lastAreaOffset: undefined,
             lastRealmOffset: undefined,
+            lastGlobalOffset: undefined,
+            cursorFingerprint: undefined,
+            capturedWatermark: undefined,
             hasMore: false,
           },
         };
@@ -208,17 +211,23 @@ export function createStreamClient(connection: StreamConnectionPort): StreamClie
 
     try {
       let offset = options.offset;
+      let cursorFingerprint: bigint | undefined;
+      let capturedWatermark: bigint | undefined;
 
       while (true) {
         const observed = wakeGate.version;
         const page = await readPage(route, offset, options.batchSize ?? 100, {
           maxBytes: options.maxBytes,
           filter: options.filter,
+          cursorFingerprint,
+          capturedWatermark,
           signal: options.signal,
         });
 
         if (page.items.length > 0) {
-          offset = page.cursor.lastResourceOffset + 1n;
+          offset = streamCursorOffset(route, page.cursor) + 1n;
+          cursorFingerprint = page.cursor.cursorFingerprint;
+          capturedWatermark = page.cursor.capturedWatermark;
           const records = StreamCodec.flattenStreamReadItems(page.items);
           if (records.length > 0) {
             yield records;
@@ -248,7 +257,7 @@ export function createStreamClient(connection: StreamConnectionPort): StreamClie
   };
 
   const peek = async (route: string): Promise<StreamRecord | null> => {
-    assertStreamPattern(route);
+    assertStreamRoute(route);
     return runWithRetry(
       {
         domain: "stream",
@@ -514,6 +523,16 @@ export function createStreamClient(connection: StreamConnectionPort): StreamClie
   };
 }
 
+function streamCursorOffset(route: string, cursor: StreamReadPage["cursor"]): bigint {
+  if (route === "stream://**" || route.endsWith("/*/*")) {
+    return route === "stream://**"
+      ? (cursor.lastGlobalOffset ?? cursor.lastResourceOffset)
+      : (cursor.lastRealmOffset ?? cursor.lastResourceOffset);
+  }
+  if (route.endsWith("/*")) return cursor.lastAreaOffset ?? cursor.lastResourceOffset;
+  return cursor.lastResourceOffset;
+}
+
 export const StreamClient = createStreamClient;
 
 export * from "./types";
@@ -528,9 +547,9 @@ function assertStreamRoute(route: string): void {
 }
 
 function assertStreamPattern(pattern: string): void {
-  if (!isRegistrationPatternShape(pattern, "stream", 3)) {
+  if (!isStreamSelectorShape(pattern)) {
     throw new StreamError(
-      `Invalid stream pattern: ${pattern} (expected a whole-segment pattern capable of matching three segments)`,
+      `Invalid stream selector: ${pattern} (expected realm/area/resource, realm/area/*, realm/*/*, or stream://**)`,
       "INVALID_ROUTE",
     );
   }
