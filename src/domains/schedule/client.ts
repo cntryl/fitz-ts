@@ -13,7 +13,6 @@ import type {
 import {
   MSG_SCHEDULE_CANCEL,
   MSG_SCHEDULE_CREATE,
-  MSG_SCHEDULE_LIST,
   MSG_SCHEDULE_LIST_PAGE,
   MSG_SCHEDULE_NOTIFY,
   MSG_SCHEDULE_SUBSCRIBE,
@@ -59,7 +58,6 @@ export interface ScheduleClient {
     payload?: Uint8Array,
   ): Promise<string>;
   cancel(route: string): Promise<void>;
-  list(offset?: bigint, limit?: bigint): Promise<[ScheduleEntry[], bigint]>;
   listPage(cursor?: string, limit?: bigint): Promise<ScheduleListPage>;
   listBySelector(selector: string): Promise<ScheduleEntry[]>;
   waitForNotifications(
@@ -123,15 +121,6 @@ export function createScheduleClient(connection: ScheduleConnectionPort): Schedu
 
     const response = await requestFrame(MSG_SCHEDULE_CANCEL, ScheduleCodec.encodeCancel(route));
     ScheduleCodec.decodeCancelResponse(assertSuccess(response, "CANCEL"));
-  };
-
-  const list = async (
-    offset: bigint = 0n,
-    limit: bigint = 0n,
-  ): Promise<[ScheduleEntry[], bigint]> => {
-    const response = await requestFrame(MSG_SCHEDULE_LIST, ScheduleCodec.encodeList(offset, limit));
-    const decoded = ScheduleCodec.decodeListResponse(assertSuccess(response, "LIST"));
-    return [decoded.entries, decoded.totalCount];
   };
 
   const listPage = async (cursor?: string, limit?: bigint): Promise<ScheduleListPage> => {
@@ -372,7 +361,6 @@ export function createScheduleClient(connection: ScheduleConnectionPort): Schedu
   return {
     create,
     cancel,
-    list,
     listPage,
     listBySelector,
     subscribe,
@@ -380,8 +368,6 @@ export function createScheduleClient(connection: ScheduleConnectionPort): Schedu
     waitForNotifications,
   };
 }
-
-export const ScheduleClient = createScheduleClient;
 
 export * from "./types";
 

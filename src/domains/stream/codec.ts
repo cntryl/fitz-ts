@@ -16,7 +16,7 @@ import {
   type BufferWriter,
 } from "../../core/buffer";
 import { StreamError } from "../../core/errors";
-import { isRouteShape } from "../_routes";
+import { isRouteShape, isStreamSelectorShape } from "../_routes";
 import {
   StreamCommitMode,
   StreamCommitPayload,
@@ -185,8 +185,6 @@ export const StreamCodec = {
     options?: StreamReadOptions,
   ): Uint8Array {
     const routeBytes = getRouteEncoding(route);
-    const resumeRealmBytes =
-      options?.resumeRealm === undefined ? undefined : getRouteEncoding(options.resumeRealm);
     const hasMaxBytes = options?.maxBytes !== undefined;
     const filter = options?.filter;
     const hasFilter = filter !== undefined && filter.clauses.length > 0;
@@ -206,12 +204,10 @@ export const StreamCodec = {
         (hasMaxBytes ? 8 : 0) +
         1 +
         (filterBytes ? 4 + filterBytes.length : 0) +
-        (resumeRealmBytes
-          ? 1 + resumeRealmBytes.length
-          : 1 +
-            (options?.cursorFingerprint === undefined ? 0 : 8) +
-            1 +
-            (options?.capturedWatermark === undefined ? 0 : 8)),
+        1 +
+        (options?.cursorFingerprint === undefined ? 0 : 8) +
+        1 +
+        (options?.capturedWatermark === undefined ? 0 : 8),
     );
     let offset = 0;
 
@@ -230,17 +226,12 @@ export const StreamCodec = {
       buffer.set(filterBytes, offset);
       offset += filterBytes.length;
     }
-    if (resumeRealmBytes) {
-      buffer[offset++] = 1;
-      buffer.set(resumeRealmBytes, offset);
-    } else {
-      buffer[offset++] = options?.cursorFingerprint === undefined ? 0 : 1;
-      if (options?.cursorFingerprint !== undefined)
-        offset = writeU64BEAt(buffer, offset, options.cursorFingerprint);
-      buffer[offset++] = options?.capturedWatermark === undefined ? 0 : 1;
-      if (options?.capturedWatermark !== undefined)
-        writeU64BEAt(buffer, offset, options.capturedWatermark);
-    }
+    buffer[offset++] = options?.cursorFingerprint === undefined ? 0 : 1;
+    if (options?.cursorFingerprint !== undefined)
+      offset = writeU64BEAt(buffer, offset, options.cursorFingerprint);
+    buffer[offset++] = options?.capturedWatermark === undefined ? 0 : 1;
+    if (options?.capturedWatermark !== undefined)
+      writeU64BEAt(buffer, offset, options.capturedWatermark);
     return buffer;
   },
 
@@ -250,7 +241,7 @@ export const StreamCodec = {
    */
   decodeReadResponse(
     payload: Uint8Array,
-    selector?: string,
+    selector: string,
   ): {
     status: number;
     items: StreamReadItem[];
@@ -259,6 +250,13 @@ export const StreamCodec = {
     const decoded = this.decodeWrappedResponse(payload);
     if (decoded.status !== 0) {
       return { status: decoded.status, items: [] };
+    }
+
+    if (!isStreamSelector(selector)) {
+      throw new StreamError(
+        "READ response requires a canonical stream selector",
+        "READ_INVALID_RESPONSE",
+      );
     }
 
     if (decoded.data.length === 0) {
@@ -282,31 +280,23 @@ export const StreamCodec = {
     }
 
     const hasGlobal = extended;
-    const cursorStart = reader.getOffset();
-    const parseCursor = (withCurrentRealm: boolean): StreamReadCursor => {
-      reader.setOffset(cursorStart);
-      const cursor: StreamReadCursor = {
-        lastResourceOffset: reader.readU64BE(),
-        lastAreaOffset: reader.readOptionalU64() ?? undefined,
-        lastRealmOffset: reader.readOptionalU64() ?? undefined,
-        hasMore: false,
-      };
-      if (withCurrentRealm) cursor.currentRealm = reader.readOptionalString() ?? undefined;
-      if (extended) cursor.lastGlobalOffset = reader.readOptionalU64() ?? undefined;
-      cursor.hasMore = reader.readU8() === 1;
-      if (hasGlobal) {
-        cursor.cursorFingerprint = reader.readOptionalU64() ?? undefined;
-        cursor.capturedWatermark = reader.readOptionalU64() ?? undefined;
-      }
-      return cursor;
-    };
-    let cursor: StreamReadCursor;
-    try {
-      cursor = parseCursor(true);
-      if (!reader.isEOF()) throw new Error("current-realm layout has trailing bytes");
-    } catch {
-      cursor = parseCursor(false);
+    const lastResourceOffset = reader.readU64BE();
+    const lastAreaOffset = reader.readOptionalU64() ?? undefined;
+    const lastRealmOffset = reader.readOptionalU64() ?? undefined;
+    const lastGlobalOffset = extended ? (reader.readOptionalU64() ?? undefined) : undefined;
+    const hasMoreFlag = reader.readU8();
+    if (hasMoreFlag !== 0 && hasMoreFlag !== 1) {
+      throw new StreamError("READ response has an invalid hasMore flag", "READ_INVALID_RESPONSE");
     }
+    const cursor: StreamReadCursor = {
+      lastResourceOffset,
+      lastAreaOffset,
+      lastRealmOffset,
+      lastGlobalOffset,
+      hasMore: hasMoreFlag === 1,
+      cursorFingerprint: hasGlobal ? (reader.readOptionalU64() ?? undefined) : undefined,
+      capturedWatermark: hasGlobal ? (reader.readOptionalU64() ?? undefined) : undefined,
+    };
 
     if (!reader.isEOF()) {
       throw new Error("READ response has trailing bytes");
@@ -549,10 +539,12 @@ export const StreamCodec = {
   },
 };
 
-function isGlobalSelector(selector?: string): boolean {
-  if (!selector) return false;
-  if (selector === "stream://**") return true;
-  return selector.startsWith("stream://*/");
+function isGlobalSelector(selector: string): boolean {
+  return selector === "stream://**";
+}
+
+function isStreamSelector(selector: string): boolean {
+  return isStreamSelectorShape(selector);
 }
 
 function encodeStreamFilterSet(filter: StreamFilterSet, writer: BufferWriter): void {

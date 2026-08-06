@@ -257,8 +257,6 @@ export function createNoticeClient(connection: NoticeConnectionPort): NoticeClie
   };
 }
 
-export const NoticeClient = createNoticeClient;
-
 export * from "./types";
 
 function assertNoticeRoute(route: string): void {

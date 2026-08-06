@@ -16,7 +16,6 @@ import {
   ScheduleDeliveryMode,
   ScheduleCreateResponse,
   ScheduleCancelResponse,
-  ScheduleListResponse,
   ScheduleListPage,
   ScheduleSubscribeResponse,
   ScheduleUnsubscribeResponse,
@@ -82,21 +81,6 @@ export const ScheduleCodec = {
     return {};
   },
 
-  /**
-   * Encode LIST request
-   * Payload: [optional offset: u64][optional limit: u64]
-   */
-  encodeList(offset: bigint = 0n, limit: bigint = 0n): Uint8Array {
-    const buffer = new Uint8Array(18);
-    let bufferOffset = 0;
-
-    buffer[bufferOffset++] = 1;
-    bufferOffset = writeU64BEAt(buffer, bufferOffset, offset);
-    buffer[bufferOffset++] = 1;
-    writeU64BEAt(buffer, bufferOffset, limit);
-    return buffer;
-  },
-
   encodeListPage(cursor?: string, limit?: bigint): Uint8Array {
     if (limit !== undefined && (limit < 1n || limit > 1000n))
       throw new Error("schedule LIST_PAGE limit must be between 1 and 1000");
@@ -122,7 +106,15 @@ export const ScheduleCodec = {
     const hasMoreByte = reader.readU8();
     if (hasMoreByte !== 0 && hasMoreByte !== 1)
       throw new Error("LIST_PAGE response has invalid has_more flag");
-    const continuation = reader.readOptionalString() ?? undefined;
+    const continuationFlag = reader.readU8();
+    const continuation =
+      continuationFlag === 0
+        ? undefined
+        : continuationFlag === 1
+          ? reader.readString()
+          : (() => {
+              throw new Error("LIST_PAGE response has invalid continuation flag");
+            })();
     const entries: ScheduleEntry[] = [];
     while (true) {
       const sentinel = reader.readU8();
@@ -136,41 +128,6 @@ export const ScheduleCodec = {
     }
     if (!reader.isEOF()) throw new Error("LIST_PAGE response has trailing bytes");
     return { entries, hasMore: hasMoreByte === 1, continuation };
-  },
-
-  /**
-   * Decode LIST response
-   * Success payload: [total_count: u64][has_entry: u8]...[route: string][cron: string][delivery_mode: u8][payload: bytes when has_entry=1]
-   */
-  decodeListResponse(data: Uint8Array): ScheduleListResponse {
-    const reader = createBufferReader(data);
-    if (reader.remainingBytes() < 8) {
-      throw new Error("LIST response missing total_count");
-    }
-    const totalCount = reader.readU64BE();
-    const entries: ScheduleEntry[] = [];
-
-    while (!reader.isEOF()) {
-      const hasEntry = reader.readU8();
-      if (hasEntry === 0) {
-        break;
-      }
-
-      const route = reader.readString();
-      const cron = reader.readString();
-      const deliveryMode = decodeDeliveryMode(reader.readU8());
-      const payloadBytes = reader.readBytes(reader.readU32BE());
-
-      entries.push({
-        id: route, // Route as identity
-        route,
-        cron,
-        deliveryMode,
-        payload: payloadBytes,
-      });
-    }
-
-    return { totalCount, entries };
   },
 
   /**

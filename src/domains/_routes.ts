@@ -71,8 +71,7 @@ export function isStreamSelectorShape(route: string): boolean {
   return (
     (literal(realm) && literal(area) && literal(resource)) ||
     (literal(realm) && literal(area) && wild(resource)) ||
-    (literal(realm) && wild(area) && wild(resource)) ||
-    (wild(realm) && wild(area) && wild(resource))
+    (literal(realm) && wild(area) && wild(resource))
   );
 }
 

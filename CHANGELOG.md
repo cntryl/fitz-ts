@@ -8,7 +8,12 @@ The format is based on Keep a Changelog and the project follows Semantic Version
 
 ### Changed
 
-- Breaking: Stream READ and SUBSCRIBE now accept only concrete resource, area (`realm/area/*`), realm (`realm/*/*`), or global (`stream://**`) selectors. READ cursors expose `currentRealm`, and global continuation requests accept `resumeRealm`. Stream LAST is concrete-route only.
+- Breaking: Stream READ and SUBSCRIBE now accept only concrete resource, area (`realm/area/*`), realm (`realm/*/*`), or global (`stream://**`) selectors. Global continuation reuses the returned fingerprint and watermark pair. Stream LAST is concrete-route only.
+
+## [0.1.0] - 2026-08-05
+
+- Breaking: removed legacy stream continuation fields and the offset-based Schedule list call. Use `schedule.listPage()` and its continuation token.
+- Breaking: callable capitalized client aliases were removed; use `createClient` and the domain `create*` factories.
 - Breaking: Queue reserve, Stream read, and Stream last responses now require a concrete route for every returned item. `QueueItem`, `StreamReadItem`, and `StreamRecord` expose that route.
 
 ## [0.0.14] - 2026-08-03

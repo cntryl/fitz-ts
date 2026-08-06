@@ -2,7 +2,7 @@
  * Stream domain exports
  */
 
-export { StreamClient } from "./client";
+export type { StreamClient } from "./client";
 export { StreamCodec } from "./codec";
 export type {
   StreamSession,

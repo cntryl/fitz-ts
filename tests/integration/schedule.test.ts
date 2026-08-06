@@ -48,9 +48,9 @@ describe("Schedule integration", () => {
       await f.client().schedule.create(route, "0 9 * * 1", "Broadcast", b("s1"));
       await f.client().schedule.create(secondRoute, "0 12 * * *", "Broadcast", b("s2"));
 
-      const [entries, totalCount] = await f.client().schedule.list(0n, 100n);
-      expect(Array.isArray(entries)).toBe(true);
-      expect(typeof totalCount).toBe("bigint");
+      const page = await f.client().schedule.listPage(undefined, 100n);
+      expect(Array.isArray(page.entries)).toBe(true);
+      expect(typeof page.hasMore).toBe("boolean");
     });
 
     it("should tolerate cancel of a nonexistent schedule", async () => {

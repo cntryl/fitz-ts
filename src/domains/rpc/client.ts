@@ -626,8 +626,6 @@ export function createRpcClient(connection: RpcConnectionPort): RpcClient {
   };
 }
 
-export const RpcClient = createRpcClient;
-
 export * from "./types";
 
 function encodeRpcErrorBody(code: number, message: string): Uint8Array {

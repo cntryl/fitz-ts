@@ -355,8 +355,6 @@ export function createLeaseClient(connection: LeaseConnectionPort): LeaseClient 
   };
 }
 
-export const LeaseClient = createLeaseClient;
-
 export * from "./types";
 
 function assertExactLeaseRoute(route: string): void {

@@ -13,9 +13,9 @@ npm install @cntryl/fitz
 ## Quick Start
 
 ```typescript
-import { Client } from "@cntryl/fitz";
+import { createClient } from "@cntryl/fitz";
 
-const client = Client({
+const client = createClient({
   url: "ws://localhost:4090/ws",
   tokenProvider: async () => "your-jwt-token",
   asyncHandlers: {
@@ -58,9 +58,9 @@ failures are not retried.
 `fitz-ts` now supports additive observability hooks through `ClientConfig.observability`.
 
 ```typescript
-import { Client } from "@cntryl/fitz";
+import { createClient } from "@cntryl/fitz";
 
-const client = Client({
+const client = createClient({
   url: "ws://localhost:4090/ws",
   observability: {
     logger: {
@@ -145,7 +145,7 @@ a normal HTTP client. Add or override Node-only upgrade headers with
 `ClientConfig.webSocket.headers`:
 
 ```typescript
-const client = Client({
+const client = createClient({
   url: "wss://fitz.example.com/ws",
   webSocket: {
     headers: {

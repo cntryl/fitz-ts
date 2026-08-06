@@ -199,7 +199,5 @@ export function createKvClient(connection: KvConnectionPort): KvClient {
   };
 }
 
-export const KvClient = createKvClient;
-
 export type { KvTransaction } from "./transaction";
 export * from "./types";

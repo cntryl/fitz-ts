@@ -1031,5 +1031,3 @@ export function createConnection(
     getUrl,
   };
 }
-
-export const Connection = createConnection;

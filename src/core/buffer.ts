@@ -309,8 +309,6 @@ export function createBufferWriter(capacity: number = 4096) {
   };
 }
 
-export const BufferWriter = createBufferWriter;
-
 export type BufferReader = ReturnType<typeof createBufferReader>;
 
 export function createBufferReader(buffer: Uint8Array) {
@@ -456,5 +454,3 @@ export function createBufferReader(buffer: Uint8Array) {
     remaining,
   };
 }
-
-export const BufferReader = createBufferReader;

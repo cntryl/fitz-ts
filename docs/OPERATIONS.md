@@ -117,7 +117,7 @@ Async handler controls:
 Example:
 
 ```typescript
-import { Client, type FitzLogger, type FitzMeter, type FitzTracer } from "@cntryl/fitz";
+import { createClient, type FitzLogger, type FitzMeter, type FitzTracer } from "@cntryl/fitz";
 
 const logger: FitzLogger = {
   log(level, event, fields) {
@@ -152,7 +152,7 @@ const meter: FitzMeter = {
   },
 };
 
-const client = Client({
+const client = createClient({
   url: "ws://localhost:4090/ws",
   reconnect: { enabled: true },
   observability: {

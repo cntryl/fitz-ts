@@ -533,8 +533,6 @@ function streamCursorOffset(route: string, cursor: StreamReadPage["cursor"]): bi
   return cursor.lastResourceOffset;
 }
 
-export const StreamClient = createStreamClient;
-
 export * from "./types";
 
 function assertStreamRoute(route: string): void {

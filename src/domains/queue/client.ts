@@ -428,8 +428,6 @@ export function createQueueClient(connection: QueueConnectionPort): QueueClient 
   };
 }
 
-export const QueueClient = createQueueClient;
-
 export * from "./types";
 
 function assertQueueRoute(route: string): void {

@@ -655,8 +655,6 @@ export function createMultiplexer(observability: MultiplexerObservability = {}) 
   };
 }
 
-export const Multiplexer = createMultiplexer;
-
 function abortError(): Error {
   const error = new Error("The operation was aborted");
   error.name = "AbortError";

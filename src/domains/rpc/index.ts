@@ -2,7 +2,7 @@
  * RPC domain exports
  */
 
-export { RpcClient } from "./client";
+export type { RpcClient } from "./client";
 export { RpcCodec } from "./codec";
 export type { RpcSubscription } from "./types";
 export {

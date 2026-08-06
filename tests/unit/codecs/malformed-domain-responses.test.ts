@@ -40,8 +40,8 @@ describe("malformed domain responses", () => {
     ],
     [
       "schedule",
-      () => ScheduleCodec.decodeListResponse(new Uint8Array()),
-      "LIST response missing total_count",
+      () => ScheduleCodec.decodeListPage(new Uint8Array()),
+      "Buffer overflow",
       undefined,
     ],
   ])(

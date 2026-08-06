@@ -2,7 +2,7 @@
  * Lease domain exports
  */
 
-export { LeaseClient } from "./client";
+export type { LeaseClient } from "./client";
 export { LeaseCodec } from "./codec";
 export type { Lease, LeaseSubscription } from "./types";
 export { LeaseStatus } from "./types";

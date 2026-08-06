@@ -4,7 +4,7 @@
  */
 
 /**
- * ScheduleEntry represents a schedule returned by List
+ * ScheduleEntry represents a schedule returned by a list page
  * Per CLIENT_SPEC: route, cron, payload
  */
 export interface ScheduleEntry {
@@ -65,11 +65,6 @@ export interface ScheduleCreateResponse {
 }
 
 export type ScheduleCancelResponse = Record<string, never>;
-
-export interface ScheduleListResponse {
-  totalCount: bigint;
-  entries: ScheduleEntry[];
-}
 
 export interface ScheduleListPage {
   entries: ScheduleEntry[];

@@ -258,7 +258,6 @@ describe("StreamClient", () => {
       lastResourceOffset: 5n,
       lastAreaOffset: 8n,
       lastRealmOffset: 12n,
-      currentRealm: undefined,
       hasMore: false,
     });
 
@@ -383,11 +382,10 @@ function encodeWrappedReadResponse(
     lastResourceOffset: bigint;
     lastAreaOffset?: bigint;
     lastRealmOffset?: bigint;
-    currentRealm?: string;
-    global?: boolean;
     lastGlobalOffset?: bigint;
     cursorFingerprint?: bigint;
     capturedWatermark?: bigint;
+    global?: boolean;
     hasMore: boolean;
   },
 ): Uint8Array {
@@ -406,7 +404,6 @@ function encodeWrappedReadResponse(
   if (cursor.lastRealmOffset !== undefined) {
     data.writeU64BE(cursor.lastRealmOffset);
   }
-  data.writeOptionalString(cursor.currentRealm);
   if (cursor.global) writeOptionalU64(data, cursor.lastGlobalOffset);
   data.writeU8(cursor.hasMore ? 1 : 0);
   if (cursor.global) {

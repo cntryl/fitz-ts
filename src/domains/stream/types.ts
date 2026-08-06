@@ -59,8 +59,6 @@ export interface StreamReadOptions {
   filter?: StreamFilterSet;
   cursorFingerprint?: bigint;
   capturedWatermark?: bigint;
-  /** @deprecated use cursorFingerprint/capturedWatermark */
-  resumeRealm?: string;
   signal?: AbortSignal;
 }
 
@@ -71,8 +69,6 @@ export interface StreamReadCursor {
   lastGlobalOffset?: bigint;
   cursorFingerprint?: bigint;
   capturedWatermark?: bigint;
-  /** @deprecated retained for legacy cursor consumers */
-  currentRealm?: string;
   hasMore: boolean;
 }
 

@@ -209,7 +209,6 @@ function encodeWrappedReadResponse(
   data.writeU64BE(lastOffset);
   data.writeU8(0);
   data.writeU8(0);
-  data.writeU8(0);
   data.writeU8(hasMore ? 1 : 0);
 
   const writer = createBufferWriter(160);

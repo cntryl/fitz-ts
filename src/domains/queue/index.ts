@@ -2,7 +2,7 @@
  * Queue domain exports
  */
 
-export { QueueClient } from "./client";
+export type { QueueClient } from "./client";
 export { QueueCodec } from "./codec";
 export type { QueueItem, QueueSubscription } from "./types";
 export { QueueStatus } from "./types";

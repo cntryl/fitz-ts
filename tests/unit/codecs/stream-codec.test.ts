@@ -65,7 +65,10 @@ function encodeReadResponse(
     lastResourceOffset: bigint;
     lastAreaOffset?: bigint;
     lastRealmOffset?: bigint;
-    currentRealm?: string;
+    lastGlobalOffset?: bigint;
+    cursorFingerprint?: bigint;
+    capturedWatermark?: bigint;
+    global?: boolean;
     hasMore: boolean;
   },
 ): Uint8Array {
@@ -94,8 +97,12 @@ function encodeReadResponse(
   data.writeU64BE(cursor.lastResourceOffset);
   writeOptionalU64(data, cursor.lastAreaOffset);
   writeOptionalU64(data, cursor.lastRealmOffset);
-  data.writeOptionalString(cursor.currentRealm);
+  if (cursor.global) writeOptionalU64(data, cursor.lastGlobalOffset);
   data.writeU8(cursor.hasMore ? 1 : 0);
+  if (cursor.global) {
+    writeOptionalU64(data, cursor.cursorFingerprint);
+    writeOptionalU64(data, cursor.capturedWatermark);
+  }
 
   const writer = createBufferWriter(560);
   writer.writeU8(0);
@@ -455,9 +462,10 @@ describe("StreamCodec", () => {
       expect(reader.isEOF()).toBe(true);
     });
 
-    it("should_encode_global_read_resume_realm", () => {
+    it("should_encode_global_read_cursor_options", () => {
       const encoded = StreamCodec.encodeRead("stream://**", 42n, 10, {
-        resumeRealm: "acme",
+        cursorFingerprint: 7n,
+        capturedWatermark: 9n,
       });
       const reader = createBufferReader(encoded);
 
@@ -466,7 +474,8 @@ describe("StreamCodec", () => {
       expect(reader.readU64BE()).toBe(10n);
       expect(reader.readU8()).toBe(0);
       expect(reader.readU8()).toBe(0);
-      expect(reader.readOptionalString()).toBe("acme");
+      expect(reader.readOptionalU64()).toBe(7n);
+      expect(reader.readOptionalU64()).toBe(9n);
       expect(reader.isEOF()).toBe(true);
     });
   });
@@ -512,7 +521,7 @@ describe("StreamCodec", () => {
       );
 
       // Act
-      const decoded = StreamCodec.decodeReadResponse(response);
+      const decoded = StreamCodec.decodeReadResponse(response, "stream://prod/app/*");
 
       // Assert
       expect(decoded.status).toBe(0);
@@ -541,18 +550,16 @@ describe("StreamCodec", () => {
       // Arrange
       const response = encodeReadResponse([], {
         lastResourceOffset: 0n,
-        currentRealm: "acme",
         hasMore: false,
       });
 
       // Act
-      const decoded = StreamCodec.decodeReadResponse(response);
+      const decoded = StreamCodec.decodeReadResponse(response, "stream://prod/app/*");
 
       // Assert
       expect(decoded.items).toHaveLength(0);
       expect(decoded.cursor).toMatchObject({
         lastResourceOffset: 0n,
-        currentRealm: "acme",
         hasMore: false,
       });
     });
@@ -580,7 +587,7 @@ describe("StreamCodec", () => {
         },
       );
 
-      const decoded = StreamCodec.decodeReadResponse(response);
+      const decoded = StreamCodec.decodeReadResponse(response, "stream://prod/app/*");
 
       expect(decoded.items).toHaveLength(2);
       expect(decoded.items[0]).toEqual({
@@ -616,7 +623,7 @@ describe("StreamCodec", () => {
       );
 
       try {
-        StreamCodec.decodeReadResponse(response);
+        StreamCodec.decodeReadResponse(response, "stream://prod/app/*");
         throw new Error("expected decode to fail");
       } catch (error) {
         expect(error).toBeInstanceOf(StreamError);
