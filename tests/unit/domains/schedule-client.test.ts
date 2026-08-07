@@ -106,13 +106,9 @@ describe("ScheduleClient route validation", () => {
 });
 
 describe("ScheduleClient domain errors", () => {
-  it("should preserve domain identity given typed broker errors when errors are mapped", async () => {
+  it("should preserve the broker message given plain create errors when errors are mapped", async () => {
     const response = new Uint8Array([
       1,
-      0,
-      0,
-      27,
-      96,
       0,
       0,
       0,
@@ -124,8 +120,8 @@ describe("ScheduleClient domain errors", () => {
     await expect(
       client.create("schedule://realm/area/resource/run", "0 0 * * *", "Single"),
     ).rejects.toMatchObject({
-      domainCode: 7008,
-      code: "SCHEDULE_REQUEST_FAILED",
+      code: "SCHEDULE_CREATE_FAILED",
+      message: "CREATE failed: invalid delivery mode",
     });
   });
 });

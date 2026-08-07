@@ -971,6 +971,7 @@ describe(`Fitz conformance — fitz-ts [transport=${TRANSPORT}, auth=${AUTH_MODE
         expect(Buffer.from(page.items[0].record.body).toString()).toBe("alpha");
         expect(page.items[1]).toEqual({
           kind: "filtered",
+          route,
           offset: secondOffset,
           reason: "server_filter",
         });

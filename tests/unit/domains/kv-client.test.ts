@@ -305,13 +305,13 @@ describe("KvClient", () => {
     connection.respond(MSG_KV_SCAN, encodeScanResponse([new Uint8Array([1])], true));
 
     await expect(tx.scanPage()).resolves.toEqual({
-      keys: [new Uint8Array([1])],
+      entries: [{ key: new Uint8Array([1]), value: new Uint8Array() }],
       hasMore: true,
     });
 
     connection.respond(MSG_KV_SCAN, encodeScanResponse([new Uint8Array([2])], true));
     const limited: Uint8Array[] = [];
-    for await (const key of await tx.scan({ limit: 1 })) limited.push(key);
+    for await (const entry of await tx.scan({ limit: 1 })) limited.push(entry.key);
     expect(limited).toEqual([new Uint8Array([2])]);
 
     connection.respond(MSG_KV_SCAN, encodeScanResponse([new Uint8Array([3])], true));

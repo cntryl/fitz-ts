@@ -23,6 +23,7 @@ import type { Transport } from "../../../src/transport/types";
 class FakeTransport implements Transport {
   public sent: Uint8Array[] = [];
   public heartbeatCount = 0;
+  public closeCount = 0;
   public connected = false;
   public connectStarted = false;
   public connectGate: Promise<void> | null = null;
@@ -99,6 +100,7 @@ class FakeTransport implements Transport {
   }
 
   async close(): Promise<void> {
+    this.closeCount += 1;
     this.connected = false;
     this.pendingRead?.reject(new Error("closed"));
     this.pendingRead = null;
@@ -853,6 +855,25 @@ describe("Connection", () => {
     expect(factory).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps the default auth rejection window open for a delayed broker rejection", async () => {
+    vi.useFakeTimers();
+    const transport = new FakeTransport();
+    const factory = vi.fn<() => Transport>().mockReturnValue(transport);
+    const connection = createConnection(factory, async () => "bad-token");
+    try {
+      const connecting = connection.connect();
+      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(500);
+      transport.fail(new Error("connect failed: invalid jwt"));
+
+      await expect(connecting).rejects.toBeInstanceOf(AuthenticationError);
+      expect(factory).toHaveBeenCalledTimes(1);
+    } finally {
+      await connection.close();
+      vi.useRealTimers();
+    }
+  });
+
   it("should reconnect after a settled session drops before the first server frame", async () => {
     const first = new FakeTransport();
     const second = new FakeTransport();
@@ -1415,6 +1436,26 @@ describe("Connection", () => {
     await connection.connect();
     await connection.close();
 
+    expect(onDisconnect).toHaveBeenCalledTimes(1);
+  });
+
+  it("shares one teardown given overlapping close calls", async () => {
+    const transport = new FakeTransport();
+    const connection = createConnection(
+      () => transport,
+      () => "",
+      { authSettleDelayMs: 0 },
+    );
+    const onDisconnect = vi.fn();
+    connection.onDisconnect(onDisconnect);
+    await connection.connect();
+
+    const first = connection.close();
+    const second = connection.close();
+    await Promise.all([first, second]);
+
+    expect(first).toBe(second);
+    expect(transport.closeCount).toBe(1);
     expect(onDisconnect).toHaveBeenCalledTimes(1);
   });
 });

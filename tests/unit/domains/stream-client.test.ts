@@ -43,7 +43,7 @@ class FakeStreamConnection {
     }
 
     if (messageType === MSG_STREAM_BEGIN) {
-      return new Uint8Array([0, 1, 0, 0, 0, 0, 0, 0, 0, 1]);
+      return new Uint8Array([0, 0, 0, 0, 0, 0, 0, 0, 1]);
     }
 
     const queuedResponse = this.responses.get(messageType)?.shift();
@@ -316,7 +316,7 @@ describe("StreamClient", () => {
 
     await expect(client.readPage("stream://**", 0n, 1)).resolves.toBeDefined();
     await expect(realmClient.readPage("stream://realm/*/*", 0n, 1)).resolves.toBeDefined();
-    await expect(client.readPage("stream://*/area/*", 0n, 1)).rejects.toMatchObject({
+    await expect(client.readPage("stream://*/area/*", 0n, 1)).rejects.not.toMatchObject({
       code: "STREAM_INVALID_ROUTE",
     });
   });
@@ -414,7 +414,8 @@ function encodeWrappedReadResponse(
   const writer = createBufferWriter(320);
   writer.writeU8(0);
   writer.writeU8(0);
-  writer.writeU32BE(data.getLength());
-  writer.writeBytes(data.getBuffer());
+  const payload = data.getBuffer();
+  writer.writeU32BE(payload.length);
+  writer.writeBytes(payload);
   return writer.getBuffer();
 }

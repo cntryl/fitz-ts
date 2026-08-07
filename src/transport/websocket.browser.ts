@@ -79,7 +79,7 @@ export function createWebSocketTransport(url: string, options: TransportOptions 
   const receiveQueue: Uint8Array[] = [];
   let receiverResolve: ((data: Uint8Array | null) => void) | null = null;
   const timeout = options.timeout ?? 30000;
-  const maxFrameSize = options.maxFrameSize ?? 65535;
+  const maxFrameSize = options.maxFrameSize ?? 65540;
   const receiveTimeoutEnabled = options.receiveTimeout ?? true;
 
   const enqueueMessage = (data: Uint8Array) => {

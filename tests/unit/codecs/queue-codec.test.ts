@@ -87,6 +87,7 @@ describe("QueueCodec", () => {
       expect(reader.readRoute()).toBe(route);
       expect(reader.readU64BE()).toBe(BigInt(ttlSecs));
       expect(reader.readU8()).toBe(0);
+      expect(reader.readU8()).toBe(0);
       expect(reader.isEOF()).toBe(true);
     });
 
@@ -101,6 +102,19 @@ describe("QueueCodec", () => {
       expect(reader.readU64BE()).toBe(BigInt(ttlSecs));
       expect(reader.readU8()).toBe(1);
       expect(reader.readU32BE()).toBe(10);
+      expect(reader.readU8()).toBe(0);
+      expect(reader.isEOF()).toBe(true);
+    });
+
+    it("should_encode_server_side_wait_seconds", () => {
+      const encoded = QueueCodec.encodeReserve("queue://acme/jobs/tasks", 30, 1, 5);
+      const reader = createBufferReader(encoded);
+      expect(reader.readRoute()).toBe("queue://acme/jobs/tasks");
+      expect(reader.readU64BE()).toBe(30n);
+      expect(reader.readU8()).toBe(1);
+      expect(reader.readU32BE()).toBe(1);
+      expect(reader.readU8()).toBe(1);
+      expect(reader.readU64BE()).toBe(5n);
       expect(reader.isEOF()).toBe(true);
     });
   });
@@ -245,6 +259,7 @@ describe("QueueCodec", () => {
       // Arrange
       const writer = createBufferWriter(16);
       writer.writeU8(0); // status
+      writer.writeU8(1); // has subId
       writer.writeU64BE(555n); // subId
       const response = writer.getBuffer();
 
@@ -256,12 +271,11 @@ describe("QueueCodec", () => {
       expect(decoded.subId).toBe(555n);
     });
 
-    it("should_decode_typed_subscription_error_when_code_equals_remaining_length", () => {
+    it("should_decode_plain_subscription_error", () => {
       // Arrange
       const message = "x".repeat(4006);
       const writer = createBufferWriter(4096);
       writer.writeU8(1);
-      writer.writeU32BE(4010);
       writer.writeString(message);
 
       // Act
@@ -269,7 +283,7 @@ describe("QueueCodec", () => {
 
       // Assert
       expect(decoded.status).toBe(1);
-      expect(decoded.errorCode).toBe(4010);
+      expect(decoded.errorCode).toBeUndefined();
       expect(decoded.errorMessage).toBe(message);
     });
   });

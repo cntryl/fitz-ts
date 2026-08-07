@@ -77,6 +77,7 @@ describe("Stream integration", () => {
       expect(page.items[0]).toMatchObject({ kind: "event" });
       expect(page.items[1]).toEqual({
         kind: "filtered",
+        route,
         offset: 1n,
         reason: "server_filter",
       });

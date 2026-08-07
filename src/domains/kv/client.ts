@@ -67,10 +67,18 @@ export function createKvClient(connection: KvConnectionPort): KvClient {
   const registerSingleFlight = createKeyedSingleFlight<string, KvSubscriptionState>();
 
   connection.onReconnect(async () => {
-    await restoreMapEntriesAtomically(subscriptionsByPattern, async (pattern, state) => ({
-      subId: await subscribeWire(pattern, requestReconnectFrame),
-      handlers: new Map(state.handlers),
-    }));
+    await restoreMapEntriesAtomically(
+      subscriptionsByPattern,
+      async (pattern, state) => ({
+        subId: await subscribeWire(pattern, requestReconnectFrame),
+        handlers: new Map(state.handlers),
+      }),
+      async (pattern) => {
+        parseStandardResponse(
+          await requestReconnectFrame(MSG_KV_UNSUBSCRIBE, KvCodec.encodeUnsubscribe(pattern)),
+        );
+      },
+    );
     patternsBySubId.clear();
     for (const [pattern, state] of subscriptionsByPattern) {
       patternsBySubId.set(state.subId, pattern);
@@ -122,8 +130,6 @@ export function createKvClient(connection: KvConnectionPort): KvClient {
     if (!state) return;
     state.handlers.delete(handlerId);
     if (state.handlers.size > 0) return;
-    subscriptionsByPattern.delete(pattern);
-    patternsBySubId.delete(state.subId);
     const parsed = parseStandardResponse(
       await requestFrame(MSG_KV_UNSUBSCRIBE, KvCodec.encodeUnsubscribe(pattern)),
     );
@@ -134,6 +140,8 @@ export function createKvClient(connection: KvConnectionPort): KvClient {
         parsed.errorCode,
       );
     }
+    subscriptionsByPattern.delete(pattern);
+    patternsBySubId.delete(state.subId);
   };
 
   const initNotifyHandler = (): void => {

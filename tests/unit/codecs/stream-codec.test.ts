@@ -107,8 +107,9 @@ function encodeReadResponse(
   const writer = createBufferWriter(560);
   writer.writeU8(0);
   writer.writeU8(0);
-  writer.writeU32BE(data.getLength());
-  writer.writeBytes(data.getBuffer());
+  const payload = data.getBuffer();
+  writer.writeU32BE(payload.length);
+  writer.writeBytes(payload);
   return writer.getBuffer();
 }
 
@@ -132,15 +133,10 @@ function writeFilteredReason(
   }
 }
 
-function encodeLastResponse(route: string, record: Uint8Array): Uint8Array {
-  const data = createBufferWriter(route.length + record.length + 8);
-  data.writeString(route);
-  data.writeBytes(record);
+function encodeLastResponse(record: Uint8Array): Uint8Array {
   const writer = createBufferWriter(320);
   writer.writeU8(0);
-  writer.writeU8(0);
-  writer.writeU32BE(data.getLength());
-  writer.writeBytes(data.getBuffer());
+  writer.writeBytes(record);
   return writer.getBuffer();
 }
 
@@ -166,8 +162,6 @@ function encodeMetadataResponse(metadata: {
 
   const writer = createBufferWriter(320);
   writer.writeU8(0);
-  writer.writeU8(0);
-  writer.writeU32BE(data.getLength());
   writer.writeBytes(data.getBuffer());
   return writer.getBuffer();
 }
@@ -289,9 +283,8 @@ describe("StreamCodec", () => {
       // Arrange
       const writer = createBufferWriter(24);
       writer.writeU8(0); // status = success
-      writer.writeU8(1); // has_session_id = 1
       writer.writeU64BE(456n); // sessionId
-      writer.writeU32BE(0); // empty data
+      writer.writeU32BE(0); // opaque data length
       const response = writer.getBuffer();
 
       // Act
@@ -304,27 +297,39 @@ describe("StreamCodec", () => {
 
     it("should_decode_begin_response_error", () => {
       // Arrange
-      const response = new Uint8Array([1]); // error status
+      const writer = createBufferWriter(32);
+      writer.writeU8(1);
+      writer.writeString("session already active");
 
       // Act
-      const decoded = StreamCodec.decodeBeginResponse(response);
+      const decoded = StreamCodec.decodeBeginResponse(writer.getBuffer());
 
       // Assert
       expect(decoded.status).toBe(1);
+      expect(decoded.errorMessage).toBe("session already active");
     });
 
-    it("should_reject_wrapped_response_with_trailing_bytes", () => {
+    it("accepts the canonical unwrapped success response", () => {
       const writer = createBufferWriter(16);
       writer.writeU8(0);
-      writer.writeU8(0);
-      writer.writeU32BE(0);
-      writer.writeU8(0xff);
+      writer.writeU64BE(99n);
 
-      expect(() => StreamCodec.decodeBeginResponse(writer.getBuffer())).toThrow("trailing bytes");
+      expect(StreamCodec.decodeBeginResponse(writer.getBuffer()).sessionId).toBe(99n);
     });
   });
 
   describe("APPEND encoding", () => {
+    it("should_decode_canonical_length_prefixed_append_offset", () => {
+      const writer = createBufferWriter(16);
+      writer.writeU8(0);
+      writer.writeU32BE(8);
+      writer.writeU64BE(42n);
+
+      const decoded = StreamCodec.decodeAppendResponse(writer.getBuffer());
+
+      expect(decoded.offset).toBe(42n);
+    });
+
     it("should_encode_append_with_records", () => {
       // Arrange
       const sessionId = 456n;
@@ -636,7 +641,6 @@ describe("StreamCodec", () => {
     it("should_decode_last_response_with_record", () => {
       // Arrange
       const response = encodeLastResponse(
-        "stream://prod/app/events",
         encodeStreamRecord({
           offset: 500n,
           areaOffset: 501n,
@@ -648,7 +652,7 @@ describe("StreamCodec", () => {
       );
 
       // Act
-      const decoded = StreamCodec.decodeLastResponse(response);
+      const decoded = StreamCodec.decodeLastResponse(response, "stream://prod/app/events");
 
       // Assert
       expect(decoded.status).toBe(0);
@@ -658,19 +662,20 @@ describe("StreamCodec", () => {
       expect(Buffer.from(decoded.record?.body ?? new Uint8Array()).toString()).toBe("last-record");
     });
 
-    it("should_reject_wildcard_route_in_last_response", () => {
+    it("should_reject_trailing_bytes_in_last_response", () => {
       const response = encodeLastResponse(
-        "stream://*/app/events",
         encodeStreamRecord({
           offset: 1n,
           body: testData("invalid"),
           timestamp: 2n,
         }),
       );
+      const malformed = new Uint8Array(response.length + 1);
+      malformed.set(response);
 
-      expect(() => StreamCodec.decodeLastResponse(response)).toThrowError(
-        expect.objectContaining({ code: "STREAM_LAST_INVALID_RESPONSE" }),
-      );
+      expect(() =>
+        StreamCodec.decodeLastResponse(malformed, "stream://prod/app/events"),
+      ).toThrowError(expect.objectContaining({ code: "STREAM_LAST_INVALID_RESPONSE" }));
     });
   });
 

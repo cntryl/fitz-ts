@@ -8,7 +8,11 @@ The format is based on Keep a Changelog and the project follows Semantic Version
 
 ### Changed
 
-- Breaking: Stream READ and SUBSCRIBE now accept only concrete resource, area (`realm/area/*`), realm (`realm/*/*`), or global (`stream://**`) selectors. Global continuation reuses the returned fingerprint and watermark pair. Stream LAST is concrete-route only.
+- Breaking: Schedule listing now uses canonical message 702 with offset/limit pages and `totalCount`.
+- Breaking: KV scans return key/value pairs and `hasMore` instead of keys alone.
+- Lease acquisition accepts `waitSeconds` and completes broker-managed queued acquisition instead of polling.
+- Stream selectors accept the full documented wildcard matrix and global records expose `globalOffset`.
+- Domain errors preserve broker codes and messages; reconnect, unsubscribe, close, and request cancellation bookkeeping is transactional.
 
 ## [0.1.0] - 2026-08-05
 

@@ -147,10 +147,10 @@ describe("KV integration", () => {
       await tx.commit();
 
       const rtx = await f.client().kv.begin(route, { mode: "ReadOnly", durability: "Sync" });
-      const keys = await collectAsyncIterable(
+      const pairs = await collectAsyncIterable(
         await rtx.scan({ startKey: b("a"), endKey: b("d"), limit: 10 }),
       );
-      expect(keys.map((key) => Buffer.from(key).toString())).toEqual(["a", "b", "c"]);
+      expect(pairs.map((pair) => Buffer.from(pair.key).toString())).toEqual(["a", "b", "c"]);
     });
 
     it("should delete range", async () => {
@@ -170,10 +170,10 @@ describe("KV integration", () => {
       await tx2.commit();
 
       const rtx = await f.client().kv.begin(route, { mode: "ReadOnly", durability: "Sync" });
-      const keys = await collectAsyncIterable(
+      const pairs = await collectAsyncIterable(
         await rtx.scan({ startKey: b("a"), endKey: b("z"), limit: 10 }),
       );
-      expect(keys.map((key) => Buffer.from(key).toString())).toEqual(["a", "d"]);
+      expect(pairs.map((pair) => Buffer.from(pair.key).toString())).toEqual(["a", "d"]);
     });
 
     it("should respect scan limit", async () => {

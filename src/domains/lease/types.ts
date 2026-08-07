@@ -84,7 +84,7 @@ export function createLease(
       try {
         const requestPayload = LeaseCodec.encodeExtend(route, currentToken, ttlSecs);
         const response = await connection.request(MSG_LEASE_RENEW, requestPayload, signal);
-        const data = assertSuccess(response, "EXTEND");
+        const data = assertPlainSuccess(response, "EXTEND");
         if (!data || data.length < 8) {
           throw new LeaseError("EXTEND response missing fencing token", "EXTEND_INVALID_RESPONSE");
         }
@@ -106,7 +106,7 @@ export function createLease(
       unsubscribeDisconnect();
       const payload = LeaseCodec.encodeRelease(route, currentToken);
       const response = await connection.request(MSG_LEASE_RELEASE, payload, signal);
-      assertSuccess(response, "RELEASE");
+      assertPlainSuccess(response, "RELEASE");
     });
 
   const getExpiry = (): bigint => currentExpiry;
@@ -123,8 +123,13 @@ export function createLease(
  */
 export interface AcquireResponse {
   token: bigint;
-  responseType: 0 | 1;
+  responseType: 0 | 1 | 2 | 3;
   expiresAt?: bigint;
+}
+
+export interface LeaseAcquireOptions {
+  waitSeconds?: number;
+  signal?: AbortSignal;
 }
 
 /**
@@ -144,6 +149,7 @@ export interface LeaseInfo {
  */
 export interface QueryResponse {
   status: number;
+  errorMessage?: string;
   isHeld?: boolean;
   owner?: string;
   token?: bigint;
@@ -179,6 +185,7 @@ export enum LeaseStatus {
 
 export interface WithLeaseOptions {
   waitForAvailability?: boolean;
+  waitSeconds?: number;
   signal?: AbortSignal;
 }
 
@@ -195,6 +202,6 @@ export class LeaseLifecycleError extends Error {
 
 // Import needed types for Lease class methods
 import { createBufferReader } from "../../core/buffer";
-import { assertSuccess } from "../../protocol/response";
+import { assertPlainSuccess } from "../../protocol/response";
 import { MSG_LEASE_RENEW, MSG_LEASE_RELEASE } from "../../frame/types";
 import { LeaseCodec } from "./codec";

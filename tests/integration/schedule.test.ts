@@ -50,7 +50,7 @@ describe("Schedule integration", () => {
 
       const page = await f.client().schedule.listPage(undefined, 100n);
       expect(Array.isArray(page.entries)).toBe(true);
-      expect(typeof page.hasMore).toBe("boolean");
+      expect(typeof page.totalCount).toBe("bigint");
     });
 
     it("should tolerate cancel of a nonexistent schedule", async () => {

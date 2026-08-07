@@ -87,7 +87,7 @@ export function createConnection(
   options: ConnectionOptions = {},
 ) {
   const timeout = options.timeout ?? 30000;
-  const authSettleDelayMs = options.authSettleDelayMs ?? 100;
+  const authSettleDelayMs = options.authSettleDelayMs ?? 1000;
   const reconnectEnabled = options.reconnect?.enabled ?? false;
   const reconnectMaxAttempts = options.reconnect?.maxAttempts ?? Infinity;
   const reconnectBackoffMs = options.reconnect?.backoffMs ?? 250;
@@ -116,6 +116,7 @@ export function createConnection(
   let closeRequested = false;
   let permanentlyClosed = false;
   let connectPromise: Promise<void> | null = null;
+  let closePromise: Promise<void> | null = null;
   let reconnectPromise: Promise<void> | null = null;
   let connectionLossPromise: Promise<void> | null = null;
   let reconnectRestoreActive = false;
@@ -235,7 +236,7 @@ export function createConnection(
     await sharedConnectPromise;
   };
 
-  const close = async (): Promise<void> => {
+  const runClose = async (): Promise<void> => {
     if (state === ConnectionState.Closed && !transport) {
       await connectionScope.dispose();
       return;
@@ -271,6 +272,12 @@ export function createConnection(
     transport = null;
     await asyncHandlerDispatcher.drain();
     await scopeDisposePromise;
+  };
+
+  const close = (): Promise<void> => {
+    if (closePromise) return closePromise;
+    closePromise = runClose();
+    return closePromise;
   };
 
   const waitForRequestReady = async (

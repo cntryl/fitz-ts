@@ -112,13 +112,21 @@ export function createStreamClient(connection: StreamConnectionPort): StreamClie
       return;
     }
 
-    await restoreMapEntriesAtomically(subscriptionsByPattern, async (pattern, state) => {
-      const subId = await subscribeWire(pattern, requestReconnectFrame);
-      return {
-        subId,
-        handlers: new Map(state.handlers),
-      };
-    });
+    await restoreMapEntriesAtomically(
+      subscriptionsByPattern,
+      async (pattern, state) => {
+        const subId = await subscribeWire(pattern, requestReconnectFrame);
+        return { subId, handlers: new Map(state.handlers) };
+      },
+      async (pattern) => {
+        parseStandardResponse(
+          await requestReconnectFrame(
+            MSG_STREAM_UNSUBSCRIBE,
+            StreamCodec.encodeUnsubscribe(pattern),
+          ),
+        );
+      },
+    );
 
     patternsBySubId.clear();
     for (const [pattern, state] of subscriptionsByPattern) {
@@ -133,7 +141,7 @@ export function createStreamClient(connection: StreamConnectionPort): StreamClie
     const response = await requestFrame(MSG_STREAM_BEGIN, payload);
     const decoded = StreamCodec.decodeBeginResponse(response);
 
-    checkStatus(decoded.status, "BEGIN");
+    checkStatus(decoded, "BEGIN");
 
     if (decoded.sessionId === undefined) {
       throw new StreamError("BEGIN response missing sessionId", "MISSING_SESSION_ID");
@@ -161,7 +169,7 @@ export function createStreamClient(connection: StreamConnectionPort): StreamClie
         const response = await requestFrame(MSG_STREAM_READ, payload, options?.signal);
         const decoded = StreamCodec.decodeReadResponse(response, route);
 
-        checkStatus(decoded.status, "READ");
+        checkStatus(decoded, "READ");
 
         return {
           items: decoded.items,
@@ -267,9 +275,9 @@ export function createStreamClient(connection: StreamConnectionPort): StreamClie
       async () => {
         const payload = StreamCodec.encodeLast(route);
         const response = await requestFrame(MSG_STREAM_LAST, payload);
-        const decoded = StreamCodec.decodeLastResponse(response);
+        const decoded = StreamCodec.decodeLastResponse(response, route);
 
-        checkStatus(decoded.status, "LAST");
+        checkStatus(decoded, "LAST");
 
         return decoded.record ?? null;
       },
@@ -289,7 +297,7 @@ export function createStreamClient(connection: StreamConnectionPort): StreamClie
         const response = await requestFrame(MSG_STREAM_GET_METADATA, payload);
         const decoded = StreamCodec.decodeMetadataResponse(response);
 
-        checkStatus(decoded.status, "GET_METADATA");
+        checkStatus(decoded, "GET_METADATA");
 
         return (
           decoded.metadata ?? {
@@ -356,9 +364,13 @@ export function createStreamClient(connection: StreamConnectionPort): StreamClie
 
     subscription.handlers.set(handlerId, handler);
     flushPendingNotifications(subId);
-    return createStreamSubscription(subId, pattern, async () => {
-      await unsubscribe(pattern, handlerId);
-    });
+    return createStreamSubscription(
+      () => subscriptionsByPattern.get(pattern)?.subId ?? subId,
+      pattern,
+      async () => {
+        await unsubscribe(pattern, handlerId);
+      },
+    );
   };
 
   const unsubscribe = async (pattern: string, handlerId: number): Promise<void> => {
@@ -372,9 +384,6 @@ export function createStreamClient(connection: StreamConnectionPort): StreamClie
       return;
     }
 
-    subscriptionsByPattern.delete(pattern);
-    patternsBySubId.delete(subscription.subId);
-    pendingNotificationsBySubId.delete(subscription.subId);
     const payload = StreamCodec.encodeUnsubscribe(pattern);
     const parsed = parseStandardResponse(await requestFrame(MSG_STREAM_UNSUBSCRIBE, payload));
     if (!parsed.success) {
@@ -384,6 +393,9 @@ export function createStreamClient(connection: StreamConnectionPort): StreamClie
         parsed.errorCode,
       );
     }
+    subscriptionsByPattern.delete(pattern);
+    patternsBySubId.delete(subscription.subId);
+    pendingNotificationsBySubId.delete(subscription.subId);
   };
 
   const initNotifyHandler = (): void => {
@@ -492,23 +504,16 @@ export function createStreamClient(connection: StreamConnectionPort): StreamClie
     }
   };
 
-  const checkStatus = (status: number, operation: string): void => {
-    if (status === StreamStatus.Ok) {
+  const checkStatus = (
+    response: { status: number; errorCode?: number; errorMessage?: string },
+    operation: string,
+  ): void => {
+    if (response.status === StreamStatus.Ok) {
       return;
     }
-
-    const statusNames: Record<number, string> = {
-      [StreamStatus.StreamNotFound]: "StreamNotFound",
-      [StreamStatus.OffsetOutOfRange]: "OffsetOutOfRange",
-      [StreamStatus.InvalidOffset]: "InvalidOffset",
-      [StreamStatus.StreamFull]: "StreamFull",
-      [StreamStatus.SessionNotFound]: "SessionNotFound",
-      [StreamStatus.SessionClosed]: "SessionClosed",
-      [StreamStatus.ExpectedOffsetMismatch]: "ExpectedOffsetMismatch",
-    };
-
-    const statusName = formatStatusName(status, statusNames);
-    throw new StreamError(`${operation} failed: ${statusName}`, statusName, status);
+    const code = response.errorCode ?? response.status;
+    const reason = response.errorMessage ?? formatStatusName(code, {});
+    throw new StreamError(`${operation} failed: ${reason}`, operation, code);
   };
 
   return {

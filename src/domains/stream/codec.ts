@@ -56,16 +56,17 @@ export const StreamCodec = {
     return buffer;
   },
 
-  /**
-   * Decode BEGIN response
-   * Payload: [status: u8][has_session_id: u8][session_id?: u64][data: bytes]
-   */
+  /** Decode BEGIN response: [status][session_id] on success. */
   decodeBeginResponse(payload: Uint8Array): {
     status: number;
     sessionId?: bigint;
+    errorCode?: number;
+    errorMessage?: string;
   } {
-    const decoded = this.decodeWrappedResponse(payload);
-    return { status: decoded.status, sessionId: decoded.sessionId };
+    const decoded = this.decodePlainWrappedResponse(payload);
+    if (decoded.status !== 0) return decoded;
+    if (decoded.data.length < 8) return { status: decoded.status };
+    return { status: decoded.status, sessionId: createBufferReader(decoded.data).readU64BE() };
   },
 
   /**
@@ -116,20 +117,26 @@ export const StreamCodec = {
     return buffer;
   },
 
-  /**
-   * Decode APPEND response
-   * Payload: [status: u8][has_session_id: u8][session_id?: u64][data: bytes]
-   */
+  /** Decode APPEND response: [status][assigned_offset] on success. */
   decodeAppendResponse(payload: Uint8Array): {
     status: number;
     offset?: bigint;
+    errorCode?: number;
+    errorMessage?: string;
   } {
-    const decoded = this.decodeWrappedResponse(payload);
-    if (decoded.status !== 0 || decoded.data.length < 8) {
-      return { status: decoded.status };
+    const decoded = this.decodePlainWrappedResponse(payload);
+    if (decoded.status !== 0 || decoded.data.length < 12) {
+      return decoded;
     }
 
     const reader = createBufferReader(decoded.data);
+    const length = reader.readU32BE();
+    if (length !== 8 || reader.remainingBytes() !== length) {
+      throw new StreamError(
+        "APPEND response has invalid payload length",
+        "APPEND_INVALID_RESPONSE",
+      );
+    }
     return { status: decoded.status, offset: reader.readU64BE() };
   },
 
@@ -148,10 +155,12 @@ export const StreamCodec = {
    * Decode COMMIT response
    * Payload: [status: u8]
    */
-  decodeCommitResponse(payload: Uint8Array): { status: number } {
-    const reader = createBufferReader(payload);
-    const status = reader.readU8();
-    return { status };
+  decodeCommitResponse(payload: Uint8Array): {
+    status: number;
+    errorCode?: number;
+    errorMessage?: string;
+  } {
+    return this.decodeWrappedResponse(payload);
   },
 
   /**
@@ -168,10 +177,12 @@ export const StreamCodec = {
    * Decode ROLLBACK response
    * Payload: [status: u8]
    */
-  decodeRollbackResponse(payload: Uint8Array): { status: number } {
-    const reader = createBufferReader(payload);
-    const status = reader.readU8();
-    return { status };
+  decodeRollbackResponse(payload: Uint8Array): {
+    status: number;
+    errorCode?: number;
+    errorMessage?: string;
+  } {
+    return this.decodeWrappedResponse(payload);
   },
 
   /**
@@ -246,10 +257,12 @@ export const StreamCodec = {
     status: number;
     items: StreamReadItem[];
     cursor?: StreamReadCursor;
+    errorCode?: number;
+    errorMessage?: string;
   } {
     const decoded = this.decodeWrappedResponse(payload);
     if (decoded.status !== 0) {
-      return { status: decoded.status, items: [] };
+      return { ...decoded, items: [] };
     }
 
     if (!isStreamSelector(selector)) {
@@ -263,7 +276,15 @@ export const StreamCodec = {
       return { status: decoded.status, items: [] };
     }
 
-    const reader = createBufferReader(decoded.data);
+    const envelope = createBufferReader(decoded.data);
+    if (envelope.readU8() !== 0) {
+      throw new StreamError("READ response has invalid session flag", "READ_INVALID_RESPONSE");
+    }
+    const dataLength = envelope.readU32BE();
+    if (dataLength !== envelope.remainingBytes()) {
+      throw new StreamError("READ response has invalid payload length", "READ_INVALID_RESPONSE");
+    }
+    const reader = createBufferReader(envelope.readBytes(dataLength));
     const extended = isGlobalSelector(selector);
     const count = reader.readU32BE();
     const items: StreamReadItem[] = [];
@@ -317,24 +338,22 @@ export const StreamCodec = {
    * Decode LAST response
    * Payload: [status: u8][has_session_id: u8][session_id?: u64][data: bytes]
    */
-  decodeLastResponse(payload: Uint8Array): {
+  decodeLastResponse(
+    payload: Uint8Array,
+    route: string,
+  ): {
     status: number;
     record?: StreamRecord;
+    errorCode?: number;
+    errorMessage?: string;
   } {
     const decoded = this.decodeWrappedResponse(payload);
     if (decoded.status !== 0 || decoded.data.length === 0) {
-      return { status: decoded.status };
+      return decoded;
     }
 
     const reader = createBufferReader(decoded.data);
-    const concreteRoute = reader.readRoute();
-    if (!isRouteShape(concreteRoute, "stream", 3)) {
-      throw new StreamError(
-        `LAST response contains invalid concrete stream route: ${concreteRoute}`,
-        "LAST_INVALID_RESPONSE",
-      );
-    }
-    const record = this.decodeStreamRecord(reader, concreteRoute, false);
+    const record = this.decodeStreamRecord(reader, route, false);
     if (!reader.isEOF()) {
       throw new StreamError("LAST response has trailing bytes", "LAST_INVALID_RESPONSE");
     }
@@ -357,10 +376,12 @@ export const StreamCodec = {
   decodeMetadataResponse(payload: Uint8Array): {
     status: number;
     metadata?: StreamMetadata;
+    errorCode?: number;
+    errorMessage?: string;
   } {
     const decoded = this.decodeWrappedResponse(payload);
     if (decoded.status !== 0 || decoded.data.length === 0) {
-      return { status: decoded.status };
+      return decoded;
     }
 
     const reader = createBufferReader(decoded.data);
@@ -510,37 +531,36 @@ export const StreamCodec = {
     status: number;
     sessionId?: bigint;
     data: Uint8Array;
+    errorCode?: number;
+    errorMessage?: string;
   } {
     const reader = createBufferReader(payload);
     const status = reader.readU8();
     if (status !== 0) {
-      return { status, data: new Uint8Array(0) };
+      if (reader.remainingBytes() < 8) return { status, data: new Uint8Array(0) };
+      const errorCode = reader.readU32BE();
+      const errorMessage = reader.readString();
+      return { status, data: new Uint8Array(0), errorCode, errorMessage };
     }
+    return { status, data: reader.remaining() };
+  },
 
-    let sessionId: bigint | undefined;
-    if (!reader.isEOF()) {
-      const hasSessionId = reader.readU8();
-      if (hasSessionId === 1 && reader.remainingBytes() >= 8) {
-        sessionId = reader.readU64BE();
-      }
+  decodePlainWrappedResponse(payload: Uint8Array): {
+    status: number;
+    data: Uint8Array;
+    errorMessage?: string;
+  } {
+    const reader = createBufferReader(payload);
+    const status = reader.readU8();
+    if (status !== 0) {
+      return { status, data: new Uint8Array(0), errorMessage: reader.readString() };
     }
-
-    if (reader.isEOF()) {
-      return { status, sessionId, data: new Uint8Array(0) };
-    }
-
-    const dataLength = reader.readU32BE();
-    const data = reader.readBytes(dataLength);
-    if (!reader.isEOF()) {
-      throw new Error("wrapped response has trailing bytes");
-    }
-
-    return { status, sessionId, data };
+    return { status, data: reader.remaining() };
   },
 };
 
 function isGlobalSelector(selector: string): boolean {
-  return selector === "stream://**";
+  return selector === "stream://**" || selector === "stream://*/*/*";
 }
 
 function isStreamSelector(selector: string): boolean {

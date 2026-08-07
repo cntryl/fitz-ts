@@ -7,7 +7,7 @@ import "../../core/async-dispose";
 import type { DisconnectListenerPort, RequestPort, RetryExecutionPort } from "../base";
 import type { RetryOperation } from "../../client/resilience";
 import { KvCodec } from "./codec";
-import { KvGetResult, KvScanOptions, KvScanPage, KvStatus } from "./types";
+import { KvGetResult, KvScanOptions, KvScanPage, KvStatus, KvStatusResponse } from "./types";
 import {
   MSG_KV_PUT,
   MSG_KV_INSERT,
@@ -60,21 +60,12 @@ export function createKvTransaction(
     }
   };
 
-  const checkStatus = (status: number, operation: string): void => {
-    if (status === KvStatus.Ok) {
+  const checkStatus = (response: KvStatusResponse, operation: string): void => {
+    if (response.status === KvStatus.Ok) {
       return;
     }
-
-    const statusNames: Record<number, string> = {
-      [KvStatus.TransactionAborted]: "TransactionAborted",
-      [KvStatus.LeaseExpired]: "LeaseExpired",
-      [KvStatus.ConflictingWrite]: "ConflictingWrite",
-      [KvStatus.KeyNotFound]: "KeyNotFound",
-      [KvStatus.OperationNotAllowed]: "OperationNotAllowed",
-    };
-
-    const statusName = formatStatusName(status, statusNames);
-    throw new KvError(`${operation} failed: ${statusName}`, operation, status);
+    const reason = response.errorMessage ?? formatStatusName(response.status, {});
+    throw new KvError(`${operation} failed: ${reason}`, operation, response.status);
   };
 
   const runWithRetry = async <T>(operation: RetryOperation, task: () => Promise<T>): Promise<T> => {
@@ -89,7 +80,7 @@ export function createKvTransaction(
     ensureOpen();
     const payload = KvCodec.encodePut(txId, route, key, value);
     const response = await connection.request(MSG_KV_PUT, payload, signal);
-    checkStatus(KvCodec.decodeStatusResponse(response).status, "PUT");
+    checkStatus(KvCodec.decodeStatusResponse(response), "PUT");
   };
 
   const insert = async (
@@ -100,7 +91,7 @@ export function createKvTransaction(
     ensureOpen();
     const payload = KvCodec.encodeInsert(txId, route, key, value);
     const response = await connection.request(MSG_KV_INSERT, payload, signal);
-    checkStatus(KvCodec.decodeStatusResponse(response).status, "INSERT");
+    checkStatus(KvCodec.decodeStatusResponse(response), "INSERT");
   };
 
   const get = async (key: Uint8Array, signal?: AbortSignal): Promise<KvGetResult> => {
@@ -116,7 +107,7 @@ export function createKvTransaction(
         const payload = KvCodec.encodeGet(txId, route, key);
         const response = await connection.request(MSG_KV_GET, payload, signal);
         const decoded = KvCodec.decodeGetResponse(response);
-        checkStatus(decoded.status, "GET");
+        checkStatus(decoded, "GET");
         if (!decoded.found || !decoded.value) {
           return { type: "not-found" };
         }
@@ -129,7 +120,7 @@ export function createKvTransaction(
     ensureOpen();
     const payload = KvCodec.encodeDelete(txId, route, key);
     const response = await connection.request(MSG_KV_DELETE, payload, signal);
-    checkStatus(KvCodec.decodeStatusResponse(response).status, "DELETE");
+    checkStatus(KvCodec.decodeStatusResponse(response), "DELETE");
   };
 
   const deleteRange = async (
@@ -141,7 +132,7 @@ export function createKvTransaction(
     assertValidRange(startKey, endKey);
     const payload = KvCodec.encodeDeleteRange(txId, route, startKey, endKey);
     const response = await connection.request(MSG_KV_DELETE_RANGE, payload, signal);
-    checkStatus(KvCodec.decodeStatusResponse(response).status, "DELETE_RANGE");
+    checkStatus(KvCodec.decodeStatusResponse(response), "DELETE_RANGE");
   };
 
   const scanPage = async (
@@ -163,8 +154,8 @@ export function createKvTransaction(
         const payload = KvCodec.encodeScan(txId, route, options);
         const response = await connection.request(MSG_KV_SCAN, payload, signal);
         const decoded = KvCodec.decodeScanResponse(response);
-        checkStatus(decoded.status, "SCAN");
-        return { keys: decoded.keys, hasMore: decoded.hasMore };
+        checkStatus(decoded, "SCAN");
+        return { entries: decoded.entries, hasMore: decoded.hasMore };
       },
     );
   };
@@ -172,13 +163,13 @@ export function createKvTransaction(
   const scan = async (
     options: KvScanOptions = {},
     signal?: AbortSignal,
-  ): Promise<AsyncIterable<Uint8Array>> => {
+  ): Promise<AsyncIterable<{ key: Uint8Array; value: Uint8Array }>> => {
     const page = await scanPage(options, signal);
     if (page.hasMore && options.limit === undefined) {
       throw new KvError("SCAN truncated an unbounded response unexpectedly", "SCAN_TRUNCATED");
     }
 
-    return createAsyncIterableIterator(createSliceIterator(page.keys));
+    return createAsyncIterableIterator(createSliceIterator(page.entries));
   };
 
   const commit = async (signal?: AbortSignal): Promise<void> => {
@@ -187,7 +178,7 @@ export function createKvTransaction(
     unsubscribeDisconnect();
     const payload = KvCodec.encodeCommit(txId, route);
     const response = await connection.request(MSG_KV_COMMIT, payload, signal);
-    checkStatus(KvCodec.decodeStatusResponse(response).status, "COMMIT");
+    checkStatus(KvCodec.decodeStatusResponse(response), "COMMIT");
   };
 
   const rollback = async (signal?: AbortSignal): Promise<void> => {
@@ -200,7 +191,7 @@ export function createKvTransaction(
     const payload = KvCodec.encodeRollback(txId, route);
     try {
       const response = await connection.request(MSG_KV_ROLLBACK, payload, signal);
-      checkStatus(KvCodec.decodeStatusResponse(response).status, "ROLLBACK");
+      checkStatus(KvCodec.decodeStatusResponse(response), "ROLLBACK");
     } catch {
       // Best-effort cleanup.
     }

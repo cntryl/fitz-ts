@@ -149,6 +149,18 @@ describe("RpcCodec", () => {
       expect(RpcCodec.tryDecodeTerminalErrorBody(unknownCode.getBuffer())).toBeNull();
       expect(RpcCodec.tryDecodeTerminalErrorBody(malformed)).toBeNull();
     });
+
+    it("classifies the full documented terminal error range", () => {
+      const writer = createBufferWriter(64);
+      writer.writeU8(1);
+      writer.writeU32BE(6013);
+      writer.writeString("subscription limit");
+
+      expect(RpcCodec.tryDecodeTerminalErrorBody(writer.getBuffer())).toEqual({
+        code: 6013,
+        message: "subscription limit",
+      });
+    });
   });
 
   describe("Correlation ID handling", () => {

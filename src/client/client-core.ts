@@ -162,8 +162,10 @@ export function createClientWithTransport<TConfig extends ClientConfig>(
     timeout: 30000,
     transport: "auto",
     webSocket: {},
-    maxFrameSize: 65535,
-    authSettleDelayMs: 100,
+    // maxFrameSize applies to the complete TLV frame, whose 5-byte header is
+    // in addition to the spec's 65535-byte maximum value.
+    maxFrameSize: 65540,
+    authSettleDelayMs: 1000,
     maxInFlightRequests: 256,
     maxRequestQueueSize: 1024,
     observability: config.observability ?? {},
@@ -203,6 +205,7 @@ export function createClientWithTransport<TConfig extends ClientConfig>(
   const domainCache = new Map<DomainKey, DomainClients[DomainKey]>();
   let clientClosed = false;
   let pendingConnectPromise: Promise<void> | null = null;
+  let closePromise: Promise<void> | null = null;
 
   const domainFactories: {
     [K in DomainKey]: (connection: Connection) => DomainClients[K];
@@ -390,7 +393,7 @@ export function createClientWithTransport<TConfig extends ClientConfig>(
     }
   };
 
-  const close = async (): Promise<void> => {
+  const runClose = async (): Promise<void> => {
     if (clientClosed && !connection) {
       domainCache.clear();
       return;
@@ -410,6 +413,12 @@ export function createClientWithTransport<TConfig extends ClientConfig>(
       }
     }
     domainCache.clear();
+  };
+
+  const close = (): Promise<void> => {
+    if (closePromise) return closePromise;
+    closePromise = runClose();
+    return closePromise;
   };
 
   const isConnected = (): boolean => {

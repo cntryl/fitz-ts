@@ -1,7 +1,7 @@
 ﻿# fitz-ts Grading
 
-Version: 0.1.0
-Date: 2026-07-08
+Version: 0.2.0
+Date: 2026-08-07
 Rubric: ../fitz/docs/clients/client-requirements.md
 
 ## Status Legend
@@ -51,7 +51,7 @@ Rubric: ../fitz/docs/clients/client-requirements.md
 | REQ-API-007 | T0 | PASS | src/domains/rpc/client.ts and the stateful handle clients expose binary-first Uint8Array payload APIs with the documented convenience overloads where needed, and tests/unit/domains/rpc-client.test.ts plus the other domain unit suites cover the supported ergonomic entrypoints | core API shape is correct and the supported convenience overloads are exercised |
 | REQ-API-008 | T1 | PASS | src/domains/notice/types.ts, src/domains/queue/types.ts, src/domains/lease/types.ts, src/domains/rpc/types.ts, src/domains/stream/types.ts, and src/domains/schedule/types.ts all expose unsubscribe-capable subscription or worker handle objects | long-lived registrations are modeled with explicit handle types |
 | REQ-API-009 | T1 | PASS | src/domains/rpc/client.ts returns AsyncIterableIterator<ResponseFrame> for streaming RPC and src/domains/kv/transaction.ts and src/domains/stream/client.ts expose async iterable read patterns | streaming/read APIs use idiomatic async iteration |
-| REQ-API-010 | T1 | PASS | README.md, src/index.ts, and the domain client/type layout document the breaking 0.1.0 surface, including factory construction and cursor-based Schedule listing | the public API is coherent and the migration surface is explicit |
+| REQ-API-010 | T1 | PASS | README.md, src/index.ts, and the domain client/type layout document the breaking surface, including factory construction and offset/limit Schedule listing | the public API is coherent and the migration surface is explicit |
 | REQ-ERGON-001 | T0 | PASS | src/domains/kv/client.ts exposes KvTransaction handles, src/domains/stream/types.ts exposes StreamSession without session id accessors, src/domains/notice/types.ts, src/domains/lease/types.ts, src/domains/queue/types.ts, and src/domains/schedule/types.ts keep subscription ids and lease/queue wire tokens internal to opaque handle objects | public handle APIs no longer expose tx_id, session_id, subscription_id, message_id, or correlation/token internals directly |
 | REQ-ERGON-002 | T0 | PASS | src/client/client.ts uses domain-oriented config and domain getters, while src/index.ts exports only client/domain APIs rather than transport framing primitives | callers use domain operations only and are not required to track TLV or TCP/WebSocket framing details |
 | REQ-ERGON-003 | T0 | PASS | public symbols in src/index.ts and src/domains/\*\* use canonical Fitz terminology such as route, realm/area/resource examples, QueueItem, Lease, StreamSession, and Subscription without endpoint/path/topic-style public symbols | the public API terminology aligns with the canonical spec vocabulary |
@@ -130,4 +130,4 @@ Rubric: ../fitz/docs/clients/client-requirements.md
 | REQ-DOCS-005 | T2 | PASS | PERF_RESULTS.md documents benchmark scope, evidence policy, captured results, and named release thresholds, while tests/unit/perf/hotpath-thresholds.test.ts enforces the budgeted bar | performance documentation now spells out the release gate |
 | REQ-DOCS-006 | T2 | PASS | README.md and docs/OPERATIONS.md now include an explicit release-oriented verification checklist covering lint, build, unit, integration, conformance, bench, and pack smoke flows | misuse and release verification guidance is now summarized as a concrete checklist rather than only implied by CI |
 | REQ-DOCS-007 | T2 | PASS | docs/OPERATIONS.md now documents the CONNECTED state, reconnect restoration ordering, async handler controls, shutdown expectations, and same-handle sequencing rules | production-hardening guidance is now materially stronger and aligned with the runtime behavior |
-| REQ-DOCS-008 | T2 | PASS | CHANGELOG.md exists at repo root and documents the 0.1.0 hardening changes | release change tracking artifact is present |
+| REQ-DOCS-008 | T2 | PASS | CHANGELOG.md exists at repo root and documents the 0.2.0 breaking contract changes | release change tracking artifact is present |

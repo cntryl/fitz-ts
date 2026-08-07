@@ -29,7 +29,7 @@ import {
 } from "../internal/subscription-iterator";
 import { LeaseCodec } from "./codec";
 import { createBufferReader } from "../../core/buffer";
-import { parseStandardResponse } from "../../protocol/response";
+import { parsePlainResponse } from "../../protocol/response";
 import {
   ChangeHandler,
   ChangeNotification,
@@ -37,6 +37,7 @@ import {
   LeaseInfo,
   LeaseSubscription,
   LeaseLifecycleError,
+  LeaseAcquireOptions,
   WithLeaseOptions,
   createLease,
   createLeaseSubscription,
@@ -56,7 +57,7 @@ type LeaseConnectionPort = RequestPort &
   Partial<ReconnectRestoreRequestPort>;
 
 export interface LeaseClient {
-  acquire(route: string, ttlSecs: number): Promise<Lease>;
+  acquire(route: string, ttlSecs: number, options?: LeaseAcquireOptions): Promise<Lease>;
   withLease<T>(
     route: string,
     ttlSecs: number,
@@ -76,28 +77,105 @@ export function createLeaseClient(connection: LeaseConnectionPort): LeaseClient 
   const { requestFrame, requestReconnectFrame, runWithRetry } = createDomainClient(connection);
   const subscriptionsByRoute = new Map<string, LeaseSubscriptionState>();
   let initialized = false;
+  let acquireHandlerInitialized = false;
+  let acquisitionTail: Promise<void> = Promise.resolve();
   let nextHandlerId = 1;
+  const queuedAcquisitions: Array<{
+    resolve: (response: Uint8Array) => void;
+    reject: (error: unknown) => void;
+    settled: boolean;
+  }> = [];
+
+  connection.onDisconnect(() => {
+    const error = new LeaseError("Lease acquisition interrupted by disconnect", "DISCONNECTED");
+    for (const queued of queuedAcquisitions.splice(0)) {
+      if (!queued.settled) queued.reject(error);
+    }
+  });
 
   connection.onReconnect(async () => {
     if (subscriptionsByRoute.size === 0) {
       return;
     }
 
-    await restoreMapEntriesAtomically(subscriptionsByRoute, async (route, state) => {
-      const subId = await subscribeWire(route, requestReconnectFrame);
-      return {
-        subId,
-        handlers: new Map(state.handlers),
-      };
-    });
+    await restoreMapEntriesAtomically(
+      subscriptionsByRoute,
+      async (route, state) => {
+        const subId = await subscribeWire(route, requestReconnectFrame);
+        return { subId, handlers: new Map(state.handlers) };
+      },
+      async (route) => {
+        parsePlainResponse(
+          await requestReconnectFrame(MSG_LEASE_UNSUBSCRIBE, LeaseCodec.encodeUnsubscribe(route)),
+        );
+      },
+    );
   });
 
-  const acquire = async (route: string, ttlSecs: number): Promise<Lease> => {
+  const initAcquireHandler = (): void => {
+    if (acquireHandlerInitialized) return;
+    acquireHandlerInitialized = true;
+    connection.registerNotificationHandler(MSG_LEASE_ACQUIRE, (payload) => {
+      let queued = queuedAcquisitions.shift();
+      while (queued?.settled) queued = queuedAcquisitions.shift();
+      queued?.resolve(payload);
+    });
+  };
+
+  const runAcquire = async (
+    route: string,
+    ttlSecs: number,
+    options: LeaseAcquireOptions = {},
+  ): Promise<Lease> => {
     assertExactLeaseRoute(route);
     assertLeaseTtl(ttlSecs);
-    const payload = LeaseCodec.encodeAcquire(route, ttlSecs);
-    const response = await requestFrame(MSG_LEASE_ACQUIRE, payload);
-    const decoded = LeaseCodec.decodeAcquireResponse(response);
+    assertWaitSeconds(options.waitSeconds ?? 0);
+    if (options.signal?.aborted)
+      throw options.signal.reason ?? new Error("Lease acquisition canceled");
+    initAcquireHandler();
+    const payload = LeaseCodec.encodeAcquire(route, ttlSecs, options.waitSeconds ?? 0);
+    let queuedResolve!: (response: Uint8Array) => void;
+    let queuedReject!: (error: unknown) => void;
+    const queuedResponse = new Promise<Uint8Array>((resolve, reject) => {
+      queuedResolve = resolve;
+      queuedReject = reject;
+    });
+    const queued = { resolve: queuedResolve, reject: queuedReject, settled: false };
+    queuedAcquisitions.push(queued);
+    const removeQueued = (): void => {
+      const index = queuedAcquisitions.indexOf(queued);
+      if (index >= 0) queuedAcquisitions.splice(index, 1);
+    };
+    const onAbort = (): void => {
+      queued.settled = true;
+      removeQueued();
+      queuedReject(options.signal?.reason ?? new Error("Lease acquisition canceled"));
+    };
+    options.signal?.addEventListener("abort", onAbort, { once: true });
+
+    let decoded;
+    try {
+      const response = await requestFrame(MSG_LEASE_ACQUIRE, payload, options.signal);
+      decoded = LeaseCodec.decodeAcquireResponse(response);
+    } catch (error) {
+      queued.settled = true;
+      removeQueued();
+      options.signal?.removeEventListener("abort", onAbort);
+      queuedResponse.catch(() => undefined);
+      throw error;
+    }
+
+    if (decoded.responseType === 2 || decoded.responseType === 3) {
+      decoded = LeaseCodec.decodeAcquireResponse(await queuedResponse);
+      options.signal?.removeEventListener("abort", onAbort);
+      if (decoded.responseType !== 0 && decoded.responseType !== 1) {
+        throw new LeaseError("ACQUIRE returned a second queued response", "INVALID_RESPONSE");
+      }
+    } else {
+      queued.settled = true;
+      removeQueued();
+      options.signal?.removeEventListener("abort", onAbort);
+    }
 
     if (decoded.token === undefined) {
       throw new LeaseError("ACQUIRE failed", "ACQUIRE_FAILED");
@@ -105,6 +183,19 @@ export function createLeaseClient(connection: LeaseConnectionPort): LeaseClient 
 
     const expiresAt = decoded.expiresAt ?? BigInt(Math.floor(Date.now() / 1000)) + BigInt(ttlSecs);
     return createLease(decoded.token, expiresAt, route, connection);
+  };
+
+  const acquire = (
+    route: string,
+    ttlSecs: number,
+    options: LeaseAcquireOptions = {},
+  ): Promise<Lease> => {
+    const result = acquisitionTail.then(() => runAcquire(route, ttlSecs, options));
+    acquisitionTail = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
   };
 
   const withLease = async <T>(
@@ -119,20 +210,10 @@ export function createLeaseClient(connection: LeaseConnectionPort): LeaseClient 
       throw options.signal.reason ?? new Error("Lease execution canceled");
     }
 
-    let lease: Lease;
-    let delayMs = 50;
-    for (;;) {
-      try {
-        lease = await acquire(route, ttlSecs);
-        break;
-      } catch (error) {
-        if (!options.waitForAvailability || !isContention(error)) {
-          throw error;
-        }
-        await abortableDelay(Math.random() * delayMs, options.signal);
-        delayMs = Math.min(delayMs * 2, 1000);
-      }
-    }
+    const lease = await acquire(route, ttlSecs, {
+      waitSeconds: options.waitForAvailability ? (options.waitSeconds ?? 30) : 0,
+      signal: options.signal,
+    });
 
     const lifecycle = new AbortController();
     const stopRenewal = new AbortController();
@@ -223,7 +304,11 @@ export function createLeaseClient(connection: LeaseConnectionPort): LeaseClient 
         const response = await requestFrame(MSG_LEASE_QUERY, payload);
         const decoded = LeaseCodec.decodeQueryResponse(response);
         if (decoded.status !== 0) {
-          throw new LeaseError("QUERY failed", "QUERY_FAILED", decoded.status);
+          throw new LeaseError(
+            `QUERY failed: ${decoded.errorMessage ?? `status ${decoded.status}`}`,
+            "QUERY_FAILED",
+            decoded.status,
+          );
         }
         return {
           isHeld: decoded.isHeld ?? false,
@@ -260,7 +345,7 @@ export function createLeaseClient(connection: LeaseConnectionPort): LeaseClient 
 
   const subscribeWire = async (route: string, request = requestFrame): Promise<bigint> => {
     const payload = LeaseCodec.encodeSubscribe(route);
-    const parsed = parseStandardResponse(await request(MSG_LEASE_SUBSCRIBE, payload));
+    const parsed = parsePlainResponse(await request(MSG_LEASE_SUBSCRIBE, payload));
     if (!parsed.success) {
       throw new LeaseError(
         `SUBSCRIBE failed: ${parsed.error ?? "unknown error"}`,
@@ -308,9 +393,8 @@ export function createLeaseClient(connection: LeaseConnectionPort): LeaseClient 
       return;
     }
 
-    subscriptionsByRoute.delete(route);
     const payload = LeaseCodec.encodeUnsubscribe(route);
-    const parsed = parseStandardResponse(await requestFrame(MSG_LEASE_UNSUBSCRIBE, payload));
+    const parsed = parsePlainResponse(await requestFrame(MSG_LEASE_UNSUBSCRIBE, payload));
     if (!parsed.success) {
       throw new LeaseError(
         `UNSUBSCRIBE failed: ${parsed.error ?? "unknown error"}`,
@@ -318,6 +402,7 @@ export function createLeaseClient(connection: LeaseConnectionPort): LeaseClient 
         parsed.errorCode,
       );
     }
+    subscriptionsByRoute.delete(route);
   };
 
   const initNotifyHandler = (): void => {
@@ -372,11 +457,10 @@ function assertLeaseTtl(ttlSecs: number): void {
   }
 }
 
-function isContention(error: unknown): boolean {
-  return (
-    error instanceof LeaseError &&
-    ["LEASE_HELD", "LEASE_QUEUED", "LEASE_ALREADY_QUEUED"].includes(error.code)
-  );
+function assertWaitSeconds(waitSeconds: number): void {
+  if (!Number.isSafeInteger(waitSeconds) || waitSeconds < 0 || waitSeconds > 0xffff_ffff) {
+    throw new LeaseError("waitSeconds must be an unsigned 32-bit integer", "INVALID_WAIT");
+  }
 }
 
 function isManagedCancellation(error: unknown, signal: AbortSignal): boolean {

@@ -28,8 +28,11 @@ export function createStreamSession(
     }
   };
 
-  const checkStatus = (status: number, operation: string): void => {
-    if (status === StreamStatus.Ok) {
+  const checkStatus = (
+    response: { status: number; errorCode?: number; errorMessage?: string },
+    operation: string,
+  ): void => {
+    if (response.status === StreamStatus.Ok) {
       return;
     }
 
@@ -43,8 +46,9 @@ export function createStreamSession(
       [StreamStatus.ExpectedOffsetMismatch]: "ExpectedOffsetMismatch",
     };
 
-    const statusName = formatStatusName(status, statusNames);
-    throw new StreamError(`${operation} failed: ${statusName}`, statusName, status);
+    const code = response.errorCode ?? response.status;
+    const statusName = response.errorMessage ?? formatStatusName(code, statusNames);
+    throw new StreamError(`${operation} failed: ${statusName}`, operation, code);
   };
 
   const append = async (
@@ -66,7 +70,7 @@ export function createStreamSession(
     const response = await connection.request(MSG_STREAM_APPEND, payload, requestSignal);
     const decoded = StreamCodec.decodeAppendResponse(response);
 
-    checkStatus(decoded.status, "APPEND");
+    checkStatus(decoded, "APPEND");
 
     return decoded.offset ?? 0n;
   };
@@ -78,7 +82,7 @@ export function createStreamSession(
     const response = await connection.request(MSG_STREAM_COMMIT, payload, signal);
     const decoded = StreamCodec.decodeCommitResponse(response);
 
-    checkStatus(decoded.status, "COMMIT");
+    checkStatus(decoded, "COMMIT");
     closed = true;
     unsubscribeDisconnect();
   };
@@ -95,7 +99,7 @@ export function createStreamSession(
     try {
       const response = await connection.request(MSG_STREAM_ROLLBACK, payload, signal);
       const decoded = StreamCodec.decodeRollbackResponse(response);
-      checkStatus(decoded.status, "ROLLBACK");
+      checkStatus(decoded, "ROLLBACK");
     } catch {
       // Ignore rollback errors
     }

@@ -5,6 +5,7 @@ import { createServer, type Server, type Socket } from "node:net";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
 import { createTcpTransport } from "../../../src/transport/tcp";
+import { FrameCodec } from "../../../src/frame/codec";
 
 const servers: Server[] = [];
 const sockets: Socket[] = [];
@@ -50,6 +51,30 @@ afterEach(async () => {
 });
 
 describe("tcp transport", () => {
+  it("accepts the maximum legal TLV value with the default total-frame limit", async () => {
+    const payload = new Uint8Array(65_535);
+    payload.fill(0x5a);
+    const frame = FrameCodec.encodeFrame(65_535, payload);
+    const packet = new Uint8Array(4 + frame.length);
+    new DataView(packet.buffer).setUint32(0, frame.length, false);
+    packet.set(frame, 4);
+    const server = createServer((socket) => {
+      sockets.push(socket);
+      socket.write(packet);
+    });
+    servers.push(server);
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("expected TCP address");
+    const transport = createTcpTransport(`localhost:${address.port}`, { timeout: 100 });
+
+    await transport.connect();
+    const received = await transport.receive();
+
+    expect(received).toEqual(frame);
+    await transport.close();
+  });
+
   it("rejects connect when the signal is already aborted", async () => {
     const port = await listenOnLocalhost();
     const transport = createTcpTransport(`localhost:${port}`, { timeout: 20 });

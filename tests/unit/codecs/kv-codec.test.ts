@@ -289,10 +289,9 @@ describe("KvCodec", () => {
       // Assert
       expect(decoded.status).toBe(0);
       expect(decoded.hasMore).toBe(false);
-      expect(decoded.keys).toHaveLength(2);
-      const keys = decoded.keys ?? [];
-      expect(keys[0]).toEqual(testData("key1"));
-      expect(keys[1]).toEqual(testData("key2"));
+      expect(decoded.entries).toHaveLength(2);
+      expect(decoded.entries[0]).toEqual({ key: testData("key1"), value: testData("value1") });
+      expect(decoded.entries[1]).toEqual({ key: testData("key2"), value: testData("value2") });
     });
 
     it("should_decode_scan_response_with_empty_result", () => {
@@ -307,7 +306,7 @@ describe("KvCodec", () => {
       const decoded = KvCodec.decodeScanResponse(response);
 
       // Assert
-      expect(decoded.keys).toEqual([]);
+      expect(decoded.entries).toEqual([]);
       expect(decoded.hasMore).toBe(false);
     });
 
@@ -327,7 +326,7 @@ describe("KvCodec", () => {
       const decoded = KvCodec.decodeScanResponse(response);
 
       // Assert
-      expect(decoded.keys).toHaveLength(1);
+      expect(decoded.entries).toHaveLength(1);
       expect(decoded.hasMore).toBe(true);
     });
   });

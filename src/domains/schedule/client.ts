@@ -18,7 +18,7 @@ import {
   MSG_SCHEDULE_SUBSCRIBE,
   MSG_SCHEDULE_UNSUBSCRIBE,
 } from "../../frame/types";
-import { parseStandardResponse } from "../../protocol/response";
+import { parsePlainResponse, parseStandardResponse } from "../../protocol/response";
 import { ScheduleCodec } from "./codec";
 import { createWakeGate } from "../../core/wake-gate";
 import {
@@ -58,7 +58,7 @@ export interface ScheduleClient {
     payload?: Uint8Array,
   ): Promise<string>;
   cancel(route: string): Promise<void>;
-  listPage(cursor?: string, limit?: bigint): Promise<ScheduleListPage>;
+  listPage(offset?: bigint, limit?: bigint): Promise<ScheduleListPage>;
   listBySelector(selector: string): Promise<ScheduleEntry[]>;
   waitForNotifications(
     route: string,
@@ -85,13 +85,22 @@ export function createScheduleClient(connection: ScheduleConnectionPort): Schedu
       return;
     }
 
-    await restoreMapEntriesAtomically(subscriptionsByPattern, async (pattern, state) => {
-      const subId = await subscribeWire(pattern, requestReconnectFrame);
-      return {
-        subId,
-        handlers: new Map(state.handlers),
-      };
-    });
+    await restoreMapEntriesAtomically(
+      subscriptionsByPattern,
+      async (pattern, state) => {
+        const subId = await subscribeWire(pattern, requestReconnectFrame);
+        return { subId, handlers: new Map(state.handlers) };
+      },
+      async (pattern) => {
+        assertPlainSuccess(
+          await requestReconnectFrame(
+            MSG_SCHEDULE_UNSUBSCRIBE,
+            ScheduleCodec.encodeUnsubscribe(pattern),
+          ),
+          "UNSUBSCRIBE",
+        );
+      },
+    );
 
     patternsBySubId.clear();
     for (const [pattern, state] of subscriptionsByPattern) {
@@ -112,7 +121,7 @@ export function createScheduleClient(connection: ScheduleConnectionPort): Schedu
       MSG_SCHEDULE_CREATE,
       ScheduleCodec.encodeCreate(route, cronExpr, deliveryMode, payload),
     );
-    const decoded = ScheduleCodec.decodeCreateResponse(assertSuccess(response, "CREATE"));
+    const decoded = ScheduleCodec.decodeCreateResponse(assertPlainSuccess(response, "CREATE"));
     return decoded.scheduleId ?? route;
   };
 
@@ -120,13 +129,13 @@ export function createScheduleClient(connection: ScheduleConnectionPort): Schedu
     assertConcreteScheduleRoute(route);
 
     const response = await requestFrame(MSG_SCHEDULE_CANCEL, ScheduleCodec.encodeCancel(route));
-    ScheduleCodec.decodeCancelResponse(assertSuccess(response, "CANCEL"));
+    ScheduleCodec.decodeCancelResponse(assertPlainSuccess(response, "CANCEL"));
   };
 
-  const listPage = async (cursor?: string, limit?: bigint): Promise<ScheduleListPage> => {
+  const listPage = async (offset?: bigint, limit?: bigint): Promise<ScheduleListPage> => {
     const response = await requestFrame(
       MSG_SCHEDULE_LIST_PAGE,
-      ScheduleCodec.encodeListPage(cursor, limit),
+      ScheduleCodec.encodeListPage(offset, limit),
     );
     return ScheduleCodec.decodeListPage(assertSuccess(response, "LIST_PAGE"));
   };
@@ -135,12 +144,14 @@ export function createScheduleClient(connection: ScheduleConnectionPort): Schedu
     if (!isScheduleSelector(selector))
       throw new ScheduleError("invalid schedule selector", "INVALID_ROUTE");
     const entries: ScheduleEntry[] = [];
-    let cursor: string | undefined;
-    do {
-      const page = await listPage(cursor);
+    let offset = 0n;
+    let complete = false;
+    while (!complete) {
+      const page = await listPage(offset);
       entries.push(...page.entries.filter((entry) => routeMatchesSchedule(entry.route, selector)));
-      cursor = page.hasMore ? page.continuation : undefined;
-    } while (cursor !== undefined);
+      offset += BigInt(page.entries.length);
+      complete = offset >= page.totalCount || page.entries.length === 0;
+    }
     return entries;
   };
 
@@ -203,7 +214,9 @@ export function createScheduleClient(connection: ScheduleConnectionPort): Schedu
 
   const subscribeWire = async (pattern: string, request = requestFrame): Promise<bigint> => {
     const response = await request(MSG_SCHEDULE_SUBSCRIBE, ScheduleCodec.encodeSubscribe(pattern));
-    const decoded = ScheduleCodec.decodeSubscribeResponse(assertSuccess(response, "SUBSCRIBE"));
+    const decoded = ScheduleCodec.decodeSubscribeResponse(
+      assertPlainSuccess(response, "SUBSCRIBE"),
+    );
 
     return decoded.subId;
   };
@@ -243,14 +256,14 @@ export function createScheduleClient(connection: ScheduleConnectionPort): Schedu
       return;
     }
 
-    subscriptionsByPattern.delete(pattern);
-    patternsBySubId.delete(subscription.subId);
-    pendingNotificationsBySubId.delete(subscription.subId);
     const response = await requestFrame(
       MSG_SCHEDULE_UNSUBSCRIBE,
       ScheduleCodec.encodeUnsubscribe(pattern),
     );
-    ScheduleCodec.decodeUnsubscribeResponse(assertSuccess(response, "UNSUBSCRIBE"));
+    ScheduleCodec.decodeUnsubscribeResponse(assertPlainSuccess(response, "UNSUBSCRIBE"));
+    subscriptionsByPattern.delete(pattern);
+    patternsBySubId.delete(subscription.subId);
+    pendingNotificationsBySubId.delete(subscription.subId);
   };
 
   const initNotifyHandler = (): void => {
@@ -342,6 +355,17 @@ export function createScheduleClient(connection: ScheduleConnectionPort): Schedu
       mapErrorCode(result.error),
       result.errorCode,
     );
+  };
+
+  const assertPlainSuccess = (payload: Uint8Array, operation: string): Uint8Array => {
+    const result = parsePlainResponse(payload);
+    if (!result.success) {
+      throw new ScheduleError(
+        `${operation} failed: ${result.error ?? "unknown error"}`,
+        `${operation}_FAILED`,
+      );
+    }
+    return result.data;
   };
 
   const mapErrorCode = (message?: string): string => {

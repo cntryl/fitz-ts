@@ -212,9 +212,10 @@ describe("QueueClient reserveWhenAvailable", () => {
 });
 
 function encodeQueueSubscribeResponse(subId: bigint): Uint8Array {
-  const payload = new Uint8Array(9);
+  const payload = new Uint8Array(10);
   payload[0] = 0;
-  new DataView(payload.buffer).setBigUint64(1, subId, false);
+  payload[1] = 1;
+  new DataView(payload.buffer).setBigUint64(2, subId, false);
   return payload;
 }
 

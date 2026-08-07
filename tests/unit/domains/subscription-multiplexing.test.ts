@@ -128,6 +128,14 @@ function encodeOptionalSubIdResponse(subId: bigint): Uint8Array {
 function encodeQueueSubIdResponse(subId: bigint): Uint8Array {
   const writer = createBufferWriter(16);
   writer.writeU8(0);
+  writer.writeU8(1);
+  writer.writeU64BE(subId);
+  return writer.getBuffer();
+}
+
+function encodeKvSubIdResponse(subId: bigint): Uint8Array {
+  const writer = createBufferWriter(16);
+  writer.writeU8(0);
   writer.writeU64BE(subId);
   return writer.getBuffer();
 }
@@ -141,6 +149,14 @@ function encodeLeaseSubscribeResponse(subId: bigint): Uint8Array {
 
 function encodeStatusOnlyResponse(): Uint8Array {
   return new Uint8Array([0]);
+}
+
+function encodePlainErrorResponse(message: string): Uint8Array {
+  const writer = createBufferWriter(64);
+  writer.writeU8(1);
+  writer.writeU32BE(1);
+  writer.writeString(message);
+  return writer.getBuffer();
 }
 
 function encodeNoticeNotification(subId: bigint, route: string, body: Uint8Array): Uint8Array {
@@ -189,11 +205,41 @@ function encodeStreamNotification(subId: bigint, route: string, payload: Uint8Ar
 }
 
 describe("Subscription Multiplexing", () => {
+  it("retains Notice bookkeeping until a failed wire unsubscribe can be retried", async () => {
+    const connection = new FakeSubscriptionConnection([
+      [MSG_NOTICE_SUBSCRIBE, encodeOptionalSubIdResponse(11n)],
+      [MSG_NOTICE_UNSUBSCRIBE, encodePlainErrorResponse("try again")],
+      [MSG_NOTICE_UNSUBSCRIBE, encodeStatusOnlyResponse()],
+    ]);
+    const client = createNoticeClient(connection);
+    const subscription = await client.subscribe("notice://realm/area/*", async () => undefined);
+
+    await expect(subscription.unsubscribe()).rejects.toThrow("try again");
+    await subscription.unsubscribe();
+
+    expect(connection.countRequests(MSG_NOTICE_UNSUBSCRIBE)).toBe(2);
+  });
+
+  it("retains KV bookkeeping until a failed wire unsubscribe can be retried", async () => {
+    const connection = new FakeSubscriptionConnection([
+      [MSG_KV_SUBSCRIBE, encodeKvSubIdResponse(12n)],
+      [MSG_KV_UNSUBSCRIBE, encodePlainErrorResponse("try again")],
+      [MSG_KV_UNSUBSCRIBE, encodeStatusOnlyResponse()],
+    ]);
+    const client = createKvClient(connection);
+    const subscription = await client.subscribe("kv://realm/area/resource", async () => undefined);
+
+    await expect(subscription.unsubscribe()).rejects.toThrow("try again");
+    await subscription.unsubscribe();
+
+    expect(connection.countRequests(MSG_KV_UNSUBSCRIBE)).toBe(2);
+  });
+
   it("should single-flight concurrent KV subscriptions and retry after failure", async () => {
     const connection = new FakeSubscriptionConnection([
       [MSG_KV_SUBSCRIBE, encodeStatusOnlyResponse()],
-      [MSG_KV_SUBSCRIBE, encodeQueueSubIdResponse(7n)],
-      [MSG_KV_SUBSCRIBE, encodeQueueSubIdResponse(8n)],
+      [MSG_KV_SUBSCRIBE, encodeKvSubIdResponse(7n)],
+      [MSG_KV_SUBSCRIBE, encodeKvSubIdResponse(8n)],
       [MSG_KV_UNSUBSCRIBE, encodeStatusOnlyResponse()],
     ]);
     const client = createKvClient(connection);

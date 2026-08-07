@@ -68,11 +68,10 @@ export function isStreamSelectorShape(route: string): boolean {
   const resource = segments[2]!;
   const literal = (s: string) => !s.includes("*");
   const wild = (s: string) => s === "*";
-  return (
-    (literal(realm) && literal(area) && literal(resource)) ||
-    (literal(realm) && literal(area) && wild(resource)) ||
-    (literal(realm) && wild(area) && wild(resource))
-  );
+  // Every segment may be a whole-segment wildcard.  The broker supports the
+  // complete selector matrix, including wildcard realms (for example
+  // stream://*/orders/created and stream://*/*/created).
+  return [realm, area, resource].every((segment) => literal(segment) || wild(segment));
 }
 
 export function routeMatchesPattern(route: string, pattern: string): boolean {

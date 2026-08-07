@@ -17,7 +17,7 @@ const CORRELATION_ID_LENGTH = 16;
 const RPC_RESPONSE_FLAG_STREAM_END = 0x01;
 const RPC_RESPONSE_FLAGS_SUPPORTED = RPC_RESPONSE_FLAG_STREAM_END;
 const RPC_ERROR_CODE_MIN = 6001;
-const RPC_ERROR_CODE_MAX = 6010;
+const RPC_ERROR_CODE_MAX = 6013;
 const getCryptoProvider = (): Crypto | undefined => globalThis.crypto as Crypto | undefined;
 const correlationIdPool: Uint8Array[] = [];
 const maxCorrelationIdPoolSize = 64;

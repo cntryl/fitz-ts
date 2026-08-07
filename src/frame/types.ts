@@ -74,7 +74,9 @@ export const MSG_STREAM_NOTIFY = 609; // Server -> Client only
 // Schedule Domain (700-799)
 export const MSG_SCHEDULE_CREATE = 700;
 export const MSG_SCHEDULE_CANCEL = 701;
-export const MSG_SCHEDULE_LIST_PAGE = 707;
+// Schedule LIST is the canonical 702 operation. 707 was never assigned by
+// the wire registry and is rejected by conforming brokers.
+export const MSG_SCHEDULE_LIST_PAGE = 702;
 export const MSG_SCHEDULE_SUBSCRIBE = 703;
 export const MSG_SCHEDULE_UNSUBSCRIBE = 704;
 export const MSG_SCHEDULE_NOTIFY = 705; // Server -> Client only

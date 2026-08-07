@@ -40,6 +40,14 @@ function parseQueueResponse(payload: Uint8Array): ParsedQueueResponse {
   return { status: 0, reader: createBufferReader(parsed.data) };
 }
 
+function parsePlainQueueResponse(payload: Uint8Array): ParsedQueueResponse {
+  const reader = createBufferReader(payload);
+  const status = reader.readU8();
+  if (status === 0) return { status: 0, reader };
+  if (status !== 1) throw new RangeError(`Unknown Queue response status: ${status}`);
+  return { status: 1, errorMessage: reader.readString() };
+}
+
 export const QueueCodec = {
   /**
    * Encode ENQUEUE request.
@@ -87,12 +95,19 @@ export const QueueCodec = {
    * Encode RESERVE request.
    * Payload: [route: string][lease_seconds: u64][has_batch_size: u8][batch_size: u32]
    *
-   * Long polling is handled client-side by QueueClient.reserve().
    */
-  encodeReserve(route: string, leaseSeconds: number, batchSize?: number): Uint8Array {
+  encodeReserve(
+    route: string,
+    leaseSeconds: number,
+    batchSize?: number,
+    waitSeconds?: number,
+  ): Uint8Array {
     const routeBytes = getRouteEncoding(route);
     const hasBatchSize = batchSize !== undefined && batchSize > 0 ? 1 : 0;
-    const buffer = new Uint8Array(routeBytes.length + 8 + 1 + (hasBatchSize ? 4 : 0));
+    const hasWaitSeconds = waitSeconds !== undefined && waitSeconds > 0 ? 1 : 0;
+    const buffer = new Uint8Array(
+      routeBytes.length + 8 + 1 + (hasBatchSize ? 4 : 0) + 1 + (hasWaitSeconds ? 8 : 0),
+    );
     let offset = 0;
 
     buffer.set(routeBytes, offset);
@@ -100,8 +115,11 @@ export const QueueCodec = {
     offset = writeU64BENumberAt(buffer, offset, leaseSeconds);
     buffer[offset++] = hasBatchSize;
     if (hasBatchSize && batchSize !== undefined) {
-      writeU32BEAt(buffer, offset, batchSize);
+      offset = writeU32BEAt(buffer, offset, batchSize);
     }
+    buffer[offset++] = hasWaitSeconds;
+    if (hasWaitSeconds && waitSeconds !== undefined)
+      writeU64BENumberAt(buffer, offset, waitSeconds);
 
     return buffer;
   },
@@ -175,7 +193,7 @@ export const QueueCodec = {
    * Payload: [status: u8]
    */
   decodeCompleteResponse(payload: Uint8Array): QueueCompleteResponse {
-    const response = parseQueueResponse(payload);
+    const response = parsePlainQueueResponse(payload);
     if (response.status !== 0) {
       return response;
     }
@@ -210,7 +228,7 @@ export const QueueCodec = {
    * Payload: [status: u8]
    */
   decodeExtendResponse(payload: Uint8Array): QueueExtendResponse {
-    const response = parseQueueResponse(payload);
+    const response = parsePlainQueueResponse(payload);
     if (response.status !== 0) {
       return response;
     }
@@ -231,28 +249,17 @@ export const QueueCodec = {
    * Payload: [status: u8][sub_id: u64]
    */
   decodeSubscribeResponse(payload: Uint8Array): QueueSubscribeResponse {
-    const response = parseQueueResponse(payload);
+    const response = parsePlainQueueResponse(payload);
     if (response.status !== 0) {
       return response;
     }
     const { reader } = response;
 
-    if (reader.remainingBytes() === 8) {
-      return { status: 0, subId: reader.readU64BE() };
-    }
-
-    if (reader.remainingBytes() >= 9) {
-      const hasSubId = reader.readU8();
-      if (hasSubId === 1 && reader.remainingBytes() >= 8) {
-        return { status: 0, subId: reader.readU64BE() };
-      }
-    }
-
-    if (reader.isEOF()) {
-      return { status: 0 };
-    }
-
-    return { status: 0 };
+    const hasSubId = reader.readU8();
+    if (hasSubId !== 1) throw new RangeError("Queue SUBSCRIBE response is missing subscription id");
+    const subId = reader.readU64BE();
+    if (!reader.isEOF()) throw new RangeError("Queue SUBSCRIBE response has trailing bytes");
+    return { status: 0, subId };
   },
 
   /**
@@ -268,7 +275,7 @@ export const QueueCodec = {
    * Payload: [status: u8]
    */
   decodeUnsubscribeResponse(payload: Uint8Array): QueueUnsubscribeResponse {
-    const response = parseQueueResponse(payload);
+    const response = parsePlainQueueResponse(payload);
     if (response.status !== 0) {
       return response;
     }

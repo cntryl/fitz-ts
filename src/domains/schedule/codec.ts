@@ -58,8 +58,12 @@ export const ScheduleCodec = {
   decodeCreateResponse(data: Uint8Array): ScheduleCreateResponse {
     const reader = createBufferReader(data);
     let scheduleId: string | undefined;
-    if (!reader.isEOF() && reader.readU8() === 1) {
+    if (!reader.isEOF()) {
+      if (reader.readU8() !== 1) {
+        throw new Error("CREATE response has invalid schedule_id flag");
+      }
       scheduleId = reader.readString();
+      if (!reader.isEOF()) throw new Error("CREATE response has trailing bytes");
     }
 
     return { scheduleId };
@@ -77,24 +81,22 @@ export const ScheduleCodec = {
    * Decode CANCEL response
    * Success payload: empty
    */
-  decodeCancelResponse(_data: Uint8Array): ScheduleCancelResponse {
+  decodeCancelResponse(data: Uint8Array): ScheduleCancelResponse {
+    if (data.length !== 0) throw new Error("CANCEL response has trailing bytes");
     return {};
   },
 
-  encodeListPage(cursor?: string, limit?: bigint): Uint8Array {
-    if (limit !== undefined && (limit < 1n || limit > 1000n))
-      throw new Error("schedule LIST_PAGE limit must be between 1 and 1000");
-    const cursorBytes = cursor === undefined ? undefined : utf8Encoder.encode(cursor);
+  encodeListPage(offsetValue?: bigint, limit?: bigint): Uint8Array {
+    if (offsetValue !== undefined && offsetValue < 0n)
+      throw new Error("schedule LIST offset must be non-negative");
+    if (limit !== undefined && (limit < 0n || limit > 1000n))
+      throw new Error("schedule LIST limit must be between 0 and 1000");
     const buffer = new Uint8Array(
-      1 + (cursorBytes ? 4 + cursorBytes.length : 0) + 1 + (limit === undefined ? 0 : 8),
+      1 + (offsetValue === undefined ? 0 : 8) + 1 + (limit === undefined ? 0 : 8),
     );
     let offset = 0;
-    buffer[offset++] = cursorBytes ? 1 : 0;
-    if (cursorBytes) {
-      offset = writeU32BEAt(buffer, offset, cursorBytes.length);
-      buffer.set(cursorBytes, offset);
-      offset += cursorBytes.length;
-    }
+    buffer[offset++] = offsetValue === undefined ? 0 : 1;
+    if (offsetValue !== undefined) offset = writeU64BEAt(buffer, offset, offsetValue);
     buffer[offset++] = limit === undefined ? 0 : 1;
     if (limit !== undefined) writeU64BEAt(buffer, offset, limit);
     return buffer;
@@ -102,19 +104,7 @@ export const ScheduleCodec = {
 
   decodeListPage(data: Uint8Array): ScheduleListPage {
     const reader = createBufferReader(data);
-    if (reader.readU8() !== 1) throw new Error("LIST_PAGE response has unsupported version");
-    const hasMoreByte = reader.readU8();
-    if (hasMoreByte !== 0 && hasMoreByte !== 1)
-      throw new Error("LIST_PAGE response has invalid has_more flag");
-    const continuationFlag = reader.readU8();
-    const continuation =
-      continuationFlag === 0
-        ? undefined
-        : continuationFlag === 1
-          ? reader.readString()
-          : (() => {
-              throw new Error("LIST_PAGE response has invalid continuation flag");
-            })();
+    const totalCount = reader.readU64BE();
     const entries: ScheduleEntry[] = [];
     while (true) {
       const sentinel = reader.readU8();
@@ -127,7 +117,7 @@ export const ScheduleCodec = {
       entries.push({ id: route, route, cron, deliveryMode, payload });
     }
     if (!reader.isEOF()) throw new Error("LIST_PAGE response has trailing bytes");
-    return { entries, hasMore: hasMoreByte === 1, continuation };
+    return { entries, totalCount };
   },
 
   /**
@@ -156,7 +146,11 @@ export const ScheduleCodec = {
       throw new Error("SUBSCRIBE response too short for subscription_id");
     }
 
-    return { subId: reader.readU64BE() };
+    const subId = reader.readU64BE();
+    if (!reader.isEOF()) {
+      throw new Error("SUBSCRIBE response has trailing bytes");
+    }
+    return { subId };
   },
 
   /**
@@ -171,7 +165,8 @@ export const ScheduleCodec = {
    * Decode UNSUBSCRIBE response
    * Success payload: empty
    */
-  decodeUnsubscribeResponse(_data: Uint8Array): ScheduleUnsubscribeResponse {
+  decodeUnsubscribeResponse(data: Uint8Array): ScheduleUnsubscribeResponse {
+    if (data.length !== 0) throw new Error("UNSUBSCRIBE response has trailing bytes");
     return {};
   },
 

@@ -68,8 +68,7 @@ export type ScheduleCancelResponse = Record<string, never>;
 
 export interface ScheduleListPage {
   entries: ScheduleEntry[];
-  hasMore: boolean;
-  continuation?: string;
+  totalCount: bigint;
 }
 
 export interface ScheduleSubscribeResponse {

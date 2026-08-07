@@ -131,7 +131,7 @@ export type StreamCommitHandler = (notification: StreamCommitNotification) => vo
 export type StreamSubscription = ReturnType<typeof createStreamSubscription>;
 
 export function createStreamSubscription(
-  subId: bigint,
+  getSubId: () => bigint,
   pattern: string,
   unsubscribeFn: (pattern: string) => Promise<void>,
 ) {
@@ -140,7 +140,9 @@ export function createStreamSubscription(
   };
 
   return {
-    subId,
+    get subId(): bigint {
+      return getSubId();
+    },
     unsubscribe,
   };
 }

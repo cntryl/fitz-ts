@@ -128,6 +128,12 @@ const QueueStatusNames: Record<number, string> = {
   [QueueStatus.InvalidToken]: "InvalidToken",
   [QueueStatus.QueueFull]: "QueueFull",
   [QueueStatus.InvalidDelay]: "InvalidDelay",
+  4001: "InvalidToken",
+  4002: "LeaseExpired",
+  4003: "MessageNotFound",
+  4004: "QueueNotFound",
+  4005: "QueueFull",
+  4009: "Unauthorized",
 };
 
 /**

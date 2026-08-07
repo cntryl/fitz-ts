@@ -385,15 +385,26 @@ export function createRpcClient(connection: RpcConnectionPort): RpcClient {
       return;
     }
 
-    await restoreMapEntriesAtomically(workers, async (route, registration) => {
-      await registerWorkerInternal(
-        route,
-        registration.handler,
-        registration.options,
-        requestReconnectFrame,
-      );
-      return registration;
-    });
+    await restoreMapEntriesAtomically(
+      workers,
+      async (route, registration) => {
+        await registerWorkerInternal(
+          route,
+          registration.handler,
+          registration.options,
+          requestReconnectFrame,
+        );
+        return registration;
+      },
+      async (route) => {
+        parseStandardResponse(
+          await requestReconnectFrame(
+            MSG_RPC_UNSUBSCRIBE_WORKER,
+            RpcCodec.encodeUnsubscribeWorker(route),
+          ),
+        );
+      },
+    );
   });
 
   const call = async (

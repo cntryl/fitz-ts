@@ -347,7 +347,11 @@ export function createMultiplexer(observability: MultiplexerObservability = {}) 
         return;
       }
 
-      unregisterRequest(messageType, requestEntry);
+      // The frame may already be on the wire. Keep its FIFO slot as a
+      // tombstone so the eventual response is consumed instead of being
+      // delivered to the next live caller.
+      requestEntry.discardResponse = true;
+      recordRequestFinished(messageType);
       meter?.counter("fitz.request.failed", 1, {
         ...attributes,
         error: error.name,

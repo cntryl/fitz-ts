@@ -80,13 +80,18 @@ export function createQueueClient(connection: QueueConnectionPort): QueueClient 
       return;
     }
 
-    await restoreMapEntriesAtomically(subscriptionsByPattern, async (pattern, state) => {
-      const subId = await subscribeWire(pattern, requestReconnectFrame);
-      return {
-        subId,
-        handlers: new Map(state.handlers),
-      };
-    });
+    await restoreMapEntriesAtomically(
+      subscriptionsByPattern,
+      async (pattern, state) => {
+        const subId = await subscribeWire(pattern, requestReconnectFrame);
+        return { subId, handlers: new Map(state.handlers) };
+      },
+      async (pattern) => {
+        QueueCodec.decodeUnsubscribeResponse(
+          await requestReconnectFrame(MSG_QUEUE_UNSUBSCRIBE, QueueCodec.encodeUnsubscribe(pattern)),
+        );
+      },
+    );
 
     patternsBySubId.clear();
     for (const [pattern, state] of subscriptionsByPattern) {
@@ -132,59 +137,7 @@ export function createQueueClient(connection: QueueConnectionPort): QueueClient 
     if (!Number.isInteger(batchSize) || batchSize < 0 || batchSize > 1024) {
       throw new QueueError("RESERVE batch size must be between 0 and 1024", "INVALID_BATCH_SIZE");
     }
-    if (waitSeconds <= 0) {
-      return reserveOnce(route, leaseSeconds, batchSize);
-    }
-
-    let items = await reserveOnce(route, leaseSeconds, batchSize);
-    if (items.length > 0) {
-      return items;
-    }
-
-    const deadline = Date.now() + waitSeconds * 1000;
-    const wakeGate = createWakeGate();
-    const subscription = await subscribe(route, () => {
-      wakeGate.wake();
-    });
-
-    try {
-      while (true) {
-        const observed = wakeGate.version;
-        items = await reserveOnce(route, leaseSeconds, batchSize);
-        if (items.length > 0) {
-          return items;
-        }
-
-        const remainingMs = deadline - Date.now();
-        if (remainingMs <= 0) {
-          return items;
-        }
-
-        const waitPromise = wakeGate.waitAfter(observed);
-        let timeoutId: ReturnType<typeof setTimeout> | null = null;
-        const timeoutPromise = new Promise<"timeout">((resolve) => {
-          timeoutId = setTimeout(() => {
-            resolve("timeout");
-          }, remainingMs);
-        });
-
-        const result = await Promise.race([
-          waitPromise.then(() => {
-            if (timeoutId) {
-              clearTimeout(timeoutId);
-            }
-            return "wake" as const;
-          }),
-          timeoutPromise,
-        ]);
-
-        if (result === "timeout") {
-          return items;
-        }
-      }
-    } finally {
-      await subscription.unsubscribe().catch(() => undefined);
-    }
+    return reserveOnce(route, leaseSeconds, batchSize, undefined, waitSeconds);
   };
 
   const reserveWhenAvailable = async function* (
@@ -233,8 +186,9 @@ export function createQueueClient(connection: QueueConnectionPort): QueueClient 
     leaseSeconds: number,
     batchSize: number,
     signal?: AbortSignal,
+    waitSeconds?: number,
   ): Promise<QueueItem[]> => {
-    const payload = QueueCodec.encodeReserve(route, leaseSeconds, batchSize);
+    const payload = QueueCodec.encodeReserve(route, leaseSeconds, batchSize, waitSeconds);
     const response = await requestFrame(MSG_QUEUE_RESERVE, payload, signal);
     const decoded = QueueCodec.decodeReserveResponse(response, route);
     checkStatus(decoded, "RESERVE");
@@ -304,13 +258,13 @@ export function createQueueClient(connection: QueueConnectionPort): QueueClient 
       return;
     }
 
-    subscriptionsByPattern.delete(pattern);
-    patternsBySubId.delete(subscription.subId);
-    pendingNotificationsBySubId.delete(subscription.subId);
     const payload = QueueCodec.encodeUnsubscribe(pattern);
     const response = await requestFrame(MSG_QUEUE_UNSUBSCRIBE, payload);
     const decoded = QueueCodec.decodeUnsubscribeResponse(response);
     checkStatus(decoded, "UNSUBSCRIBE");
+    subscriptionsByPattern.delete(pattern);
+    patternsBySubId.delete(subscription.subId);
+    pendingNotificationsBySubId.delete(subscription.subId);
   };
 
   const initNotificationHandler = (): void => {
@@ -405,6 +359,12 @@ export function createQueueClient(connection: QueueConnectionPort): QueueClient 
       [QueueStatus.InvalidToken]: "InvalidToken",
       [QueueStatus.QueueFull]: "QueueFull",
       [QueueStatus.InvalidDelay]: "InvalidDelay",
+      4001: "InvalidToken",
+      4002: "LeaseExpired",
+      4003: "MessageNotFound",
+      4004: "QueueNotFound",
+      4005: "QueueFull",
+      4009: "Unauthorized",
     };
 
     const statusName = formatStatusName(errorCode, statusNames);

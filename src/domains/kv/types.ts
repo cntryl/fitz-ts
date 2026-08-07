@@ -20,7 +20,7 @@ export interface KvScanOptions {
 export type KvGetResult = { type: "found"; value: Uint8Array } | { type: "not-found" };
 
 export interface KvScanPage {
-  keys: Uint8Array[];
+  entries: Array<{ key: Uint8Array; value: Uint8Array }>;
   hasMore: boolean;
 }
 
@@ -54,18 +54,21 @@ export interface KvBeginResponse {
 
 export interface KvStatusResponse {
   status: number;
+  errorMessage?: string;
 }
 
 export interface KvGetResponse {
   status: number;
   found: boolean;
   value?: Uint8Array;
+  errorMessage?: string;
 }
 
 export interface KvScanResponse {
   status: number;
-  keys: Uint8Array[];
+  entries: Array<{ key: Uint8Array; value: Uint8Array }>;
   hasMore: boolean;
+  errorMessage?: string;
 }
 
 export enum KvStatus {

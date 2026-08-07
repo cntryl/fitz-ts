@@ -68,13 +68,21 @@ export function createNoticeClient(connection: NoticeConnectionPort): NoticeClie
       return;
     }
 
-    await restoreMapEntriesAtomically(subscriptionsByPattern, async (pattern, state) => {
-      const subId = await subscribeWire(pattern, requestReconnectFrame);
-      return {
-        subId,
-        handlers: new Map(state.handlers),
-      };
-    });
+    await restoreMapEntriesAtomically(
+      subscriptionsByPattern,
+      async (pattern, state) => {
+        const subId = await subscribeWire(pattern, requestReconnectFrame);
+        return { subId, handlers: new Map(state.handlers) };
+      },
+      async (_pattern, state) => {
+        parseStandardResponse(
+          await requestReconnectFrame(
+            MSG_NOTICE_UNSUBSCRIBE,
+            NoticeCodec.encodeUnsubscribe(state.subId),
+          ),
+        );
+      },
+    );
 
     patternsBySubId.clear();
     for (const [pattern, state] of subscriptionsByPattern) {
@@ -169,9 +177,6 @@ export function createNoticeClient(connection: NoticeConnectionPort): NoticeClie
       return;
     }
 
-    subscriptionsByPattern.delete(pattern);
-    patternsBySubId.delete(subscription.subId);
-    pendingNotificationsBySubId.delete(subscription.subId);
     const payload = NoticeCodec.encodeUnsubscribe(subscription.subId);
     const parsed = parseStandardResponse(await requestFrame(MSG_NOTICE_UNSUBSCRIBE, payload));
     if (!parsed.success) {
@@ -181,6 +186,9 @@ export function createNoticeClient(connection: NoticeConnectionPort): NoticeClie
         parsed.errorCode,
       );
     }
+    subscriptionsByPattern.delete(pattern);
+    patternsBySubId.delete(subscription.subId);
+    pendingNotificationsBySubId.delete(subscription.subId);
   };
 
   const initNotifyHandler = (): void => {
