@@ -33,6 +33,16 @@ contractual.
 - Reconnect re-registers RPC workers before reporting `AUTHENTICATED`.
 - In-flight request or iterator work from the pre-disconnect connection is
   failed; callers must reacquire fresh handles after reconnect.
+- Restoring subscriptions/workers is best-effort per entry: if any single
+  KV/notice/queue/lease/schedule/stream subscription or RPC worker fails to
+  restore, the client still proceeds to `AUTHENTICATED` with the remaining
+  entries restored — it does not fail the whole reconnect, and it does not
+  retry that entry on its own. This is a **must-handle contract point, not an
+  edge case**: a caller that needs every registration reinstated has to listen
+  for the `reconnect_restore_failed` lifecycle event (and/or the
+  `fitz.connection.reconnect_restore_failed` observability log) and
+  re-register the affected entry itself. Silently assuming reconnect always
+  fully restores prior state will miss this failure mode.
 
 ## Heartbeats And Wake Gates
 
@@ -66,6 +76,12 @@ contractual.
   subscription and must not duplicate broker-side registration.
 - `QueueItem`, `Lease`, `KvTransaction`, and `StreamSession` handles from the
   pre-disconnect session are stale after reconnect and fail fast.
+- `lease.acquire()` and `lease.withLease()` calls are serialized per client
+  instance across every route, not just per-route. This follows from the
+  protocol: a deferred ACQUIRE completion notification carries no
+  correlation id, only FIFO arrival order, so a second `acquire()` for a
+  completely unrelated route cannot even send its request until the prior
+  call's full lifecycle (including any deferred wait) has resolved.
 
 ## Subscription Registrations
 

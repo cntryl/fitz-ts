@@ -559,7 +559,7 @@ export const StreamCodec = {
   },
 };
 
-function isGlobalSelector(selector: string): boolean {
+export function isGlobalSelector(selector: string): boolean {
   return selector === "stream://**" || selector === "stream://*/*/*";
 }
 

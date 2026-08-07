@@ -4,10 +4,17 @@
 
 import "../../core/async-dispose";
 
+import { createDomainClient } from "../base";
 import type { DisconnectListenerPort, RequestPort, RetryExecutionPort } from "../base";
-import type { RetryOperation } from "../../client/resilience";
 import { KvCodec } from "./codec";
-import { KvGetResult, KvScanOptions, KvScanPage, KvStatus, KvStatusResponse } from "./types";
+import {
+  KvGetResult,
+  KvScanOptions,
+  KvScanPage,
+  KvStatus,
+  KvStatusNames,
+  KvStatusResponse,
+} from "./types";
 import {
   MSG_KV_PUT,
   MSG_KV_INSERT,
@@ -64,17 +71,11 @@ export function createKvTransaction(
     if (response.status === KvStatus.Ok) {
       return;
     }
-    const reason = response.errorMessage ?? formatStatusName(response.status, {});
+    const reason = response.errorMessage ?? formatStatusName(response.status, KvStatusNames);
     throw new KvError(`${operation} failed: ${reason}`, operation, response.status);
   };
 
-  const runWithRetry = async <T>(operation: RetryOperation, task: () => Promise<T>): Promise<T> => {
-    if (typeof connection.executeWithRetry === "function") {
-      return connection.executeWithRetry(operation, task);
-    }
-
-    return task();
-  };
+  const { runWithRetry } = createDomainClient(connection);
 
   const put = async (key: Uint8Array, value: Uint8Array, signal?: AbortSignal): Promise<void> => {
     ensureOpen();

@@ -79,3 +79,11 @@ export enum KvStatus {
   KeyNotFound = 4,
   OperationNotAllowed = 5,
 }
+
+export const KvStatusNames: Record<number, string> = {
+  [KvStatus.TransactionAborted]: "TransactionAborted",
+  [KvStatus.LeaseExpired]: "LeaseExpired",
+  [KvStatus.ConflictingWrite]: "ConflictingWrite",
+  [KvStatus.KeyNotFound]: "KeyNotFound",
+  [KvStatus.OperationNotAllowed]: "OperationNotAllowed",
+};

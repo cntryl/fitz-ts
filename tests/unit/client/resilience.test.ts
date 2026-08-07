@@ -276,6 +276,17 @@ describe("Connection resilience", () => {
     expect(shouldRetryOperation("replayable_read", new RequestQueueFullError())).toBe(true);
   });
 
+  it("should throw on an unrecognized RetryClass instead of silently disabling retry", () => {
+    // shouldRetryOperation's switch is meant to be exhaustive over
+    // RetryClass — a future member added without an explicit case must
+    // fail loudly (and fail to compile), not fall through a catch-all
+    // default that quietly returns false.
+    const unknownRetryClass = "not_a_real_retry_class" as unknown as Parameters<
+      typeof shouldRetryOperation
+    >[0];
+    expect(() => shouldRetryOperation(unknownRetryClass, new Error("boom"))).toThrow();
+  });
+
   it("retries a replayable read after transient transport loss", async () => {
     const first = new ScriptedTransport();
     const second = new ScriptedTransport();

@@ -4,7 +4,7 @@
  */
 
 import type { DisconnectListenerPort, RequestPort } from "../base";
-import { LeaseError } from "../../core/errors";
+import { FitzError, LeaseError } from "../../core/errors";
 
 /**
  * Change notification when a lease is released or expires
@@ -16,7 +16,7 @@ export interface ChangeNotification {
 /**
  * Handler for lease change notifications
  */
-export type ChangeHandler = (notif: ChangeNotification) => Promise<void>;
+export type ChangeHandler = (notif: ChangeNotification) => void | Promise<void>;
 
 /**
  * Active lease change subscription
@@ -189,11 +189,17 @@ export interface WithLeaseOptions {
   signal?: AbortSignal;
 }
 
-export class LeaseLifecycleError extends Error {
+/**
+ * Represents a combination of failures across a withLease() invocation's
+ * lifecycle (lease loss, callback failure, release failure) rather than a
+ * single domain-status code, so it's a standalone FitzError subclass with
+ * its own code prefix rather than a LeaseError subclass.
+ */
+export class LeaseLifecycleError extends FitzError {
   readonly causes: readonly unknown[];
 
   constructor(message: string, causes: readonly unknown[]) {
-    super(message);
+    super(message, "LEASE_LIFECYCLE_MULTIPLE_FAILURES", undefined, { causes });
     this.name = "LeaseLifecycleError";
     this.causes = causes;
     Object.setPrototypeOf(this, LeaseLifecycleError.prototype);

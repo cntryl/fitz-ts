@@ -194,3 +194,13 @@ export enum StreamStatus {
   SessionClosed = 6,
   ExpectedOffsetMismatch = 7,
 }
+
+export const StreamStatusNames: Record<number, string> = {
+  [StreamStatus.StreamNotFound]: "StreamNotFound",
+  [StreamStatus.OffsetOutOfRange]: "OffsetOutOfRange",
+  [StreamStatus.InvalidOffset]: "InvalidOffset",
+  [StreamStatus.StreamFull]: "StreamFull",
+  [StreamStatus.SessionNotFound]: "SessionNotFound",
+  [StreamStatus.SessionClosed]: "SessionClosed",
+  [StreamStatus.ExpectedOffsetMismatch]: "ExpectedOffsetMismatch",
+};

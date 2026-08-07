@@ -22,6 +22,13 @@ import {
 import { isRegistrationPatternShape, isRouteShape } from "../_routes";
 import { restoreMapEntriesAtomically } from "../internal/restore";
 import { createKeyedSingleFlight } from "../internal/keyed-single-flight";
+import {
+  awaitPendingUnsubscribe,
+  createGenerationCounter,
+  createLiveSubIdGetter,
+  isCurrentEmptyState,
+} from "../internal/subscription-handle";
+import { createPendingNotificationBuffer } from "../internal/pending-notifications";
 import { createBufferReader } from "../../core/buffer";
 import { parseStandardResponse } from "../../protocol/response";
 import { NoticeCodec } from "./codec";
@@ -34,6 +41,11 @@ import {
 type NoticeSubscriptionState = {
   subId: bigint;
   handlers: Map<number, NoticeHandler>;
+  generation: number;
+  // Set while a wire UNSUBSCRIBE for this pattern is awaiting its broker
+  // round-trip. subscribe()'s "reuse the existing state" path must wait it
+  // out rather than reuse it blindly — see awaitPendingUnsubscribe().
+  pendingUnsubscribe?: Promise<void>;
 };
 
 type NoticeConnectionPort = RequestPort &
@@ -58,7 +70,18 @@ export function createNoticeClient(connection: NoticeConnectionPort): NoticeClie
     createDomainClient(connection);
   const subscriptionsByPattern = new Map<string, NoticeSubscriptionState>();
   const patternsBySubId = new Map<bigint, string>();
-  const pendingNotificationsBySubId = new Map<bigint, NoticeMsg[]>();
+  const subIdGeneration = createGenerationCounter();
+  const pendingNotifications = createPendingNotificationBuffer<NoticeMsg, NoticeSubscriptionState>(
+    (subId) => {
+      const pattern = patternsBySubId.get(subId);
+      return pattern === undefined ? undefined : subscriptionsByPattern.get(pattern);
+    },
+    (handler, notification) => {
+      connection.dispatchAsyncHandler(async () => {
+        await handler(notification);
+      });
+    },
+  );
   let initialized = false;
   let nextHandlerId = 1;
   const registerSingleFlight = createKeyedSingleFlight<string, bigint>();
@@ -72,7 +95,9 @@ export function createNoticeClient(connection: NoticeConnectionPort): NoticeClie
       subscriptionsByPattern,
       async (pattern, state) => {
         const subId = await subscribeWire(pattern, requestReconnectFrame);
-        return { subId, handlers: new Map(state.handlers) };
+        // Carry the generation forward: this is the same logical
+        // subscription surviving reconnect, not a new one.
+        return { subId, handlers: new Map(state.handlers), generation: state.generation };
       },
       async (_pattern, state) => {
         parseStandardResponse(
@@ -87,7 +112,7 @@ export function createNoticeClient(connection: NoticeConnectionPort): NoticeClie
     patternsBySubId.clear();
     for (const [pattern, state] of subscriptionsByPattern) {
       patternsBySubId.set(state.subId, pattern);
-      flushPendingNotifications(state.subId);
+      pendingNotifications.flush(state.subId);
     }
   });
 
@@ -97,9 +122,12 @@ export function createNoticeClient(connection: NoticeConnectionPort): NoticeClie
     const cancelOptionalResponse = expectOptionalResponse(MSG_NOTICE_PUBLISH);
     try {
       await connection.sendFireAndForget(MSG_NOTICE_PUBLISH, payload);
-    } catch (error) {
+    } finally {
+      // Must run on the success path too — this fire-and-forget PUBLISH
+      // never gets an actual response, so leaving the registration in place
+      // only on success would leak one optional-response slot per
+      // successful publish() call for the lifetime of the connection.
       cancelOptionalResponse();
-      throw error;
     }
   };
 
@@ -109,13 +137,24 @@ export function createNoticeClient(connection: NoticeConnectionPort): NoticeClie
   ): Promise<NoticeSubscription> => {
     assertNoticePattern(pattern);
     initNotifyHandler();
-    const existing = subscriptionsByPattern.get(pattern);
-    if (existing) {
-      return addLocalSubscription(pattern, existing.subId, handler);
-    }
 
-    const subId = await registerSingleFlight(pattern, () => subscribeWire(pattern));
-    return addLocalSubscription(pattern, subId, handler);
+    while (true) {
+      const existing = subscriptionsByPattern.get(pattern);
+      if (existing) {
+        if (existing.pendingUnsubscribe) {
+          // An UNSUBSCRIBE for this pattern is in flight — reusing this
+          // state now would register the handler locally without ever
+          // sending a fresh wire SUBSCRIBE. Wait it out, then re-decide
+          // against whatever state (or lack of one) remains.
+          await awaitPendingUnsubscribe(existing);
+          continue;
+        }
+        return addLocalSubscription(pattern, existing.subId, handler);
+      }
+
+      const subId = await registerSingleFlight(pattern, () => subscribeWire(pattern));
+      return addLocalSubscription(pattern, subId, handler);
+    }
   };
 
   const subscribeIterator = (
@@ -150,15 +189,15 @@ export function createNoticeClient(connection: NoticeConnectionPort): NoticeClie
     const handlerId = nextHandlerId++;
     let subscription = subscriptionsByPattern.get(pattern);
     if (!subscription) {
-      subscription = { subId, handlers: new Map() };
+      subscription = { subId, handlers: new Map(), generation: subIdGeneration.next() };
       subscriptionsByPattern.set(pattern, subscription);
       patternsBySubId.set(subId, pattern);
     }
 
     subscription.handlers.set(handlerId, handler);
-    flushPendingNotifications(subId);
+    pendingNotifications.flush(subId);
     return createNoticeSubscription(
-      () => subscriptionsByPattern.get(pattern)?.subId ?? subId,
+      createLiveSubIdGetter(subscriptionsByPattern, pattern, subId, subscription.generation),
       pattern,
       async () => {
         await unsubscribe(pattern, handlerId);
@@ -168,27 +207,50 @@ export function createNoticeClient(connection: NoticeConnectionPort): NoticeClie
 
   const unsubscribe = async (pattern: string, handlerId: number): Promise<void> => {
     const subscription = subscriptionsByPattern.get(pattern);
-    if (!subscription) {
+    if (!subscription || !subscription.handlers.has(handlerId)) {
       return;
+    }
+
+    if (subscription.handlers.size > 1) {
+      // Other handlers remain — safe to remove this one locally without a
+      // wire round-trip.
+      subscription.handlers.delete(handlerId);
+      return;
+    }
+
+    // This is the last handler. Don't remove it locally until the wire
+    // UNSUBSCRIBE is confirmed — if it fails, the broker still expects
+    // notifications to keep reaching it.
+    const wireUnsubscribe = (async (): Promise<void> => {
+      const payload = NoticeCodec.encodeUnsubscribe(subscription.subId);
+      const parsed = parseStandardResponse(await requestFrame(MSG_NOTICE_UNSUBSCRIBE, payload));
+      if (!parsed.success) {
+        throw new NoticeError(
+          `UNSUBSCRIBE failed: ${parsed.error ?? "unknown error"}`,
+          "UNSUBSCRIBE_FAILED",
+          parsed.errorCode,
+        );
+      }
+    })();
+    subscription.pendingUnsubscribe = wireUnsubscribe;
+    try {
+      await wireUnsubscribe;
+    } finally {
+      if (subscription.pendingUnsubscribe === wireUnsubscribe) {
+        subscription.pendingUnsubscribe = undefined;
+      }
     }
 
     subscription.handlers.delete(handlerId);
-    if (subscription.handlers.size > 0) {
-      return;
+    // A concurrent subscribe() may have reused this same (not-yet-deleted)
+    // state object while the round-trip above was in flight, repopulating
+    // `handlers` — only clear the pattern-level bookkeeping if it's still
+    // genuinely empty.
+    if (isCurrentEmptyState(subscriptionsByPattern, pattern, subscription)) {
+      subscriptionsByPattern.delete(pattern);
+      patternsBySubId.delete(subscription.subId);
+      pendingNotifications.remove(subscription.subId);
     }
-
-    const payload = NoticeCodec.encodeUnsubscribe(subscription.subId);
-    const parsed = parseStandardResponse(await requestFrame(MSG_NOTICE_UNSUBSCRIBE, payload));
-    if (!parsed.success) {
-      throw new NoticeError(
-        `UNSUBSCRIBE failed: ${parsed.error ?? "unknown error"}`,
-        "UNSUBSCRIBE_FAILED",
-        parsed.errorCode,
-      );
-    }
-    subscriptionsByPattern.delete(pattern);
-    patternsBySubId.delete(subscription.subId);
-    pendingNotificationsBySubId.delete(subscription.subId);
   };
 
   const initNotifyHandler = (): void => {
@@ -200,62 +262,11 @@ export function createNoticeClient(connection: NoticeConnectionPort): NoticeClie
     connection.registerNotificationHandler(MSG_NOTICE_NOTIFY, (payload) => {
       try {
         const { subId, route, body } = NoticeCodec.decodeNotification(payload);
-        const pattern = patternsBySubId.get(subId);
-        if (!pattern) {
-          queuePendingNotification(subId, { route, body });
-          return;
-        }
-
-        const subscription = subscriptionsByPattern.get(pattern);
-        if (!subscription) {
-          queuePendingNotification(subId, { route, body });
-          return;
-        }
-
-        dispatchNotification(subscription, { route, body });
+        pendingNotifications.dispatchOrQueue(subId, { route, body });
       } catch {
         // Best-effort notification dispatch.
       }
     });
-  };
-
-  const queuePendingNotification = (subId: bigint, notification: NoticeMsg): void => {
-    const pending = pendingNotificationsBySubId.get(subId);
-    if (pending) {
-      pending.push(notification);
-      return;
-    }
-
-    pendingNotificationsBySubId.set(subId, [notification]);
-  };
-
-  const flushPendingNotifications = (subId: bigint): void => {
-    const pending = pendingNotificationsBySubId.get(subId);
-    if (!pending || pending.length === 0) {
-      return;
-    }
-
-    const pattern = patternsBySubId.get(subId);
-    const subscription = pattern === undefined ? undefined : subscriptionsByPattern.get(pattern);
-    if (!subscription) {
-      return;
-    }
-
-    pendingNotificationsBySubId.delete(subId);
-    for (const notification of pending) {
-      dispatchNotification(subscription, notification);
-    }
-  };
-
-  const dispatchNotification = (
-    subscription: NoticeSubscriptionState,
-    notification: NoticeMsg,
-  ): void => {
-    for (const handler of subscription.handlers.values()) {
-      connection.dispatchAsyncHandler(async () => {
-        await handler(notification);
-      });
-    }
   };
 
   return {

@@ -47,6 +47,36 @@ describe("core TaskGroup", () => {
     expect(stoppedCount).toBe(2);
   });
 
+  it("should propagate the caller-supplied stop reason to the task's abort signal given an explicit stop reason", async () => {
+    let observedReason: unknown;
+
+    const group = createTaskGroup({
+      name: "reason-group",
+      concurrency: 1,
+      run: async (ctx) => {
+        await new Promise<void>((resolve) => {
+          ctx.signal.addEventListener(
+            "abort",
+            () => {
+              observedReason = ctx.signal.reason;
+              resolve();
+            },
+            { once: true },
+          );
+        });
+      },
+    });
+
+    void group.start();
+    await Promise.resolve();
+
+    const reason = new Error("shutting down for config reload");
+    await group.stop(reason);
+    await group.join();
+
+    expect(observedReason).toBe(reason);
+  });
+
   it("should allow restart after clean stop given a stopped TaskGroup", async () => {
     let runs = 0;
 

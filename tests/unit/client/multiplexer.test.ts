@@ -402,6 +402,44 @@ describe("Multiplexer", () => {
     await expect(second).resolves.toEqual(new Uint8Array([0xbb]));
   });
 
+  it("keeps a timed-out request's tombstone in place when its send() later rejects, instead of misdelivering a delayed response to the next caller", async () => {
+    const multiplexer = createMultiplexer();
+    multiplexer.setConnected();
+
+    let rejectSend: (error: Error) => void = () => undefined;
+    const sendFailure = new Promise<void>((_resolve, reject) => {
+      rejectSend = reject;
+    });
+    // Silence Node's unhandled-rejection tracker for this intentionally-
+    // rejecting promise; multiplexer.request's own sendPromise chain below
+    // still observes and handles the same rejection normally.
+    sendFailure.catch(() => undefined);
+
+    const first = multiplexer.request(904, new Uint8Array([1]), () => sendFailure, 20);
+    await expect(first).rejects.toBeInstanceOf(TimeoutError);
+
+    // The timed-out request's send() finally settles — but with a
+    // rejection. This does NOT prove the frame never reached the server
+    // (a TCP write can fail after the OS already accepted/transmitted the
+    // bytes, and a send-level timeout in particular can settle without the
+    // connection itself failing) — so the tombstone must stay in place. If
+    // it were removed here, a real-but-delayed response to `first` would
+    // wrongly resolve `second` with `first`'s data instead of being
+    // discarded.
+    rejectSend(new Error("socket reset"));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const second = multiplexer.request(904, new Uint8Array([2]), async () => undefined, 200);
+
+    // This frame is consumed and discarded by `first`'s still-in-place
+    // tombstone, not delivered to `second`.
+    multiplexer.dispatch(904, new Uint8Array([0xaa]));
+    multiplexer.dispatch(904, new Uint8Array([0xbb]));
+
+    await expect(second).resolves.toEqual(new Uint8Array([0xbb]));
+  });
+
   it("does not leak stale response across disconnect/connect cycles", async () => {
     const multiplexer = createMultiplexer();
     multiplexer.setConnected();

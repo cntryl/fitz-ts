@@ -5,6 +5,7 @@
 import { createDomainClient } from "../base";
 import type {
   AsyncDispatchPort,
+  DisconnectListenerPort,
   NotificationPort,
   ReconnectListenerPort,
   ReconnectRestoreRequestPort,
@@ -28,12 +29,21 @@ import {
   ScheduleNotification,
   ScheduleSubscription,
   ScheduleListPage,
+  ScheduleStatusNames,
   createScheduleSubscription,
 } from "./types";
 import { ScheduleError } from "../../core/errors";
+import { formatStatusName } from "../internal/status";
 import { isRegistrationPatternShape, isRouteShape } from "../_routes";
 import { restoreMapEntriesAtomically } from "../internal/restore";
 import { createKeyedSingleFlight } from "../internal/keyed-single-flight";
+import {
+  awaitPendingUnsubscribe,
+  createGenerationCounter,
+  createLiveSubIdGetter,
+  isCurrentEmptyState,
+} from "../internal/subscription-handle";
+import { createPendingNotificationBuffer } from "../internal/pending-notifications";
 import {
   createSubscriptionIterator,
   type SubscriptionIteratorOptions,
@@ -42,10 +52,16 @@ import {
 type ScheduleSubscriptionState = {
   subId: bigint;
   handlers: Map<number, ScheduleHandler>;
+  generation: number;
+  // Set while a wire UNSUBSCRIBE for this pattern is awaiting its broker
+  // round-trip. subscribe()'s "reuse the existing state" path must wait it
+  // out rather than reuse it blindly — see awaitPendingUnsubscribe().
+  pendingUnsubscribe?: Promise<void>;
 };
 
 type ScheduleConnectionPort = RequestPort &
   ReconnectListenerPort &
+  DisconnectListenerPort &
   NotificationPort &
   AsyncDispatchPort &
   Partial<ReconnectRestoreRequestPort>;
@@ -76,7 +92,21 @@ export function createScheduleClient(connection: ScheduleConnectionPort): Schedu
   const { requestFrame, requestReconnectFrame } = createDomainClient(connection);
   const subscriptionsByPattern = new Map<string, ScheduleSubscriptionState>();
   const patternsBySubId = new Map<bigint, string>();
-  const pendingNotificationsBySubId = new Map<bigint, ScheduleNotification[]>();
+  const subIdGeneration = createGenerationCounter();
+  const pendingNotifications = createPendingNotificationBuffer<
+    ScheduleNotification,
+    ScheduleSubscriptionState
+  >(
+    (subId) => {
+      const pattern = patternsBySubId.get(subId);
+      return pattern === undefined ? undefined : subscriptionsByPattern.get(pattern);
+    },
+    (handler, notification) => {
+      connection.dispatchAsyncHandler(async () => {
+        await handler(notification);
+      });
+    },
+  );
   let notifyHandlerInitialized = false;
   let nextHandlerId = 1;
 
@@ -89,7 +119,9 @@ export function createScheduleClient(connection: ScheduleConnectionPort): Schedu
       subscriptionsByPattern,
       async (pattern, state) => {
         const subId = await subscribeWire(pattern, requestReconnectFrame);
-        return { subId, handlers: new Map(state.handlers) };
+        // Carry the generation forward: this is the same logical
+        // subscription surviving reconnect, not a new one.
+        return { subId, handlers: new Map(state.handlers), generation: state.generation };
       },
       async (pattern) => {
         assertPlainSuccess(
@@ -105,7 +137,7 @@ export function createScheduleClient(connection: ScheduleConnectionPort): Schedu
     patternsBySubId.clear();
     for (const [pattern, state] of subscriptionsByPattern) {
       patternsBySubId.set(state.subId, pattern);
-      flushPendingNotifications(state.subId);
+      pendingNotifications.flush(state.subId);
     }
   });
 
@@ -164,28 +196,51 @@ export function createScheduleClient(connection: ScheduleConnectionPort): Schedu
     assertConcreteScheduleRoute(route);
 
     const wakeGate = createWakeGate();
-    const pendingNotifications: ScheduleNotification[] = [];
+    const queuedNotifications: ScheduleNotification[] = [];
     const subscription = await subscribe(route, (notification) => {
-      pendingNotifications.push(notification);
+      queuedNotifications.push(notification);
+      wakeGate.wake();
+    });
+    const unsubscribeReconnectWake = connection.onReconnect(() => {
+      wakeGate.wake();
+    });
+    // Without this, a disconnect while idle-parked in wakeGate.waitAfter()
+    // below has no wake source at all — a `for await...break` or
+    // client.close() can hang forever, leaking the wire subscription in the
+    // finally block that never runs.
+    //
+    // Deliberately just a wake, not a sticky "stop" flag: a sticky flag
+    // fires for every disconnect, including the transient ones a live
+    // reconnect resolves moments later, and would make this throw before
+    // the restored subscription (via the onReconnect wake above) ever gets
+    // a chance to keep the iteration going — regressing reconnect survival
+    // for exactly the case this generator is meant to support. This matches
+    // the equivalent notification-waiting generators in the KV, Lease,
+    // Notice, and Stream domains, none of which treat disconnect as
+    // terminal either — callers that need prompt teardown on a permanent
+    // disconnect should pass `options.signal` and abort it themselves.
+    const unsubscribeDisconnectWake = connection.onDisconnect(() => {
       wakeGate.wake();
     });
 
     try {
       while (true) {
-        const notification = pendingNotifications.shift();
+        const notification = queuedNotifications.shift();
         if (notification) {
           yield notification;
           continue;
         }
 
         const observed = wakeGate.version;
-        if (pendingNotifications.length > 0) {
+        if (queuedNotifications.length > 0) {
           continue;
         }
 
         await wakeGate.waitAfter(observed, { signal: options.signal });
       }
     } finally {
+      unsubscribeReconnectWake();
+      unsubscribeDisconnectWake();
       await subscription.unsubscribe().catch(() => undefined);
     }
   };
@@ -197,13 +252,24 @@ export function createScheduleClient(connection: ScheduleConnectionPort): Schedu
     assertSchedulePattern(pattern);
 
     initNotifyHandler();
-    const existing = subscriptionsByPattern.get(pattern);
-    if (existing) {
-      return addLocalSubscription(pattern, existing.subId, handler);
-    }
 
-    const subId = await registerSingleFlight(pattern, () => subscribeWire(pattern));
-    return addLocalSubscription(pattern, subId, handler);
+    while (true) {
+      const existing = subscriptionsByPattern.get(pattern);
+      if (existing) {
+        if (existing.pendingUnsubscribe) {
+          // An UNSUBSCRIBE for this pattern is in flight — reusing this
+          // state now would register the handler locally without ever
+          // sending a fresh wire SUBSCRIBE. Wait it out, then re-decide
+          // against whatever state (or lack of one) remains.
+          await awaitPendingUnsubscribe(existing);
+          continue;
+        }
+        return addLocalSubscription(pattern, existing.subId, handler);
+      }
+
+      const subId = await registerSingleFlight(pattern, () => subscribeWire(pattern));
+      return addLocalSubscription(pattern, subId, handler);
+    }
   };
 
   const subscribeIterator = (
@@ -229,15 +295,15 @@ export function createScheduleClient(connection: ScheduleConnectionPort): Schedu
     const handlerId = nextHandlerId++;
     let subscription = subscriptionsByPattern.get(pattern);
     if (!subscription) {
-      subscription = { subId, handlers: new Map() };
+      subscription = { subId, handlers: new Map(), generation: subIdGeneration.next() };
       subscriptionsByPattern.set(pattern, subscription);
       patternsBySubId.set(subId, pattern);
     }
 
     subscription.handlers.set(handlerId, handler);
-    flushPendingNotifications(subId);
+    pendingNotifications.flush(subId);
     return createScheduleSubscription(
-      () => subscriptionsByPattern.get(pattern)?.subId ?? subId,
+      createLiveSubIdGetter(subscriptionsByPattern, pattern, subId, subscription.generation),
       pattern,
       async () => {
         await unsubscribe(pattern, handlerId);
@@ -256,14 +322,30 @@ export function createScheduleClient(connection: ScheduleConnectionPort): Schedu
       return;
     }
 
-    const response = await requestFrame(
-      MSG_SCHEDULE_UNSUBSCRIBE,
-      ScheduleCodec.encodeUnsubscribe(pattern),
-    );
-    ScheduleCodec.decodeUnsubscribeResponse(assertPlainSuccess(response, "UNSUBSCRIBE"));
-    subscriptionsByPattern.delete(pattern);
-    patternsBySubId.delete(subscription.subId);
-    pendingNotificationsBySubId.delete(subscription.subId);
+    const wireUnsubscribe = (async (): Promise<void> => {
+      const response = await requestFrame(
+        MSG_SCHEDULE_UNSUBSCRIBE,
+        ScheduleCodec.encodeUnsubscribe(pattern),
+      );
+      ScheduleCodec.decodeUnsubscribeResponse(assertPlainSuccess(response, "UNSUBSCRIBE"));
+    })();
+    subscription.pendingUnsubscribe = wireUnsubscribe;
+    try {
+      await wireUnsubscribe;
+    } finally {
+      if (subscription.pendingUnsubscribe === wireUnsubscribe) {
+        subscription.pendingUnsubscribe = undefined;
+      }
+    }
+    // A concurrent subscribe() may have reused this same (not-yet-deleted)
+    // state object while the round-trip above was in flight, repopulating
+    // `handlers` — only clear the pattern-level bookkeeping if it's still
+    // genuinely empty.
+    if (isCurrentEmptyState(subscriptionsByPattern, pattern, subscription)) {
+      subscriptionsByPattern.delete(pattern);
+      patternsBySubId.delete(subscription.subId);
+      pendingNotifications.remove(subscription.subId);
+    }
   };
 
   const initNotifyHandler = (): void => {
@@ -275,73 +357,14 @@ export function createScheduleClient(connection: ScheduleConnectionPort): Schedu
     connection.registerNotificationHandler(MSG_SCHEDULE_NOTIFY, (payload) => {
       try {
         const decoded = ScheduleCodec.decodeNotification(payload);
-        const pattern = patternsBySubId.get(decoded.subId);
-        if (!pattern) {
-          queuePendingNotification(decoded.subId, {
-            route: decoded.route,
-            payload: decoded.payload,
-          });
-          return;
-        }
-
-        const subscription = subscriptionsByPattern.get(pattern);
-        if (!subscription) {
-          queuePendingNotification(decoded.subId, {
-            route: decoded.route,
-            payload: decoded.payload,
-          });
-          return;
-        }
-
-        const notification: ScheduleNotification = {
+        pendingNotifications.dispatchOrQueue(decoded.subId, {
           route: decoded.route,
           payload: decoded.payload,
-        };
-        dispatchNotification(subscription, notification);
+        });
       } catch {
         // Best-effort notification dispatch.
       }
     });
-  };
-
-  const queuePendingNotification = (subId: bigint, notification: ScheduleNotification): void => {
-    const existing = pendingNotificationsBySubId.get(subId);
-    if (existing) {
-      existing.push(notification);
-      return;
-    }
-
-    pendingNotificationsBySubId.set(subId, [notification]);
-  };
-
-  const flushPendingNotifications = (subId: bigint): void => {
-    const pending = pendingNotificationsBySubId.get(subId);
-    if (!pending || pending.length === 0) {
-      return;
-    }
-
-    pendingNotificationsBySubId.delete(subId);
-    const subscription = Array.from(subscriptionsByPattern.values()).find(
-      (entry) => entry.subId === subId,
-    );
-    if (!subscription) {
-      return;
-    }
-
-    for (const notification of pending) {
-      dispatchNotification(subscription, notification);
-    }
-  };
-
-  const dispatchNotification = (
-    subscription: ScheduleSubscriptionState,
-    notification: ScheduleNotification,
-  ): void => {
-    for (const handler of subscription.handlers.values()) {
-      connection.dispatchAsyncHandler(async () => {
-        await handler(notification);
-      });
-    }
   };
 
   const assertSuccess = (payload: Uint8Array, operation: string): Uint8Array => {
@@ -350,9 +373,19 @@ export function createScheduleClient(connection: ScheduleConnectionPort): Schedu
       return result.data;
     }
 
+    // Prefer the real numeric domain code the broker already sends over
+    // guessing the failure kind from free-text message substrings — the
+    // latter silently reclassifies as "REQUEST_FAILED" the moment the
+    // broker's wording changes, and misses codes the message text doesn't
+    // happen to mention.
+    const code =
+      result.errorCode !== undefined
+        ? formatStatusName(result.errorCode, ScheduleStatusNames)
+        : mapErrorCode(result.error);
+
     throw new ScheduleError(
       `${operation} failed: ${result.error ?? "Unknown error"}`,
-      mapErrorCode(result.error),
+      code,
       result.errorCode,
     );
   };

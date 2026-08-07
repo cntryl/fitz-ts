@@ -22,7 +22,6 @@ import {
   RpcHandler,
   RpcSubscription,
   ResponseWriter,
-  RpcStatus,
   createRpcSubscription,
 } from "./types";
 import {
@@ -111,6 +110,11 @@ function isMoreSpecificRpcPattern(candidate: string, current: string): boolean {
 
 type ManagedResponseWriter = ResponseWriter & {
   dispose(): void;
+  // False when the writer became unusable for a reason the handler couldn't
+  // have avoided (the connection dropped, or a send failed for a benign
+  // shutdown reason) — only a handler that settles with the writer still
+  // live and never sent isEnd:true warrants the L11 warning below.
+  needsTerminalWarning(): boolean;
 };
 
 function createRpcResponseWriter(
@@ -119,6 +123,8 @@ function createRpcResponseWriter(
 ): ManagedResponseWriter {
   let sequence = 0n;
   let stale = false;
+  let ended = false;
+  let benignlyDisposed = false;
   let unsubscribeDisconnect: () => void = () => undefined;
 
   const dispose = (): void => {
@@ -132,6 +138,7 @@ function createRpcResponseWriter(
   };
 
   unsubscribeDisconnect = connection.onDisconnect(() => {
+    benignlyDisposed = true;
     dispose();
   });
 
@@ -145,10 +152,12 @@ function createRpcResponseWriter(
     try {
       await connection.send(MSG_RPC_RESPONSE, payload);
       if (isEnd) {
+        ended = true;
         dispose();
       }
     } catch (error) {
       if (isBenignShutdownError(error, connection)) {
+        benignlyDisposed = true;
         dispose();
         return;
       }
@@ -159,6 +168,7 @@ function createRpcResponseWriter(
   return {
     send,
     dispose,
+    needsTerminalWarning: () => !ended && !benignlyDisposed,
   };
 }
 
@@ -255,16 +265,20 @@ function createRpcIterator(
       throw abortError();
     }
 
-    if (failureReason !== undefined) {
-      throw failureReason;
-    }
-
+    // Frames pushed before a later failure are still deliverable and must
+    // drain first — only surface the failure once the buffer is empty, or a
+    // successfully received frame gets discarded in favor of the error that
+    // arrived after it.
     if (buffer.length > 0) {
       const value = buffer.shift();
       if (!value) {
         return { value: undefined, done: true };
       }
       return { value, done: false };
+    }
+
+    if (failureReason !== undefined) {
+      throw failureReason;
     }
 
     if (done) {
@@ -276,7 +290,13 @@ function createRpcIterator(
         clearPendingWait();
         done = true;
         cleanupPendingRpc();
-        reject(new RpcError("RPC call timeout", "TIMEOUT", RpcStatus.Timeout));
+        // Use the domain error-code namespace (matches what a broker-side
+        // timeout reports via rpcErrorCodeName/ErrCodeRpcTimeout below), not
+        // the wire status enum — RpcStatus.Timeout is a different numbering
+        // space, and mixing them made isRetryable() treat a client-local
+        // timeout inconsistently from a broker-reported one despite both
+        // sharing the same `.code` string.
+        reject(new RpcError("RPC call timeout", "TIMEOUT", ErrCodeRpcTimeout));
       }, timeoutMs);
       clearPendingNext = () => {
         clearTimeout(timer);
@@ -441,7 +461,7 @@ export function createRpcClient(connection: RpcConnectionPort): RpcClient {
     handler: RpcHandler,
     options: Required<RegisterWorkerOptions>,
     request = requestFrame,
-  ): Promise<void> => {
+  ): Promise<RegisteredWorker> => {
     const payload = RpcCodec.encodeSubscribeWorker(route, options.maxConcurrency);
     const parsed = parseStandardResponse(await request(MSG_RPC_SUBSCRIBE_WORKER, payload));
     if (!parsed.success) {
@@ -452,7 +472,9 @@ export function createRpcClient(connection: RpcConnectionPort): RpcClient {
       );
     }
 
-    workers.set(route, { handler, options });
+    const registration = { handler, options };
+    workers.set(route, registration);
+    return registration;
   };
 
   const registerWorker = async (
@@ -463,17 +485,22 @@ export function createRpcClient(connection: RpcConnectionPort): RpcClient {
     assertRpcRegistrationPattern(route);
     initRpcHandler();
     const normalizedOptions = normalizeRegisterWorkerOptions(options);
-    await registerWorkerInternal(route, handler, normalizedOptions);
+    const registration = await registerWorkerInternal(route, handler, normalizedOptions);
 
     const unsubscribeFn = async (registeredRoute: string) => {
-      await unregisterWorker(registeredRoute);
+      await unregisterWorker(registeredRoute, registration);
     };
 
     return createRpcSubscription(route, unsubscribeFn);
   };
 
-  const unregisterWorker = async (route: string): Promise<void> => {
-    workers.delete(route);
+  const unregisterWorker = async (route: string, registration: RegisteredWorker): Promise<void> => {
+    // Confirm the wire UNSUBSCRIBE_WORKER before dropping local tracking —
+    // deleting first (the old behavior) meant a failed unsubscribe
+    // permanently orphaned the worker locally even though the broker may
+    // still consider it live, so it never gets re-registered on reconnect.
+    // Every other domain's unsubscribe (and this file's own
+    // registerWorkerInternal) already confirms before writing.
     const payload = RpcCodec.encodeUnsubscribeWorker(route);
     const parsed = parseStandardResponse(await requestFrame(MSG_RPC_UNSUBSCRIBE_WORKER, payload));
     if (!parsed.success) {
@@ -482,6 +509,14 @@ export function createRpcClient(connection: RpcConnectionPort): RpcClient {
         "UNSUBSCRIBE_FAILED",
         parsed.errorCode,
       );
+    }
+    // A replacement worker for the same route may have completed its own
+    // SUBSCRIBE_WORKER while this older handle's UNSUBSCRIBE_WORKER was in
+    // flight. In that ordering the broker is subscribed to the replacement,
+    // so deleting by route alone would orphan it locally. Remove only the
+    // exact registration this subscription handle represents.
+    if (workers.get(route) === registration) {
+      workers.delete(route);
     }
   };
 
@@ -596,6 +631,15 @@ export function createRpcClient(connection: RpcConnectionPort): RpcClient {
           // Best-effort error response.
         }
       } finally {
+        // A handler that settles without ever sending a terminal frame
+        // leaves the caller's iterator waiting until it hits the generic
+        // call timeout, with nothing pointing at the actual cause — warn
+        // here, with the route, so it's diagnosable instead of mysterious.
+        if (writer.needsTerminalWarning()) {
+          console.warn(
+            `[fitz] RPC worker handler for route "${req.route}" completed without sending a terminal response (isEnd: true); the caller will hang until the call times out.`,
+          );
+        }
         writer.dispose();
       }
     });

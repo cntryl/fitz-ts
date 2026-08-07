@@ -26,6 +26,17 @@ import { isRegistrationPatternShape, isRouteShape } from "../_routes";
 import { restoreMapEntriesAtomically } from "../internal/restore";
 import { createKeyedSingleFlight } from "../internal/keyed-single-flight";
 import { formatStatusName } from "../internal/status";
+import {
+  awaitPendingUnsubscribe,
+  createGenerationCounter,
+  createLiveSubIdGetter,
+  isCurrentEmptyState,
+} from "../internal/subscription-handle";
+import { createPendingNotificationBuffer } from "../internal/pending-notifications";
+import {
+  createSubscriptionIterator,
+  type SubscriptionIteratorOptions,
+} from "../internal/subscription-iterator";
 import { QueueCodec } from "./codec";
 import {
   AvailabilityHandler,
@@ -41,6 +52,11 @@ import {
 type QueueSubscriptionState = {
   subId: bigint;
   handlers: Map<number, AvailabilityHandler>;
+  generation: number;
+  // Set while a wire UNSUBSCRIBE for this pattern is awaiting its broker
+  // round-trip. subscribe()'s "reuse the existing state" path must wait it
+  // out rather than reuse it blindly — see awaitPendingUnsubscribe().
+  pendingUnsubscribe?: Promise<void>;
 };
 
 type QueueConnectionPort = RequestPort &
@@ -53,17 +69,30 @@ type QueueConnectionPort = RequestPort &
 
 export interface QueueClient {
   enqueue(route: string, body: Uint8Array, options?: EnqueueOptions): Promise<bigint>;
+  /**
+   * Reserves up to `batchSize` messages.
+   *
+   * Note: unlike {@link QueueClient.reserveWhenAvailable}, this takes
+   * positional parameters rather than an options object — the two are
+   * conceptually the same operation in different shapes for historical
+   * reasons; take care not to transpose `batchSize` and `waitSeconds`.
+   */
   reserve(
     route: string,
     leaseSeconds: number,
     batchSize?: number,
     waitSeconds?: number,
+    signal?: AbortSignal,
   ): Promise<QueueItem[]>;
   reserveWhenAvailable(
     route: string,
     options: { leaseSeconds: number; batchSize?: number; signal?: AbortSignal },
   ): AsyncIterable<QueueItem[]>;
   subscribe(pattern: string, handler: AvailabilityHandler): Promise<QueueSubscription>;
+  subscribeIterator(
+    pattern: string,
+    options?: SubscriptionIteratorOptions,
+  ): AsyncIterable<AvailabilityNotification>;
 }
 
 export function createQueueClient(connection: QueueConnectionPort): QueueClient {
@@ -71,7 +100,21 @@ export function createQueueClient(connection: QueueConnectionPort): QueueClient 
   const { requestFrame, requestReconnectFrame, runWithRetry } = createDomainClient(connection);
   const subscriptionsByPattern = new Map<string, QueueSubscriptionState>();
   const patternsBySubId = new Map<bigint, string>();
-  const pendingNotificationsBySubId = new Map<bigint, AvailabilityNotification[]>();
+  const subIdGeneration = createGenerationCounter();
+  const pendingNotifications = createPendingNotificationBuffer<
+    AvailabilityNotification,
+    QueueSubscriptionState
+  >(
+    (subId) => {
+      const pattern = patternsBySubId.get(subId);
+      return pattern === undefined ? undefined : subscriptionsByPattern.get(pattern);
+    },
+    (handler, notification) => {
+      connection.dispatchAsyncHandler(async () => {
+        await handler(notification);
+      });
+    },
+  );
   let notificationHandlerRegistered = false;
   let nextHandlerId = 1;
 
@@ -84,7 +127,9 @@ export function createQueueClient(connection: QueueConnectionPort): QueueClient 
       subscriptionsByPattern,
       async (pattern, state) => {
         const subId = await subscribeWire(pattern, requestReconnectFrame);
-        return { subId, handlers: new Map(state.handlers) };
+        // Carry the generation forward: this is the same logical
+        // subscription surviving reconnect, not a new one.
+        return { subId, handlers: new Map(state.handlers), generation: state.generation };
       },
       async (pattern) => {
         QueueCodec.decodeUnsubscribeResponse(
@@ -96,7 +141,7 @@ export function createQueueClient(connection: QueueConnectionPort): QueueClient 
     patternsBySubId.clear();
     for (const [pattern, state] of subscriptionsByPattern) {
       patternsBySubId.set(state.subId, pattern);
-      flushPendingNotifications(state.subId);
+      pendingNotifications.flush(state.subId);
     }
   });
 
@@ -106,6 +151,16 @@ export function createQueueClient(connection: QueueConnectionPort): QueueClient 
     options?: EnqueueOptions,
   ): Promise<bigint> => {
     assertQueueRoute(route);
+    if (options?.priority !== undefined || options?.ttlMs !== undefined) {
+      // encodeEnqueue has no wire-format byte range for either field — they
+      // were previously accepted and silently dropped. Fail loudly instead
+      // of guessing at wire bytes until the protocol actually supports
+      // them.
+      throw new QueueError(
+        "EnqueueOptions.priority and .ttlMs are not yet supported by the wire protocol",
+        "UNSUPPORTED_OPTION",
+      );
+    }
     return runWithRetry(
       {
         domain: "queue",
@@ -132,12 +187,13 @@ export function createQueueClient(connection: QueueConnectionPort): QueueClient 
     leaseSeconds: number,
     batchSize: number = 1,
     waitSeconds: number = 0,
+    signal?: AbortSignal,
   ): Promise<QueueItem[]> => {
     assertQueueReserveRoute(route);
     if (!Number.isInteger(batchSize) || batchSize < 0 || batchSize > 1024) {
       throw new QueueError("RESERVE batch size must be between 0 and 1024", "INVALID_BATCH_SIZE");
     }
-    return reserveOnce(route, leaseSeconds, batchSize, undefined, waitSeconds);
+    return reserveOnce(route, leaseSeconds, batchSize, signal, waitSeconds);
   };
 
   const reserveWhenAvailable = async function* (
@@ -155,6 +211,23 @@ export function createQueueClient(connection: QueueConnectionPort): QueueClient 
       wakeGate.wake();
     });
     const unsubscribeReconnectWake = connection.onReconnect(() => {
+      wakeGate.wake();
+    });
+    // Without this, a disconnect while idle-parked in wakeGate.waitAfter()
+    // below has no wake source at all: a `for await...break` or
+    // client.close() can hang forever (a generator's implicit .return()
+    // doesn't run its `finally` until the awaited promise itself settles),
+    // leaking the wire subscription in the finally block that never runs.
+    //
+    // Deliberately just a wake, not a sticky "stop" flag: this fires for
+    // every disconnect, including the transient ones a live reconnect
+    // resolves moments later, and the restored subscription is meant to let
+    // the loop keep going across those. Retrying reserveOnce() after waking
+    // lets the connection layer itself decide the outcome — it already
+    // waits out an in-progress reconnect, or fails fast once the connection
+    // is genuinely closed (reconnect disabled/exhausted, or client.close()),
+    // which is exactly the failure this generator should propagate.
+    const unsubscribeDisconnectWake = connection.onDisconnect(() => {
       wakeGate.wake();
     });
 
@@ -177,6 +250,7 @@ export function createQueueClient(connection: QueueConnectionPort): QueueClient 
       }
     } finally {
       unsubscribeReconnectWake();
+      unsubscribeDisconnectWake();
       await subscription.unsubscribe().catch(() => undefined);
     }
   };
@@ -204,13 +278,24 @@ export function createQueueClient(connection: QueueConnectionPort): QueueClient 
   ): Promise<QueueSubscription> => {
     assertQueueSubscriptionPattern(pattern);
     initNotificationHandler();
-    const existing = subscriptionsByPattern.get(pattern);
-    if (existing) {
-      return addLocalSubscription(pattern, existing.subId, handler);
-    }
 
-    const subId = await registerSingleFlight(pattern, () => subscribeWire(pattern));
-    return addLocalSubscription(pattern, subId, handler);
+    while (true) {
+      const existing = subscriptionsByPattern.get(pattern);
+      if (existing) {
+        if (existing.pendingUnsubscribe) {
+          // An UNSUBSCRIBE for this pattern is in flight — reusing this
+          // state now would register the handler locally without ever
+          // sending a fresh wire SUBSCRIBE. Wait it out, then re-decide
+          // against whatever state (or lack of one) remains.
+          await awaitPendingUnsubscribe(existing);
+          continue;
+        }
+        return addLocalSubscription(pattern, existing.subId, handler);
+      }
+
+      const subId = await registerSingleFlight(pattern, () => subscribeWire(pattern));
+      return addLocalSubscription(pattern, subId, handler);
+    }
   };
 
   const subscribeWire = async (pattern: string, request = requestFrame): Promise<bigint> => {
@@ -234,17 +319,21 @@ export function createQueueClient(connection: QueueConnectionPort): QueueClient 
     const handlerId = nextHandlerId++;
     let subscription = subscriptionsByPattern.get(pattern);
     if (!subscription) {
-      subscription = { subId, handlers: new Map() };
+      subscription = { subId, handlers: new Map(), generation: subIdGeneration.next() };
       subscriptionsByPattern.set(pattern, subscription);
       patternsBySubId.set(subId, pattern);
     }
 
     subscription.handlers.set(handlerId, handler);
-    flushPendingNotifications(subId);
+    pendingNotifications.flush(subId);
 
-    return createQueueSubscription(subId, pattern, async () => {
-      await unsubscribe(pattern, handlerId);
-    });
+    return createQueueSubscription(
+      createLiveSubIdGetter(subscriptionsByPattern, pattern, subId, subscription.generation),
+      pattern,
+      async () => {
+        await unsubscribe(pattern, handlerId);
+      },
+    );
   };
 
   const unsubscribe = async (pattern: string, handlerId: number): Promise<void> => {
@@ -258,14 +347,36 @@ export function createQueueClient(connection: QueueConnectionPort): QueueClient 
       return;
     }
 
-    const payload = QueueCodec.encodeUnsubscribe(pattern);
-    const response = await requestFrame(MSG_QUEUE_UNSUBSCRIBE, payload);
-    const decoded = QueueCodec.decodeUnsubscribeResponse(response);
-    checkStatus(decoded, "UNSUBSCRIBE");
-    subscriptionsByPattern.delete(pattern);
-    patternsBySubId.delete(subscription.subId);
-    pendingNotificationsBySubId.delete(subscription.subId);
+    const wireUnsubscribe = (async (): Promise<void> => {
+      const payload = QueueCodec.encodeUnsubscribe(pattern);
+      const response = await requestFrame(MSG_QUEUE_UNSUBSCRIBE, payload);
+      const decoded = QueueCodec.decodeUnsubscribeResponse(response);
+      checkStatus(decoded, "UNSUBSCRIBE");
+    })();
+    subscription.pendingUnsubscribe = wireUnsubscribe;
+    try {
+      await wireUnsubscribe;
+    } finally {
+      if (subscription.pendingUnsubscribe === wireUnsubscribe) {
+        subscription.pendingUnsubscribe = undefined;
+      }
+    }
+    // A concurrent subscribe() may have reused this same (not-yet-deleted)
+    // state object while the round-trip above was in flight, repopulating
+    // `handlers` — only clear the pattern-level bookkeeping if it's still
+    // genuinely empty.
+    if (isCurrentEmptyState(subscriptionsByPattern, pattern, subscription)) {
+      subscriptionsByPattern.delete(pattern);
+      patternsBySubId.delete(subscription.subId);
+      pendingNotifications.remove(subscription.subId);
+    }
   };
+
+  const subscribeIterator = (
+    pattern: string,
+    iteratorOptions?: SubscriptionIteratorOptions,
+  ): AsyncIterable<AvailabilityNotification> =>
+    createSubscriptionIterator((handler) => subscribe(pattern, handler), iteratorOptions);
 
   const initNotificationHandler = (): void => {
     if (notificationHandlerRegistered) {
@@ -283,65 +394,11 @@ export function createQueueClient(connection: QueueConnectionPort): QueueClient 
           delayedMessages,
           inflightMessages,
         };
-        const pattern = patternsBySubId.get(subId);
-        if (!pattern) {
-          queuePendingNotification(subId, notification);
-          return;
-        }
-
-        const subscription = subscriptionsByPattern.get(pattern);
-        if (!subscription) {
-          queuePendingNotification(subId, notification);
-          return;
-        }
-
-        dispatchNotification(subscription, notification);
+        pendingNotifications.dispatchOrQueue(subId, notification);
       } catch {
         // Best-effort notification dispatch.
       }
     });
-  };
-
-  const queuePendingNotification = (
-    subId: bigint,
-    notification: AvailabilityNotification,
-  ): void => {
-    const pending = pendingNotificationsBySubId.get(subId);
-    if (pending) {
-      pending.push(notification);
-      return;
-    }
-
-    pendingNotificationsBySubId.set(subId, [notification]);
-  };
-
-  const flushPendingNotifications = (subId: bigint): void => {
-    const pending = pendingNotificationsBySubId.get(subId);
-    if (!pending || pending.length === 0) {
-      return;
-    }
-
-    const pattern = patternsBySubId.get(subId);
-    const subscription = pattern === undefined ? undefined : subscriptionsByPattern.get(pattern);
-    if (!subscription) {
-      return;
-    }
-
-    pendingNotificationsBySubId.delete(subId);
-    for (const notification of pending) {
-      dispatchNotification(subscription, notification);
-    }
-  };
-
-  const dispatchNotification = (
-    subscription: QueueSubscriptionState,
-    notification: AvailabilityNotification,
-  ): void => {
-    for (const handler of subscription.handlers.values()) {
-      connection.dispatchAsyncHandler(async () => {
-        await handler(notification);
-      });
-    }
   };
 
   const checkStatus = (
@@ -385,6 +442,7 @@ export function createQueueClient(connection: QueueConnectionPort): QueueClient 
     reserve,
     reserveWhenAvailable,
     subscribe,
+    subscribeIterator,
   };
 }
 

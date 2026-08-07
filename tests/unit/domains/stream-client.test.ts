@@ -297,6 +297,61 @@ describe("StreamClient", () => {
     expect(page.items[1]).toMatchObject({ route: "stream://realm/area/audits" });
   });
 
+  it("reports the real status name instead of Unknown(N) on a failed operation", async () => {
+    const connection = new FakeStreamConnection("success");
+    const client = createStreamClient(connection as unknown as Connection);
+
+    const session = await client.begin("stream://realm/area/resource");
+    // Status 7 (ExpectedOffsetMismatch) with no broker-supplied errorMessage
+    // — before the fix, client.ts's local checkStatus passed an empty names
+    // map to formatStatusName and always fell back to "Unknown(7)".
+    connection.respond(MSG_STREAM_COMMIT, new Uint8Array([7]));
+
+    await expect(session.commit("Sync")).rejects.toMatchObject({
+      domainCode: 7,
+      message: "COMMIT failed: ExpectedOffsetMismatch",
+    });
+  });
+
+  it("rejects an unbounded consume() that the broker truncated to one page", async () => {
+    const readResponse = encodeWrappedReadResponse(
+      [
+        {
+          route: "stream://realm/area/resource",
+          item: encodeReadEvent({ offset: 0n, body: new Uint8Array([1]), timestamp: 1n }),
+        },
+      ],
+      { lastResourceOffset: 0n, hasMore: true },
+    );
+    const connection = new FakeStreamConnection("success", readResponse);
+    const client = createStreamClient(connection as unknown as Connection);
+
+    await expect(client.consume("stream://realm/area/resource", 0n)).rejects.toMatchObject({
+      code: "STREAM_CONSUME_TRUNCATED",
+    });
+  });
+
+  it("does not treat an explicit limit as truncation in consume()", async () => {
+    const readResponse = encodeWrappedReadResponse(
+      [
+        {
+          route: "stream://realm/area/resource",
+          item: encodeReadEvent({ offset: 0n, body: new Uint8Array([1]), timestamp: 1n }),
+        },
+      ],
+      { lastResourceOffset: 0n, hasMore: true },
+    );
+    const connection = new FakeStreamConnection("success", readResponse);
+    const client = createStreamClient(connection as unknown as Connection);
+
+    const iterable = await client.consume("stream://realm/area/resource", 0n, 1);
+    const records: Array<{ offset: bigint }> = [];
+    for await (const record of iterable) {
+      records.push(record);
+    }
+    expect(records.map((record) => record.offset)).toEqual([0n]);
+  });
+
   it("matches the server stream selector grammar", async () => {
     const connection = new FakeStreamConnection(
       "success",

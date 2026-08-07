@@ -3,6 +3,12 @@
  * Per fitz-go/internal/domains/schedule (cron-based task scheduling)
  */
 
+import {
+  ErrCodeScheduleInvalidDeliveryMode,
+  ErrCodeScheduleInvalidSubscription,
+  ErrCodeScheduleSubscriptionLimit,
+} from "../../core/errors";
+
 /**
  * ScheduleEntry represents a schedule returned by a list page
  * Per CLIENT_SPEC: route, cron, payload
@@ -88,3 +94,20 @@ export enum ScheduleStatus {
   InvalidDelay = 4,
   InvalidTimestamp = 5,
 }
+
+export const ScheduleStatusNames: Record<number, string> = {
+  [ScheduleStatus.ScheduleNotFound]: "NOT_FOUND",
+  [ScheduleStatus.TaskNotFound]: "NOT_FOUND",
+  [ScheduleStatus.InvalidCron]: "INVALID_CRON",
+  [ScheduleStatus.InvalidDelay]: "INVALID_DELAY",
+  [ScheduleStatus.InvalidTimestamp]: "INVALID_TIMESTAMP",
+  // Broker domain error codes live in a separate numeric namespace from the
+  // ScheduleStatus wire enum above (no overlap with 0-5), but standard
+  // responses report both through the same errorCode field — merge them
+  // into one lookup table so a subscribe()/subscribeIterator() failure
+  // reported this way resolves to its real symbolic name instead of
+  // falling through to a generic Unknown(N).
+  [ErrCodeScheduleInvalidSubscription]: "INVALID_SUBSCRIPTION",
+  [ErrCodeScheduleSubscriptionLimit]: "SUBSCRIPTION_LIMIT",
+  [ErrCodeScheduleInvalidDeliveryMode]: "INVALID_DELIVERY_MODE",
+};

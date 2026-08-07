@@ -265,7 +265,14 @@ export function createConnection(
     }
 
     if (transport) {
-      await transport.close();
+      // Every other bookkeeping step above (permanentlyClosed, closeRequested,
+      // state=Closed) has already committed by this point — close() must stay
+      // idempotent and resolve even if the underlying transport's close()
+      // itself rejects (a custom Transport is free to reject here; nothing in
+      // the Transport interface guarantees it won't). Matches the same
+      // defensive .catch() already used for the other two transport.close()
+      // call sites in this file.
+      await transport.close().catch(() => undefined);
       transport = null;
     }
 
@@ -745,6 +752,16 @@ export function createConnection(
       }
       emitLifecycleEvent(isReconnect ? "reconnect_succeeded" : "connect_succeeded");
     } catch (error) {
+      // If a connection loss was detected concurrently (e.g. the receive
+      // loop failing during the auth-settle window below), handleConnection-
+      // LossOnce runs synchronously to completion — including its own
+      // disconnect fanout and lifecycle event — before rejecting the shared
+      // `authOutcome` deferred, which is what unblocks the
+      // `await Promise.race(...)` above and lands us here. It always calls
+      // setState(Closed) as the last thing it does before returning, so
+      // `state` already being Closed on catch-entry is a reliable signal
+      // that this exact failure was already fully processed elsewhere.
+      const alreadyHandledByConnectionLoss = state === ConnectionState.Closed;
       authOutcome = null;
       reconnectRestoreActive = false;
       stopHeartbeat();
@@ -762,13 +779,15 @@ export function createConnection(
       const failure = inferredAuthFailure ? createInferredAuthenticationError(error) : error;
       const rejectedAuth = failure instanceof AuthenticationError;
       authRejected = rejectedAuth;
-      if (closeRequested) {
-        setState(ConnectionState.Closed);
-      } else {
-        multiplexer.setDisconnected();
-        emitDisconnect();
-        setState(rejectedAuth ? ConnectionState.Closed : ConnectionState.Disconnected);
-        emitLifecycleEvent(isReconnect ? "reconnect_failed" : "connect_failed", failure);
+      if (!alreadyHandledByConnectionLoss) {
+        if (closeRequested) {
+          setState(ConnectionState.Closed);
+        } else {
+          multiplexer.setDisconnected();
+          emitDisconnect();
+          setState(rejectedAuth ? ConnectionState.Closed : ConnectionState.Disconnected);
+          emitLifecycleEvent(isReconnect ? "reconnect_failed" : "connect_failed", failure);
+        }
       }
       if (isAbortError(error)) {
         throw abortError();
@@ -908,6 +927,15 @@ export function createConnection(
     }
   };
 
+  // Per-entry restore failures (a single KV/notice/queue/lease/schedule/
+  // stream subscription or RPC worker that didn't come back) are caught
+  // here and reported, but do not fail the reconnect as a whole — the
+  // client still proceeds to AUTHENTICATED with whatever did restore. This
+  // is the client's only signal that a registration was dropped; per
+  // docs/PUBLIC_CONTRACT.md's Reconnect section, a caller that needs
+  // every registration reinstated must listen for `reconnect_restore_failed`
+  // and re-register the affected entry itself — it is not retried
+  // automatically.
   const restoreReconnectState = async (): Promise<void> => {
     await reconnectScheduler.restoreState(reconnectListeners, (error) => {
       log("warn", "fitz.connection.reconnect_restore_failed", {

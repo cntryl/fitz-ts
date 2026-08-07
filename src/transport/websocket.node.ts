@@ -4,6 +4,8 @@
 
 import { Transport, TransportOptions } from "./types";
 import { TransportError, TimeoutError } from "../core/errors";
+import { abortError } from "../core/abort";
+import { normalizeWebSocketUrl } from "./url";
 import WebSocket from "ws";
 
 type WebSocketConstructor = new (
@@ -54,12 +56,6 @@ function getWebSocketConstructor(): WebSocketConstructor {
   return WebSocket as unknown as WebSocketConstructor;
 }
 
-function abortError(): Error {
-  const error = new Error("The operation was aborted");
-  error.name = "AbortError";
-  return error;
-}
-
 export function createWebSocketTransport(url: string, options: TransportOptions = {}): Transport {
   let ws: WebSocketLike | null = null;
   let connected = false;
@@ -87,16 +83,7 @@ export function createWebSocketTransport(url: string, options: TransportOptions 
           return;
         }
 
-        let wsUrl = url;
-        if (!wsUrl.startsWith("ws://") && !wsUrl.startsWith("wss://")) {
-          if (wsUrl.startsWith("https://")) {
-            wsUrl = wsUrl.replace("https://", "wss://");
-          } else if (wsUrl.startsWith("http://")) {
-            wsUrl = wsUrl.replace("http://", "ws://");
-          } else {
-            wsUrl = `ws://${wsUrl}`;
-          }
-        }
+        const wsUrl = normalizeWebSocketUrl(url);
 
         ws = new (getWebSocketConstructor())(wsUrl, undefined, { headers: nodeUpgradeHeaders });
         ws.binaryType = "arraybuffer";
@@ -394,6 +381,15 @@ export function createWebSocketTransport(url: string, options: TransportOptions 
           clearTimeout(timeoutId);
           if (ws === activeWs) {
             ws = null;
+          }
+          // `onclose` is a single-slot property: this assignment replaces
+          // connect()'s handler, which is the one responsible for failing a
+          // still-pending receive() when the socket actually closes. Absorb
+          // that responsibility here so a receive() in flight during close()
+          // is rejected immediately instead of hanging until its own
+          // receive-timeout (or forever, if receiveTimeout is disabled).
+          if (receiverResolve) {
+            receiverResolve(null);
           }
           resolve();
         };

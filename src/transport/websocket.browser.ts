@@ -4,6 +4,8 @@
 
 import { Transport, TransportOptions } from "./types";
 import { TransportError, TimeoutError } from "../core/errors";
+import { abortError } from "../core/abort";
+import { normalizeWebSocketUrl } from "./url";
 
 type BrowserWebSocketMessageData = ArrayBuffer | ArrayBufferView | Blob;
 type BrowserWebSocketMessageEvent = {
@@ -37,28 +39,6 @@ function getWebSocketConstructor(): BrowserWebSocketConstructor {
 
 function describeWebSocketError(event: Event | { message?: string }): string {
   return "message" in event && event.message ? event.message : "unknown error";
-}
-
-function normalizeWebSocketUrl(url: string): string {
-  if (url.startsWith("ws://") || url.startsWith("wss://")) {
-    return url;
-  }
-
-  if (url.startsWith("https://")) {
-    return url.replace(/^https:\/\//, "wss://");
-  }
-
-  if (url.startsWith("http://")) {
-    return url.replace(/^http:\/\//, "ws://");
-  }
-
-  return `ws://${url}`;
-}
-
-function abortError(): Error {
-  const error = new Error("The operation was aborted");
-  error.name = "AbortError";
-  return error;
 }
 
 function isBlob(data: BrowserWebSocketMessageData): data is Blob {
@@ -270,6 +250,15 @@ export function createWebSocketTransport(url: string, options: TransportOptions 
           clearTimeout(timeoutId);
           if (ws === activeWs) {
             ws = null;
+          }
+          // `onclose` is a single-slot property: this assignment replaces
+          // connect()'s handler, which is the one responsible for failing a
+          // still-pending receive() when the socket actually closes. Absorb
+          // that responsibility here so a receive() in flight during close()
+          // is rejected immediately instead of hanging until its own
+          // receive-timeout (or forever, if receiveTimeout is disabled).
+          if (receiverResolve) {
+            receiverResolve(null);
           }
           resolve();
         };

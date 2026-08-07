@@ -26,7 +26,7 @@ const client = createClient({
 
 await client.connect();
 
-const tx = await client.kv.begin("kv://realm/area/users", "ReadWrite");
+const tx = await client.kv.begin("kv://realm/area/users", { durability: "Sync" });
 await tx.put(new TextEncoder().encode("user-1"), new TextEncoder().encode('{"name":"Alice"}'));
 await tx.commit();
 

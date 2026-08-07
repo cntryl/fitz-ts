@@ -17,7 +17,7 @@ import type {
   RequestPort,
   RetryExecutionPort,
 } from "../base";
-import { StreamCodec } from "./codec";
+import { StreamCodec, isGlobalSelector } from "./codec";
 import {
   StreamSession,
   StreamRecord,
@@ -25,6 +25,7 @@ import {
   StreamReadOptions,
   StreamReadPage,
   StreamStatus,
+  StreamStatusNames,
   StreamCommitHandler,
   StreamCommitNotification,
   StreamSubscription,
@@ -47,12 +48,28 @@ import { isRouteShape, isStreamSelectorShape } from "../_routes";
 import { restoreMapEntriesAtomically } from "../internal/restore";
 import { createKeyedSingleFlight } from "../internal/keyed-single-flight";
 import { formatStatusName } from "../internal/status";
+import {
+  awaitPendingUnsubscribe,
+  createGenerationCounter,
+  createLiveSubIdGetter,
+  isCurrentEmptyState,
+} from "../internal/subscription-handle";
+import { createPendingNotificationBuffer } from "../internal/pending-notifications";
+import {
+  createSubscriptionIterator,
+  type SubscriptionIteratorOptions,
+} from "../internal/subscription-iterator";
 import { createBufferReader } from "../../core/buffer";
 import { parseStandardResponse } from "../../protocol/response";
 
 type StreamSubscriptionState = {
   subId: bigint;
   handlers: Map<number, StreamCommitHandler>;
+  generation: number;
+  // Set while a wire UNSUBSCRIBE for this pattern is awaiting its broker
+  // round-trip. subscribe()'s "reuse the existing state" path must wait it
+  // out rather than reuse it blindly — see awaitPendingUnsubscribe().
+  pendingUnsubscribe?: Promise<void>;
 };
 
 type StreamConnectionPort = RequestPort &
@@ -96,6 +113,10 @@ export interface StreamClient {
   peek(route: string): Promise<StreamRecord | null>;
   metadata(route: string): Promise<StreamMetadata>;
   subscribe(pattern: string, handler: StreamCommitHandler): Promise<StreamSubscription>;
+  subscribeIterator(
+    pattern: string,
+    options?: SubscriptionIteratorOptions,
+  ): AsyncIterable<StreamCommitNotification>;
 }
 
 export function createStreamClient(connection: StreamConnectionPort): StreamClient {
@@ -103,7 +124,21 @@ export function createStreamClient(connection: StreamConnectionPort): StreamClie
   const { requestFrame, requestReconnectFrame, runWithRetry } = createDomainClient(connection);
   const subscriptionsByPattern = new Map<string, StreamSubscriptionState>();
   const patternsBySubId = new Map<bigint, string>();
-  const pendingNotificationsBySubId = new Map<bigint, StreamCommitNotification[]>();
+  const subIdGeneration = createGenerationCounter();
+  const pendingNotifications = createPendingNotificationBuffer<
+    StreamCommitNotification,
+    StreamSubscriptionState
+  >(
+    (subId) => {
+      const pattern = patternsBySubId.get(subId);
+      return pattern === undefined ? undefined : subscriptionsByPattern.get(pattern);
+    },
+    (handler, notification) => {
+      connection.dispatchAsyncHandler(async () => {
+        await handler(notification);
+      });
+    },
+  );
   let initialized = false;
   let nextHandlerId = 1;
 
@@ -116,7 +151,9 @@ export function createStreamClient(connection: StreamConnectionPort): StreamClie
       subscriptionsByPattern,
       async (pattern, state) => {
         const subId = await subscribeWire(pattern, requestReconnectFrame);
-        return { subId, handlers: new Map(state.handlers) };
+        // Carry the generation forward: this is the same logical
+        // subscription surviving reconnect, not a new one.
+        return { subId, handlers: new Map(state.handlers), generation: state.generation };
       },
       async (pattern) => {
         parseStandardResponse(
@@ -131,7 +168,7 @@ export function createStreamClient(connection: StreamConnectionPort): StreamClie
     patternsBySubId.clear();
     for (const [pattern, state] of subscriptionsByPattern) {
       patternsBySubId.set(state.subId, pattern);
-      flushPendingNotifications(state.subId);
+      pendingNotifications.flush(state.subId);
     }
   });
 
@@ -232,14 +269,19 @@ export function createStreamClient(connection: StreamConnectionPort): StreamClie
           signal: options.signal,
         });
 
-        if (page.items.length > 0) {
-          offset = streamCursorOffset(route, page.cursor) + 1n;
-          cursorFingerprint = page.cursor.cursorFingerprint;
-          capturedWatermark = page.cursor.capturedWatermark;
-          const records = StreamCodec.flattenStreamReadItems(page.items);
-          if (records.length > 0) {
-            yield records;
-          }
+        // Adopt the cursor unconditionally whenever the server returns one
+        // — a page can legitimately report hasMore=true with zero *event*
+        // items (e.g. maxBytes too small to fit the next record, or a page
+        // of entirely filtered-out items), and gating this on
+        // `page.items.length > 0` left the loop re-requesting the exact
+        // same window forever in that case. Only the yield itself needs to
+        // wait for actual records.
+        offset = streamCursorOffset(route, page.cursor) + 1n;
+        cursorFingerprint = page.cursor.cursorFingerprint;
+        capturedWatermark = page.cursor.capturedWatermark;
+        const records = StreamCodec.flattenStreamReadItems(page.items);
+        if (records.length > 0) {
+          yield records;
         }
 
         if (page.cursor.hasMore) {
@@ -257,10 +299,24 @@ export function createStreamClient(connection: StreamConnectionPort): StreamClie
   const consume = async (
     route: string,
     startOffset: bigint,
-    limit: number = 100,
+    limit?: number,
     options?: StreamReadOptions,
   ): Promise<AsyncIterable<StreamRecord>> => {
-    const records = await read(route, startOffset, limit, options);
+    const page = await readPage(route, startOffset, limit ?? 100, options);
+    // Mirrors KvTransaction.scan()'s guard for the identical shape (a
+    // single page wrapped as a batch async iterable): "consume" implies
+    // full traversal, so silently truncating to one page with no signal
+    // that more data exists is a footgun, not a documented limitation.
+    // Only fires when the caller left `limit` unspecified — an explicit
+    // limit is an intentional bound, not truncation.
+    if (page.cursor.hasMore && limit === undefined) {
+      throw new StreamError(
+        "CONSUME truncated an unbounded response unexpectedly",
+        "CONSUME_TRUNCATED",
+      );
+    }
+
+    const records = StreamCodec.flattenStreamReadItems(page.items);
     return createAsyncIterableIterator(createSliceIterator(records));
   };
 
@@ -316,14 +372,31 @@ export function createStreamClient(connection: StreamConnectionPort): StreamClie
   ): Promise<StreamSubscription> => {
     assertStreamPattern(pattern);
     initNotifyHandler();
-    const existing = subscriptionsByPattern.get(pattern);
-    if (existing) {
-      return addLocalSubscription(pattern, existing.subId, handler);
-    }
 
-    const subId = await registerSingleFlight(pattern, () => subscribeWire(pattern));
-    return addLocalSubscription(pattern, subId, handler);
+    while (true) {
+      const existing = subscriptionsByPattern.get(pattern);
+      if (existing) {
+        if (existing.pendingUnsubscribe) {
+          // An UNSUBSCRIBE for this pattern is in flight — reusing this
+          // state now would register the handler locally without ever
+          // sending a fresh wire SUBSCRIBE. Wait it out, then re-decide
+          // against whatever state (or lack of one) remains.
+          await awaitPendingUnsubscribe(existing);
+          continue;
+        }
+        return addLocalSubscription(pattern, existing.subId, handler);
+      }
+
+      const subId = await registerSingleFlight(pattern, () => subscribeWire(pattern));
+      return addLocalSubscription(pattern, subId, handler);
+    }
   };
+
+  const subscribeIterator = (
+    pattern: string,
+    iteratorOptions?: SubscriptionIteratorOptions,
+  ): AsyncIterable<StreamCommitNotification> =>
+    createSubscriptionIterator((handler) => subscribe(pattern, handler), iteratorOptions);
 
   const subscribeWire = async (pattern: string, request = requestFrame): Promise<bigint> => {
     const payload = StreamCodec.encodeSubscribe(pattern);
@@ -357,15 +430,15 @@ export function createStreamClient(connection: StreamConnectionPort): StreamClie
     const handlerId = nextHandlerId++;
     let subscription = subscriptionsByPattern.get(pattern);
     if (!subscription) {
-      subscription = { subId, handlers: new Map() };
+      subscription = { subId, handlers: new Map(), generation: subIdGeneration.next() };
       subscriptionsByPattern.set(pattern, subscription);
       patternsBySubId.set(subId, pattern);
     }
 
     subscription.handlers.set(handlerId, handler);
-    flushPendingNotifications(subId);
+    pendingNotifications.flush(subId);
     return createStreamSubscription(
-      () => subscriptionsByPattern.get(pattern)?.subId ?? subId,
+      createLiveSubIdGetter(subscriptionsByPattern, pattern, subId, subscription.generation),
       pattern,
       async () => {
         await unsubscribe(pattern, handlerId);
@@ -384,18 +457,34 @@ export function createStreamClient(connection: StreamConnectionPort): StreamClie
       return;
     }
 
-    const payload = StreamCodec.encodeUnsubscribe(pattern);
-    const parsed = parseStandardResponse(await requestFrame(MSG_STREAM_UNSUBSCRIBE, payload));
-    if (!parsed.success) {
-      throw new StreamError(
-        `UNSUBSCRIBE failed: ${parsed.error ?? "unknown error"}`,
-        "UNSUBSCRIBE_FAILED",
-        parsed.errorCode,
-      );
+    const wireUnsubscribe = (async (): Promise<void> => {
+      const payload = StreamCodec.encodeUnsubscribe(pattern);
+      const parsed = parseStandardResponse(await requestFrame(MSG_STREAM_UNSUBSCRIBE, payload));
+      if (!parsed.success) {
+        throw new StreamError(
+          `UNSUBSCRIBE failed: ${parsed.error ?? "unknown error"}`,
+          "UNSUBSCRIBE_FAILED",
+          parsed.errorCode,
+        );
+      }
+    })();
+    subscription.pendingUnsubscribe = wireUnsubscribe;
+    try {
+      await wireUnsubscribe;
+    } finally {
+      if (subscription.pendingUnsubscribe === wireUnsubscribe) {
+        subscription.pendingUnsubscribe = undefined;
+      }
     }
-    subscriptionsByPattern.delete(pattern);
-    patternsBySubId.delete(subscription.subId);
-    pendingNotificationsBySubId.delete(subscription.subId);
+    // A concurrent subscribe() may have reused this same (not-yet-deleted)
+    // state object while the round-trip above was in flight, repopulating
+    // `handlers` — only clear the pattern-level bookkeeping if it's still
+    // genuinely empty.
+    if (isCurrentEmptyState(subscriptionsByPattern, pattern, subscription)) {
+      subscriptionsByPattern.delete(pattern);
+      patternsBySubId.delete(subscription.subId);
+      pendingNotifications.remove(subscription.subId);
+    }
   };
 
   const initNotifyHandler = (): void => {
@@ -408,19 +497,7 @@ export function createStreamClient(connection: StreamConnectionPort): StreamClie
       try {
         const decoded = StreamCodec.decodeNotification(payload);
         const notification = toCommitNotification(decoded);
-        const pattern = patternsBySubId.get(decoded.subId);
-        if (!pattern) {
-          queuePendingNotification(decoded.subId, notification);
-          return;
-        }
-
-        const subscription = subscriptionsByPattern.get(pattern);
-        if (!subscription) {
-          queuePendingNotification(decoded.subId, notification);
-          return;
-        }
-
-        dispatchNotification(subscription, notification);
+        pendingNotifications.dispatchOrQueue(decoded.subId, notification);
       } catch {
         // Best-effort notification dispatch.
       }
@@ -462,48 +539,6 @@ export function createStreamClient(connection: StreamConnectionPort): StreamClie
     };
   };
 
-  const queuePendingNotification = (
-    subId: bigint,
-    notification: StreamCommitNotification,
-  ): void => {
-    const pending = pendingNotificationsBySubId.get(subId);
-    if (pending) {
-      pending.push(notification);
-      return;
-    }
-
-    pendingNotificationsBySubId.set(subId, [notification]);
-  };
-
-  const flushPendingNotifications = (subId: bigint): void => {
-    const pending = pendingNotificationsBySubId.get(subId);
-    if (!pending || pending.length === 0) {
-      return;
-    }
-
-    const pattern = patternsBySubId.get(subId);
-    const subscription = pattern === undefined ? undefined : subscriptionsByPattern.get(pattern);
-    if (!subscription) {
-      return;
-    }
-
-    pendingNotificationsBySubId.delete(subId);
-    for (const notification of pending) {
-      dispatchNotification(subscription, notification);
-    }
-  };
-
-  const dispatchNotification = (
-    subscription: StreamSubscriptionState,
-    notification: StreamCommitNotification,
-  ): void => {
-    for (const handler of subscription.handlers.values()) {
-      connection.dispatchAsyncHandler(async () => {
-        await handler(notification);
-      });
-    }
-  };
-
   const checkStatus = (
     response: { status: number; errorCode?: number; errorMessage?: string },
     operation: string,
@@ -512,7 +547,7 @@ export function createStreamClient(connection: StreamConnectionPort): StreamClie
       return;
     }
     const code = response.errorCode ?? response.status;
-    const reason = response.errorMessage ?? formatStatusName(code, {});
+    const reason = response.errorMessage ?? formatStatusName(code, StreamStatusNames);
     throw new StreamError(`${operation} failed: ${reason}`, operation, code);
   };
 
@@ -525,14 +560,24 @@ export function createStreamClient(connection: StreamConnectionPort): StreamClie
     peek,
     metadata,
     subscribe,
+    subscribeIterator,
   };
 }
 
 function streamCursorOffset(route: string, cursor: StreamReadPage["cursor"]): bigint {
-  if (route === "stream://**" || route.endsWith("/*/*")) {
-    return route === "stream://**"
-      ? (cursor.lastGlobalOffset ?? cursor.lastResourceOffset)
-      : (cursor.lastRealmOffset ?? cursor.lastResourceOffset);
+  // Reuse the same canonical classifier the codec uses to decide whether a
+  // page even carries lastGlobalOffset/cursorFingerprint/capturedWatermark
+  // — matching it here (rather than re-guessing from string suffixes) is
+  // what keeps both "stream://**" and its "stream://*/*/*" alias treated
+  // as global, instead of the alias silently falling through as
+  // realm-scoped.
+  if (isGlobalSelector(route)) {
+    return cursor.lastGlobalOffset ?? cursor.lastResourceOffset;
+  }
+  // `{realm}/**` is the documented alias for `{realm}/*/*` — both must
+  // resolve to the realm axis, not fall through to the resource default.
+  if (route.endsWith("/**") || route.endsWith("/*/*")) {
+    return cursor.lastRealmOffset ?? cursor.lastResourceOffset;
   }
   if (route.endsWith("/*")) return cursor.lastAreaOffset ?? cursor.lastResourceOffset;
   return cursor.lastResourceOffset;

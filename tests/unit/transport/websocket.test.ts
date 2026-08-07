@@ -204,6 +204,34 @@ describe("websocket transport", () => {
     await closing;
   });
 
+  it("rejects a pending Node receive() when close() runs, instead of leaving it hanging", async () => {
+    const { url } = await listenWithWebSocketServer();
+    const transport = createWebSocketTransport(url, { timeout: 1000 });
+
+    await transport.connect();
+
+    const pendingReceive = transport.receive();
+    const closing = transport.close();
+
+    // close() reassigns the socket's single-slot `onclose` handler; pre-fix
+    // that discarded connect()'s handler (the one that fails a pending
+    // receive()), so `pendingReceive` would never settle via the
+    // "Connection closed" path — it would only time out much later, or hang
+    // forever with receiveTimeout disabled. Race against a short timer so a
+    // regression here fails the test instead of hanging the suite.
+    const hung = Symbol("hung");
+    const outcome = await Promise.race([
+      pendingReceive.then(
+        () => "resolved",
+        () => "rejected",
+      ),
+      new Promise((resolve) => setTimeout(() => resolve(hung), 500)),
+    ]);
+
+    expect(outcome).toBe("rejected");
+    await closing;
+  });
+
   it("rejects Node connect when close happens before open", async () => {
     const { url } = await listenWithHangingUpgradeServer();
     const transport = createWebSocketTransport(url, { timeout: 1000 });
@@ -294,6 +322,63 @@ describe("browser websocket transport", () => {
       await expect(transport.send(new Uint8Array([1, 2, 3]))).rejects.toThrow("not connected");
 
       socket.onclose?.();
+      await closing;
+    } finally {
+      vi.stubGlobal("WebSocket", originalWebSocket);
+    }
+  });
+
+  it("rejects a pending browser receive() when close() runs, instead of leaving it hanging", async () => {
+    const originalWebSocket = globalThis.WebSocket;
+
+    class BrowserWebSocket {
+      static instances: BrowserWebSocket[] = [];
+
+      binaryType = "";
+      onopen: (() => void) | null = null;
+      onmessage: ((event: { data: ArrayBuffer | Uint8Array | Blob }) => void) | null = null;
+      onerror: ((event: { message?: string }) => void) | null = null;
+      onclose: (() => void) | null = null;
+
+      constructor(_url: string) {
+        BrowserWebSocket.instances.push(this);
+        setTimeout(() => this.onopen?.(), 0);
+      }
+
+      send(_data: Uint8Array): void {}
+
+      close(): void {
+        // A real browser WebSocket fires onclose asynchronously.
+        setTimeout(() => this.onclose?.(), 0);
+      }
+    }
+
+    vi.stubGlobal("WebSocket", BrowserWebSocket);
+
+    try {
+      const { createWebSocketTransport: createBrowserTransport } =
+        await import("../../../src/transport/websocket.browser");
+      const transport = createBrowserTransport("ws://example.test/ws", { timeout: 1000 });
+
+      await transport.connect();
+
+      const pendingReceive = transport.receive();
+      const closing = transport.close();
+
+      // close() reassigns the socket's single-slot `onclose` handler;
+      // pre-fix that discarded connect()'s handler (the one that fails a
+      // pending receive()), so `pendingReceive` would never settle via the
+      // "Connection closed" path.
+      const hung = Symbol("hung");
+      const outcome = await Promise.race([
+        pendingReceive.then(
+          () => "resolved",
+          () => "rejected",
+        ),
+        new Promise((resolve) => setTimeout(() => resolve(hung), 500)),
+      ]);
+
+      expect(outcome).toBe("rejected");
       await closing;
     } finally {
       vi.stubGlobal("WebSocket", originalWebSocket);

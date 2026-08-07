@@ -16,6 +16,7 @@ import {
   type FitzTracer,
 } from "../core/types";
 import { ConnectionError, TimeoutError } from "../core/errors";
+import { abortError } from "../core/abort";
 
 export interface MultiplexerObservability {
   meter?: FitzMeter;
@@ -453,6 +454,22 @@ export function createMultiplexer(observability: MultiplexerObservability = {}) 
       (err) => {
         const alreadySettled = !finalize();
         if (alreadySettled) {
+          // The request was already settled by something else (most often a
+          // timeout, which tombstones the entry in place — discardResponse =
+          // true, still in the FIFO queue — on the assumption its frame
+          // might still be in flight and a response could yet arrive). A
+          // rejection here does NOT prove the frame never reached the
+          // server: TCP writes can fail after the OS has already accepted
+          // (and gone on to transmit) some or all of the bytes, and a
+          // send-level timeout in particular settles this promise without
+          // the connection itself failing, so the write may still complete
+          // later. Deliberately do NOT unregister the tombstone — removing
+          // it would let a delayed-but-real response to THIS request
+          // resolve whatever unrelated request next occupies this
+          // messageType's FIFO slot, silently handing that caller the wrong
+          // data. Keep the slot so an eventual response is discarded
+          // instead of misdelivered; it is only ever cleared by consuming
+          // one response (dispatch) or by a full disconnect (cancelAll).
           if (signal?.aborted) {
             throw abortError();
           }
@@ -657,10 +674,4 @@ export function createMultiplexer(observability: MultiplexerObservability = {}) 
     hasPending,
     getState,
   };
-}
-
-function abortError(): Error {
-  const error = new Error("The operation was aborted");
-  error.name = "AbortError";
-  return error;
 }

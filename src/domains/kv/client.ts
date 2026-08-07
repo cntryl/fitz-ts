@@ -38,6 +38,12 @@ import {
   createSubscriptionIterator,
   type SubscriptionIteratorOptions,
 } from "../internal/subscription-iterator";
+import {
+  awaitPendingUnsubscribe,
+  createGenerationCounter,
+  createLiveSubIdGetter,
+  isCurrentEmptyState,
+} from "../internal/subscription-handle";
 
 type KvConnectionPort = RequestPort &
   DisconnectListenerPort &
@@ -47,7 +53,15 @@ type KvConnectionPort = RequestPort &
   AsyncDispatchPort &
   Partial<ReconnectRestoreRequestPort>;
 
-type KvSubscriptionState = { subId: bigint; handlers: Map<number, KvHandler> };
+type KvSubscriptionState = {
+  subId: bigint;
+  handlers: Map<number, KvHandler>;
+  generation: number;
+  // Set while a wire UNSUBSCRIBE for this pattern is awaiting its broker
+  // round-trip. subscribe()'s "reuse the existing state" path must wait it
+  // out rather than reuse it blindly — see awaitPendingUnsubscribe().
+  pendingUnsubscribe?: Promise<void>;
+};
 
 export interface KvClient {
   begin(route: string, options: KvBeginOptions): Promise<KvTransaction>;
@@ -65,6 +79,7 @@ export function createKvClient(connection: KvConnectionPort): KvClient {
   let nextHandlerId = 1;
   let notifyHandlerInitialized = false;
   const registerSingleFlight = createKeyedSingleFlight<string, KvSubscriptionState>();
+  const subIdGeneration = createGenerationCounter();
 
   connection.onReconnect(async () => {
     await restoreMapEntriesAtomically(
@@ -72,6 +87,11 @@ export function createKvClient(connection: KvConnectionPort): KvClient {
       async (pattern, state) => ({
         subId: await subscribeWire(pattern, requestReconnectFrame),
         handlers: new Map(state.handlers),
+        // Carry the generation forward: this is the same logical
+        // subscription surviving reconnect, not a new one, so any
+        // KvSubscription handle whose getter is pinned to this generation
+        // must keep tracking it live.
+        generation: state.generation,
       }),
       async (pattern) => {
         parseStandardResponse(
@@ -130,18 +150,36 @@ export function createKvClient(connection: KvConnectionPort): KvClient {
     if (!state) return;
     state.handlers.delete(handlerId);
     if (state.handlers.size > 0) return;
-    const parsed = parseStandardResponse(
-      await requestFrame(MSG_KV_UNSUBSCRIBE, KvCodec.encodeUnsubscribe(pattern)),
-    );
-    if (!parsed.success) {
-      throw new KvError(
-        `KV UNSUBSCRIBE failed: ${parsed.error ?? "unknown error"}`,
-        "UNSUBSCRIBE_FAILED",
-        parsed.errorCode,
+    const wireUnsubscribe = (async (): Promise<void> => {
+      const parsed = parseStandardResponse(
+        await requestFrame(MSG_KV_UNSUBSCRIBE, KvCodec.encodeUnsubscribe(pattern)),
       );
+      if (!parsed.success) {
+        throw new KvError(
+          `KV UNSUBSCRIBE failed: ${parsed.error ?? "unknown error"}`,
+          "UNSUBSCRIBE_FAILED",
+          parsed.errorCode,
+        );
+      }
+    })();
+    state.pendingUnsubscribe = wireUnsubscribe;
+    try {
+      await wireUnsubscribe;
+    } finally {
+      if (state.pendingUnsubscribe === wireUnsubscribe) {
+        state.pendingUnsubscribe = undefined;
+      }
     }
-    subscriptionsByPattern.delete(pattern);
-    patternsBySubId.delete(state.subId);
+    // A concurrent subscribe() may have reused this same (not-yet-deleted)
+    // state object while the UNSUBSCRIBE round-trip above was in flight,
+    // repopulating `handlers`. Only clear the bookkeeping if `state` is
+    // still the live, empty entry for `pattern` — otherwise the new
+    // handler would be silently orphaned even though nothing re-subscribed
+    // on the wire.
+    if (isCurrentEmptyState(subscriptionsByPattern, pattern, state)) {
+      subscriptionsByPattern.delete(pattern);
+      patternsBySubId.delete(state.subId);
+    }
   };
 
   const initNotifyHandler = (): void => {
@@ -174,21 +212,40 @@ export function createKvClient(connection: KvConnectionPort): KvClient {
       );
     }
     initNotifyHandler();
-    const state =
-      subscriptionsByPattern.get(pattern) ??
-      (await registerSingleFlight(pattern, async () => {
+
+    let state: KvSubscriptionState;
+    while (true) {
+      const existing = subscriptionsByPattern.get(pattern);
+      if (existing) {
+        if (existing.pendingUnsubscribe) {
+          // An UNSUBSCRIBE for this pattern is in flight — reusing this
+          // state now would register the handler locally without ever
+          // sending a fresh wire SUBSCRIBE. Wait it out, then re-decide
+          // against whatever state (or lack of one) remains.
+          await awaitPendingUnsubscribe(existing);
+          continue;
+        }
+        state = existing;
+        break;
+      }
+
+      state = await registerSingleFlight(pattern, async () => {
         const registered = {
           subId: await subscribeWire(pattern),
           handlers: new Map<number, KvHandler>(),
+          generation: subIdGeneration.next(),
         };
         subscriptionsByPattern.set(pattern, registered);
         patternsBySubId.set(registered.subId, pattern);
         return registered;
-      }));
+      });
+      break;
+    }
+
     const handlerId = nextHandlerId++;
     state.handlers.set(handlerId, handler);
     return createKvSubscription(
-      () => subscriptionsByPattern.get(pattern)?.subId ?? state.subId,
+      createLiveSubIdGetter(subscriptionsByPattern, pattern, state.subId, state.generation),
       pattern,
       async () => unsubscribe(pattern, handlerId),
     );

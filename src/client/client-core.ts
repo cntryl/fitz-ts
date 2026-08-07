@@ -63,19 +63,48 @@ function resolveBackoffOption(value: number | undefined, fallback: number): numb
   return Math.max(1, resolveWaitOption(value, fallback));
 }
 
+// Deliberately separate from resolveWaitOption: connectWhenReady's timeoutMs
+// is the one option where `Infinity` is a meaningful, documented value
+// ("wait with no deadline until the signal aborts"), so it must pass
+// through instead of being treated as "not finite, fall back to default".
+// backoffMs/maxBackoffMs correctly keep rejecting Infinity via
+// resolveWaitOption/resolveBackoffOption above — don't loosen those.
+function resolveConnectWhenReadyTimeout(value: number | undefined, fallback: number): number {
+  if (value === undefined) {
+    return fallback;
+  }
+
+  if (value === Infinity) {
+    return Infinity;
+  }
+
+  if (!Number.isFinite(value)) {
+    return fallback;
+  }
+
+  return Math.max(0, value);
+}
+
 function createConnectWhenReadyDeadline(timeoutMs: number, callerSignal?: AbortSignal) {
   const controller = new AbortController();
-  const deadlineMs = Date.now() + timeoutMs;
+  const noDeadline = timeoutMs === Infinity;
+  const deadlineMs = noDeadline ? Infinity : Date.now() + timeoutMs;
   let timedOut = false;
 
   const onCallerAbort = (): void => {
     controller.abort();
   };
 
-  const timeoutId = setTimeout(() => {
-    timedOut = true;
-    controller.abort();
-  }, timeoutMs);
+  // setTimeout(fn, Infinity) is a well-known footgun: the delay gets
+  // ToInt32-coerced and the timer fires almost immediately instead of never.
+  // Skip scheduling it entirely when there's no deadline — hasExpired()
+  // then only ever reflects the (never-true) Date.now() >= Infinity check.
+  const timeoutId = noDeadline
+    ? undefined
+    : setTimeout(() => {
+        timedOut = true;
+        controller.abort();
+      }, timeoutMs);
 
   if (callerSignal?.aborted) {
     controller.abort();
@@ -158,16 +187,22 @@ export function createClientWithTransport<TConfig extends ClientConfig>(
   transportFactory: ClientTransportFactory,
 ): Client<TConfig> {
   const observability = config.observability;
+  // IMPORTANT: `...config` must come FIRST here. Per-field defaults below use
+  // `config.field ?? default` (scalars) or `{...defaults, ...config.field}`
+  // (nested option bags) so they always win over the spread regardless of
+  // property order — but the reverse (spreading `config` last) would clobber
+  // every nested merge with the caller's raw, un-merged sub-object.
   const resolvedConfig = {
-    timeout: 30000,
-    transport: "auto",
-    webSocket: {},
+    ...config,
+    timeout: config.timeout ?? 30000,
+    transport: config.transport ?? "auto",
+    webSocket: config.webSocket ?? {},
     // maxFrameSize applies to the complete TLV frame, whose 5-byte header is
     // in addition to the spec's 65535-byte maximum value.
-    maxFrameSize: 65540,
-    authSettleDelayMs: 1000,
-    maxInFlightRequests: 256,
-    maxRequestQueueSize: 1024,
+    maxFrameSize: config.maxFrameSize ?? 65540,
+    authSettleDelayMs: config.authSettleDelayMs ?? 1000,
+    maxInFlightRequests: config.maxInFlightRequests ?? 256,
+    maxRequestQueueSize: config.maxRequestQueueSize ?? 1024,
     observability: config.observability ?? {},
     reconnect: {
       enabled: true,
@@ -194,7 +229,6 @@ export function createClientWithTransport<TConfig extends ClientConfig>(
       timeoutMs: 30000,
       ...config.asyncHandlers,
     },
-    ...config,
   } as unknown as ResolvedClientConfig<TConfig>;
 
   if (!resolvedConfig.url) {
@@ -335,7 +369,7 @@ export function createClientWithTransport<TConfig extends ClientConfig>(
       throw clientClosedError();
     }
 
-    const timeoutMs = resolveWaitOption(options.timeoutMs, resolvedConfig.timeout);
+    const timeoutMs = resolveConnectWhenReadyTimeout(options.timeoutMs, resolvedConfig.timeout);
     const maxBackoffMs = resolveBackoffOption(
       options.maxBackoffMs,
       DEFAULT_CONNECT_WHEN_READY_MAX_BACKOFF_MS,

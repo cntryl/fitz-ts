@@ -1,5 +1,8 @@
 import { ConnectionState } from "../../core/types";
 import { ConnectionError } from "../../core/errors";
+import { abortError, isAbortError } from "../../core/abort";
+
+export { abortError, isAbortError };
 
 export const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
@@ -32,12 +35,6 @@ export const sleepWithAbort = async (ms: number, signal?: AbortSignal): Promise<
   });
 };
 
-export function abortError(): Error {
-  const error = new Error("The operation was aborted");
-  error.name = "AbortError";
-  return error;
-}
-
 export function connectionClosedError(): ConnectionError {
   return new ConnectionError("Connection closed", { state: ConnectionState.Closed });
 }
@@ -46,10 +43,6 @@ export function throwIfAborted(signal?: AbortSignal): void {
   if (signal?.aborted) {
     throw abortError();
   }
-}
-
-export function isAbortError(error: unknown): boolean {
-  return error instanceof Error && error.name === "AbortError";
 }
 
 export const waitForSharedPromise = async <T>(

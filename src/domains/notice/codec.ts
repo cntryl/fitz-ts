@@ -9,6 +9,7 @@ import {
   writeU32BEAt,
   writeU64BEAt,
 } from "../../core/buffer";
+import { ProtocolError } from "../../core/errors";
 
 export const NoticeCodec = {
   /**
@@ -60,7 +61,9 @@ export const NoticeCodec = {
     const bodyLen = reader.readU32BE();
     const body = reader.readBytes(bodyLen);
     if (!reader.isEOF()) {
-      throw new Error("NOTICE_NOTIFY payload has trailing bytes");
+      throw new ProtocolError("NOTICE_NOTIFY payload has trailing bytes", undefined, {
+        operation: "NOTICE_NOTIFY",
+      });
     }
 
     return { subId, route, body };

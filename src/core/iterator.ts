@@ -84,14 +84,21 @@ export type AsyncIterableIterator<T> = AsyncIterable<T>;
 export function createAsyncIterableIterator<T>(iterator: Iterator<T>): AsyncIterableIterator<T> {
   return {
     async *[Symbol.asyncIterator]() {
-      while (iterator.next()) {
-        yield iterator.value();
-      }
+      // A `for await` consumer that breaks/throws early resumes this
+      // generator via a return-completion at the suspended `yield` — without
+      // a try/finally, that skips close() entirely and leaks whatever
+      // resource the iterator holds. Mirrors forEach()'s try/finally below.
+      try {
+        while (iterator.next()) {
+          yield iterator.value();
+        }
 
-      const err = iterator.err();
-      iterator.close();
-      if (err) {
-        throw err;
+        const err = iterator.err();
+        if (err) {
+          throw err;
+        }
+      } finally {
+        iterator.close();
       }
     },
   };

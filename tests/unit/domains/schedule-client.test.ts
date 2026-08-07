@@ -29,6 +29,10 @@ class FakeScheduleConnection {
     };
   }
 
+  onDisconnect(): () => void {
+    return () => undefined;
+  }
+
   dispatchAsyncHandler(task: () => void | Promise<void>): void {
     void Promise.resolve().then(task);
   }
@@ -122,6 +126,50 @@ describe("ScheduleClient domain errors", () => {
     ).rejects.toMatchObject({
       code: "SCHEDULE_CREATE_FAILED",
       message: "CREATE failed: invalid delivery mode",
+    });
+  });
+
+  it("classifies listPage failures from the real numeric domain code, not by guessing from message text", async () => {
+    // A message that doesn't contain "not found" / "invalid route" / "cron"
+    // — pre-fix, mapErrorCode's substring guess falls through to the
+    // generic "REQUEST_FAILED", discarding the real errorCode (5,
+    // ScheduleStatus.InvalidTimestamp) the broker already sent.
+    const message = "timestamp out of range";
+    const messageBytes = new TextEncoder().encode(message);
+    const response = new Uint8Array(1 + 4 + 4 + messageBytes.length);
+    response[0] = 1; // status: failure
+    new DataView(response.buffer).setUint32(1, 5, false); // errorCode
+    new DataView(response.buffer).setUint32(5, messageBytes.length, false);
+    response.set(messageBytes, 9);
+
+    const client = createScheduleClient(new FakeScheduleConnection(response));
+
+    await expect(client.listPage()).rejects.toMatchObject({
+      code: "SCHEDULE_INVALID_TIMESTAMP",
+      domainCode: 5,
+    });
+  });
+
+  it("classifies a broker domain error code from outside the 1-5 status range, instead of falling through to Unknown(N)", async () => {
+    // Domain error codes like ErrCodeScheduleInvalidSubscription (7006)
+    // live in a different numeric namespace than the small ScheduleStatus
+    // wire enum (0-5) — pre-fix, ScheduleStatusNames only had entries for
+    // that enum, so a standard response reporting one of these fell
+    // through formatStatusName's fallback to a generic "Unknown(7006)"
+    // instead of its real symbolic name.
+    const message = "route already has an active subscription";
+    const messageBytes = new TextEncoder().encode(message);
+    const response = new Uint8Array(1 + 4 + 4 + messageBytes.length);
+    response[0] = 1; // status: failure
+    new DataView(response.buffer).setUint32(1, 7006, false); // errorCode
+    new DataView(response.buffer).setUint32(5, messageBytes.length, false);
+    response.set(messageBytes, 9);
+
+    const client = createScheduleClient(new FakeScheduleConnection(response));
+
+    await expect(client.listPage()).rejects.toMatchObject({
+      code: "SCHEDULE_INVALID_SUBSCRIPTION",
+      domainCode: 7006,
     });
   });
 });

@@ -27,6 +27,12 @@ import {
   createSubscriptionIterator,
   type SubscriptionIteratorOptions,
 } from "../internal/subscription-iterator";
+import {
+  awaitPendingUnsubscribe,
+  createGenerationCounter,
+  createLiveSubIdGetter,
+  isCurrentEmptyState,
+} from "../internal/subscription-handle";
 import { LeaseCodec } from "./codec";
 import { createBufferReader } from "../../core/buffer";
 import { parsePlainResponse } from "../../protocol/response";
@@ -46,6 +52,11 @@ import {
 type LeaseSubscriptionState = {
   subId: bigint;
   handlers: Map<number, ChangeHandler>;
+  generation: number;
+  // Set while a wire UNSUBSCRIBE for this route is awaiting its broker
+  // round-trip. subscribe()'s "reuse the existing state" path must wait it
+  // out rather than reuse it blindly — see awaitPendingUnsubscribe().
+  pendingUnsubscribe?: Promise<void>;
 };
 
 type LeaseConnectionPort = RequestPort &
@@ -57,7 +68,21 @@ type LeaseConnectionPort = RequestPort &
   Partial<ReconnectRestoreRequestPort>;
 
 export interface LeaseClient {
+  /**
+   * Acquires a lease.
+   *
+   * Note: `acquire()` calls are serialized per client instance across every
+   * route, not just per-route — a deferred ACQUIRE completion notification
+   * carries no correlation id, only FIFO arrival order, so a second
+   * `acquire()` for a completely unrelated route cannot even send its
+   * request until this call's full lifecycle has resolved.
+   */
   acquire(route: string, ttlSecs: number, options?: LeaseAcquireOptions): Promise<Lease>;
+  /**
+   * Acquires a lease, runs `callback` while holding it, and releases it
+   * afterward. Subject to the same cross-route serialization as
+   * {@link LeaseClient.acquire}.
+   */
   withLease<T>(
     route: string,
     ttlSecs: number,
@@ -76,6 +101,7 @@ export function createLeaseClient(connection: LeaseConnectionPort): LeaseClient 
   const registerSingleFlight = createKeyedSingleFlight<string, bigint>();
   const { requestFrame, requestReconnectFrame, runWithRetry } = createDomainClient(connection);
   const subscriptionsByRoute = new Map<string, LeaseSubscriptionState>();
+  const subIdGeneration = createGenerationCounter();
   let initialized = false;
   let acquireHandlerInitialized = false;
   let acquisitionTail: Promise<void> = Promise.resolve();
@@ -102,7 +128,9 @@ export function createLeaseClient(connection: LeaseConnectionPort): LeaseClient 
       subscriptionsByRoute,
       async (route, state) => {
         const subId = await subscribeWire(route, requestReconnectFrame);
-        return { subId, handlers: new Map(state.handlers) };
+        // Carry the generation forward: this is the same logical
+        // subscription surviving reconnect, not a new one.
+        return { subId, handlers: new Map(state.handlers), generation: state.generation };
       },
       async (route) => {
         parsePlainResponse(
@@ -225,6 +253,22 @@ export function createLeaseClient(connection: LeaseConnectionPort): LeaseClient 
     let callbackValue!: T;
     let callbackDone = false;
 
+    // renew()'s loop only discovers a disconnect indirectly, on its next
+    // periodic extend() attempt (up to ttlSecs/3 seconds away) — during
+    // that whole window the callback would keep running under the false
+    // assumption it still exclusively owns the lease. Listen for disconnect
+    // directly so the callback's cancellation signal fires immediately,
+    // matching createLease's own handle, which does the same.
+    const onLeaseConnectionLost = (): void => {
+      if (callbackDone || leaseLoss !== undefined) return;
+      const error = new LeaseError("Lease ownership was lost", "LOST", undefined, {
+        reason: "disconnected",
+      });
+      leaseLoss = error;
+      lifecycle.abort(error);
+    };
+    const unsubscribeLeaseConnectionLost = connection.onDisconnect(onLeaseConnectionLost);
+
     const renew = async (): Promise<void> => {
       while (!callbackDone && leaseLoss === undefined) {
         await abortableDelay((ttlSecs * 1000) / 3, stopRenewal.signal).catch(() => undefined);
@@ -268,9 +312,26 @@ export function createLeaseClient(connection: LeaseConnectionPort): LeaseClient 
         }
       }
 
-      const failures = [leaseLoss, callbackFailure, releaseFailure].filter(
-        (failure) => failure !== undefined && !isManagedCancellation(failure, lifecycle.signal),
-      );
+      // A lease-loss detected during renewal is always a real failure — never
+      // filter it as a "managed cancellation," even though it's exactly what
+      // caused `lifecycle` to abort. `releaseFailure` comes from `cleanup`, a
+      // separate AbortController with its own 5s watchdog that has nothing to
+      // do with `lifecycle` — an unconfirmed release must never be treated as
+      // a benign cancellation regardless of its error's `.name`. Only
+      // `callbackFailure` is eligible for the "managed" classification, and
+      // only when `lifecycle` was genuinely aborted for a reason we already
+      // track (a lost lease, or the caller's own signal) rather than merely
+      // because the callback itself finished (line below always aborts
+      // `lifecycle` afterward, win or lose).
+      const wasRealAbort = leaseLoss !== undefined || options.signal?.aborted === true;
+      const failures = [
+        leaseLoss,
+        callbackFailure !== undefined &&
+        isManagedCancellation(callbackFailure, lifecycle.signal, wasRealAbort)
+          ? undefined
+          : callbackFailure,
+        releaseFailure,
+      ].filter((failure) => failure !== undefined);
       if (failures.length > 1) {
         throw new LeaseLifecycleError("Multiple lease lifecycle operations failed", failures);
       }
@@ -285,6 +346,7 @@ export function createLeaseClient(connection: LeaseConnectionPort): LeaseClient 
       callbackDone = true;
       stopRenewal.abort();
       lifecycle.abort();
+      unsubscribeLeaseConnectionLost();
       if (timer !== undefined) clearTimeout(timer);
       options.signal?.removeEventListener("abort", onParentAbort);
       await renewal.catch(() => undefined);
@@ -325,13 +387,24 @@ export function createLeaseClient(connection: LeaseConnectionPort): LeaseClient 
   const subscribe = async (route: string, handler: ChangeHandler): Promise<LeaseSubscription> => {
     assertExactLeaseRoute(route);
     initNotifyHandler();
-    const existing = subscriptionsByRoute.get(route);
-    if (existing) {
-      return addLocalSubscription(route, existing.subId, handler);
-    }
 
-    const subId = await registerSingleFlight(route, () => subscribeWire(route));
-    return addLocalSubscription(route, subId, handler);
+    while (true) {
+      const existing = subscriptionsByRoute.get(route);
+      if (existing) {
+        if (existing.pendingUnsubscribe) {
+          // An UNSUBSCRIBE for this route is in flight — reusing this
+          // state now would register the handler locally without ever
+          // sending a fresh wire SUBSCRIBE. Wait it out, then re-decide
+          // against whatever state (or lack of one) remains.
+          await awaitPendingUnsubscribe(existing);
+          continue;
+        }
+        return addLocalSubscription(route, existing.subId, handler);
+      }
+
+      const subId = await registerSingleFlight(route, () => subscribeWire(route));
+      return addLocalSubscription(route, subId, handler);
+    }
   };
 
   const subscribeIterator = (
@@ -368,13 +441,13 @@ export function createLeaseClient(connection: LeaseConnectionPort): LeaseClient 
     const handlerId = nextHandlerId++;
     let subscription = subscriptionsByRoute.get(route);
     if (!subscription) {
-      subscription = { subId, handlers: new Map() };
+      subscription = { subId, handlers: new Map(), generation: subIdGeneration.next() };
       subscriptionsByRoute.set(route, subscription);
     }
 
     subscription.handlers.set(handlerId, handler);
     return createLeaseSubscription(
-      () => subscriptionsByRoute.get(route)?.subId ?? subId,
+      createLiveSubIdGetter(subscriptionsByRoute, route, subId, subscription.generation),
       route,
       async () => {
         await unsubscribe(route, handlerId);
@@ -384,25 +457,49 @@ export function createLeaseClient(connection: LeaseConnectionPort): LeaseClient 
 
   const unsubscribe = async (route: string, handlerId: number): Promise<void> => {
     const subscription = subscriptionsByRoute.get(route);
-    if (!subscription) {
+    if (!subscription || !subscription.handlers.has(handlerId)) {
       return;
+    }
+
+    if (subscription.handlers.size > 1) {
+      // Other handlers remain — safe to remove this one locally without a
+      // wire round-trip.
+      subscription.handlers.delete(handlerId);
+      return;
+    }
+
+    // This is the last handler. Don't remove it locally until the wire
+    // UNSUBSCRIBE is confirmed — if it fails, the broker still expects
+    // notifications to keep reaching it, and a caller that sees
+    // unsubscribe() throw should be able to assume nothing changed.
+    const wireUnsubscribe = (async (): Promise<void> => {
+      const payload = LeaseCodec.encodeUnsubscribe(route);
+      const parsed = parsePlainResponse(await requestFrame(MSG_LEASE_UNSUBSCRIBE, payload));
+      if (!parsed.success) {
+        throw new LeaseError(
+          `UNSUBSCRIBE failed: ${parsed.error ?? "unknown error"}`,
+          "UNSUBSCRIBE_FAILED",
+          parsed.errorCode,
+        );
+      }
+    })();
+    subscription.pendingUnsubscribe = wireUnsubscribe;
+    try {
+      await wireUnsubscribe;
+    } finally {
+      if (subscription.pendingUnsubscribe === wireUnsubscribe) {
+        subscription.pendingUnsubscribe = undefined;
+      }
     }
 
     subscription.handlers.delete(handlerId);
-    if (subscription.handlers.size > 0) {
-      return;
+    // A concurrent subscribe() may have reused this same (not-yet-deleted)
+    // state object while the round-trip above was in flight, repopulating
+    // `handlers` — only clear the route-level bookkeeping if it's still
+    // genuinely empty.
+    if (isCurrentEmptyState(subscriptionsByRoute, route, subscription)) {
+      subscriptionsByRoute.delete(route);
     }
-
-    const payload = LeaseCodec.encodeUnsubscribe(route);
-    const parsed = parsePlainResponse(await requestFrame(MSG_LEASE_UNSUBSCRIBE, payload));
-    if (!parsed.success) {
-      throw new LeaseError(
-        `UNSUBSCRIBE failed: ${parsed.error ?? "unknown error"}`,
-        "UNSUBSCRIBE_FAILED",
-        parsed.errorCode,
-      );
-    }
-    subscriptionsByRoute.delete(route);
   };
 
   const initNotifyHandler = (): void => {
@@ -463,8 +560,20 @@ function assertWaitSeconds(waitSeconds: number): void {
   }
 }
 
-function isManagedCancellation(error: unknown, signal: AbortSignal): boolean {
+// `lifecycle` is aborted unconditionally once the callback settles (even on
+// success), so `lifecycle.signal.aborted` alone can't distinguish "this
+// failure is the callback's expected reaction to a real external
+// cancellation" from "this just happens to be named AbortError." Callers
+// must pass `wasRealAbort` — true only when `lifecycle` was aborted for a
+// reason we already know about (a lost lease, or the caller's own signal) —
+// so an unrelated AbortError-named error isn't silently swallowed.
+function isManagedCancellation(
+  error: unknown,
+  signal: AbortSignal,
+  wasRealAbort: boolean,
+): boolean {
   return (
+    wasRealAbort &&
     signal.aborted &&
     (error === signal.reason || (error instanceof Error && error.name === "AbortError"))
   );

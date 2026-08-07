@@ -5,7 +5,13 @@
 
 import type { DisconnectListenerPort, RequestPort } from "../base";
 import { StreamCodec } from "./codec";
-import { StreamAppendOptions, StreamCommitMode, StreamSession, StreamStatus } from "./types";
+import {
+  StreamAppendOptions,
+  StreamCommitMode,
+  StreamSession,
+  StreamStatus,
+  StreamStatusNames,
+} from "./types";
 import { StreamError } from "../../core/errors";
 import { MSG_STREAM_APPEND, MSG_STREAM_COMMIT, MSG_STREAM_ROLLBACK } from "../../frame/types";
 import { formatStatusName } from "../internal/status";
@@ -36,18 +42,8 @@ export function createStreamSession(
       return;
     }
 
-    const statusNames: Record<number, string> = {
-      [StreamStatus.StreamNotFound]: "StreamNotFound",
-      [StreamStatus.OffsetOutOfRange]: "OffsetOutOfRange",
-      [StreamStatus.InvalidOffset]: "InvalidOffset",
-      [StreamStatus.StreamFull]: "StreamFull",
-      [StreamStatus.SessionNotFound]: "SessionNotFound",
-      [StreamStatus.SessionClosed]: "SessionClosed",
-      [StreamStatus.ExpectedOffsetMismatch]: "ExpectedOffsetMismatch",
-    };
-
     const code = response.errorCode ?? response.status;
-    const statusName = response.errorMessage ?? formatStatusName(code, statusNames);
+    const statusName = response.errorMessage ?? formatStatusName(code, StreamStatusNames);
     throw new StreamError(`${operation} failed: ${statusName}`, operation, code);
   };
 

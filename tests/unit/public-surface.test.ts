@@ -228,6 +228,18 @@ describe("public surface", () => {
     ]);
   });
 
+  it("exports ScheduleListPage from both the node and browser entry points", () => {
+    // The browser entry point hand-maintains its own export list rather
+    // than re-exporting ./index like index.node.ts does, so it's easy for
+    // a type added to the node surface to silently miss the browser one —
+    // confirmed via tsc that importing ScheduleListPage from
+    // "@cntryl/fitz" (browser) used to fail to compile.
+    const nodeExports = collectExportNames(readSource("../../src/index.ts"));
+    const browserExports = collectExportNames(readSource("../../src/index.browser.ts"));
+    expect(nodeExports).toContain("ScheduleListPage");
+    expect(browserExports).toContain("ScheduleListPage");
+  });
+
   it("keeps rpc worker request correlation ids private", () => {
     const source = readSource("../../src/domains/rpc/types.ts");
     expect(source).not.toContain("correlationId");

@@ -64,6 +64,33 @@ describe("core Scope", () => {
     expect(group.closed).toBe(true);
   });
 
+  it("should reject a resource added while disposal is still in flight given a scope mid-dispose", async () => {
+    const scope = createScope("scope");
+    let releaseFirst: () => void = () => undefined;
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+
+    scope.add(async () => {
+      await firstGate;
+    });
+
+    // `disposing` flips true synchronously as soon as dispose() starts, well
+    // before the async disposal loop (and thus `disposed`) finishes. A
+    // resource added during that window must be rejected — not silently
+    // pushed into an array that was already snapshotted and cleared, where
+    // it would never be disposed by this call or any future one.
+    const disposePromise = scope.dispose();
+
+    expect(scope.disposed).toBe(false);
+    expect(() => scope.add(() => undefined)).toThrow();
+
+    releaseFirst();
+    await disposePromise;
+
+    expect(scope.disposed).toBe(true);
+  });
+
   it("should dispose child scope and resources given parent scope disposal", async () => {
     const parent = createScope("parent");
     const child = createScope("child", parent);

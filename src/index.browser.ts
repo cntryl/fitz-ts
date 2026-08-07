@@ -201,4 +201,5 @@ export type {
   ScheduleHandler,
   ScheduleSubscription,
   ScheduleStatus,
+  ScheduleListPage,
 } from "./domains/schedule/types";
