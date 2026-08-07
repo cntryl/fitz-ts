@@ -14,7 +14,7 @@ The format is based on Keep a Changelog and the project follows Semantic Version
 - Stream selectors accept the full documented wildcard matrix and global records expose `globalOffset`.
 - Domain errors preserve broker codes and messages; reconnect, unsubscribe, close, and request cancellation bookkeeping is transactional.
 
-## [0.1.0] - 2026-08-05
+## [0.0.15] - 2026-08-05
 
 - Breaking: removed legacy stream continuation fields and the offset-based Schedule list call. Use `schedule.listPage()` and its continuation token.
 - Breaking: callable capitalized client aliases were removed; use `createClient` and the domain `create*` factories.
@@ -46,7 +46,7 @@ The format is based on Keep a Changelog and the project follows Semantic Version
 - Public client and domain declarations now use named interfaces rather than factory `ReturnType` aliases.
 - Concurrent subscriptions for the same KV, Queue, Notice, Lease, Stream, or Schedule pattern now share one broker registration; failed registration attempts remain retryable and the final local handle owns wire unsubscription.
 
-## [0.1.0] - 2026-03-25
+## [0.0.1] - 2026-03-25
 
 ### Added
 

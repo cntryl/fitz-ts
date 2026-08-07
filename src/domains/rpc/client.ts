@@ -327,10 +327,6 @@ function createRpcIterator(
       return { value: undefined, done: true };
     }
 
-    if (failureReason !== undefined) {
-      throw failureReason;
-    }
-
     return { value: frame, done: false };
   };
 
@@ -382,7 +378,27 @@ export function createRpcClient(connection: RpcConnectionPort): RpcClient {
   type PendingRpcEntry = { iterator: RpcIterator; correlationId: Uint8Array };
   const pendingRpcs = new Map<bigint, PendingRpcEntry>();
   const workers = new Map<string, RegisteredWorker>();
+  const workerMutationTails = new Map<string, Promise<void>>();
   let initialized = false;
+
+  const withWorkerMutation = async <T>(route: string, task: () => Promise<T>): Promise<T> => {
+    const previous = workerMutationTails.get(route) ?? Promise.resolve();
+    let release: () => void = () => undefined;
+    const current = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    workerMutationTails.set(route, current);
+
+    await previous;
+    try {
+      return await task();
+    } finally {
+      release();
+      if (workerMutationTails.get(route) === current) {
+        workerMutationTails.delete(route);
+      }
+    }
+  };
 
   const cleanupPendingRpc = (correlationKey: bigint, correlationId: Uint8Array): void => {
     if (!pendingRpcs.has(correlationKey)) {
@@ -485,7 +501,9 @@ export function createRpcClient(connection: RpcConnectionPort): RpcClient {
     assertRpcRegistrationPattern(route);
     initRpcHandler();
     const normalizedOptions = normalizeRegisterWorkerOptions(options);
-    const registration = await registerWorkerInternal(route, handler, normalizedOptions);
+    const registration = await withWorkerMutation(route, async () => {
+      return await registerWorkerInternal(route, handler, normalizedOptions);
+    });
 
     const unsubscribeFn = async (registeredRoute: string) => {
       await unregisterWorker(registeredRoute, registration);
@@ -495,29 +513,28 @@ export function createRpcClient(connection: RpcConnectionPort): RpcClient {
   };
 
   const unregisterWorker = async (route: string, registration: RegisteredWorker): Promise<void> => {
-    // Confirm the wire UNSUBSCRIBE_WORKER before dropping local tracking —
-    // deleting first (the old behavior) meant a failed unsubscribe
-    // permanently orphaned the worker locally even though the broker may
-    // still consider it live, so it never gets re-registered on reconnect.
-    // Every other domain's unsubscribe (and this file's own
-    // registerWorkerInternal) already confirms before writing.
-    const payload = RpcCodec.encodeUnsubscribeWorker(route);
-    const parsed = parseStandardResponse(await requestFrame(MSG_RPC_UNSUBSCRIBE_WORKER, payload));
-    if (!parsed.success) {
-      throw new RpcError(
-        `RPC UNSUBSCRIBE_WORKER failed: ${parsed.error ?? "unknown error"}`,
-        "UNSUBSCRIBE_FAILED",
-        parsed.errorCode,
-      );
-    }
-    // A replacement worker for the same route may have completed its own
-    // SUBSCRIBE_WORKER while this older handle's UNSUBSCRIBE_WORKER was in
-    // flight. In that ordering the broker is subscribed to the replacement,
-    // so deleting by route alone would orphan it locally. Remove only the
-    // exact registration this subscription handle represents.
-    if (workers.get(route) === registration) {
+    await withWorkerMutation(route, async () => {
+      // A handle superseded by a newer registration no longer owns the wire
+      // route. Sending UNSUBSCRIBE_WORKER from that stale handle would remove
+      // the replacement on the broker while leaving it present locally.
+      if (workers.get(route) !== registration) {
+        return;
+      }
+
+      // Confirm the wire UNSUBSCRIBE_WORKER before dropping local tracking —
+      // deleting first would permanently orphan the worker locally when the
+      // wire request fails even though the broker may still consider it live.
+      const payload = RpcCodec.encodeUnsubscribeWorker(route);
+      const parsed = parseStandardResponse(await requestFrame(MSG_RPC_UNSUBSCRIBE_WORKER, payload));
+      if (!parsed.success) {
+        throw new RpcError(
+          `RPC UNSUBSCRIBE_WORKER failed: ${parsed.error ?? "unknown error"}`,
+          "UNSUBSCRIBE_FAILED",
+          parsed.errorCode,
+        );
+      }
       workers.delete(route);
-    }
+    });
   };
 
   const initRpcHandler = (): void => {

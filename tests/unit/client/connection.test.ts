@@ -396,6 +396,35 @@ describe("Connection", () => {
     await connection.close();
   });
 
+  it("should reject the replacement session given an active loss handler when reconnect authentication loses its transport", async () => {
+    const first = new FakeTransport();
+    const second = new FakeTransport([new Error("replacement transport failed")]);
+    const factory = vi.fn<() => Transport>().mockReturnValueOnce(first).mockReturnValueOnce(second);
+    const connection = createConnection(factory, async () => "jwt-token", {
+      authSettleDelayMs: 10,
+      heartbeat: { enabled: false },
+      reconnect: {
+        enabled: true,
+        maxAttempts: 2,
+        backoffMs: 0,
+        maxBackoffMs: 0,
+      },
+    });
+
+    await connection.connect();
+    await confirmSession(connection, first);
+    first.fail(new Error("initial transport failed"));
+
+    await vi.waitFor(() => {
+      expect(connection.getState()).toBe("CLOSED");
+    });
+    expect(connection.isConnected()).toBe(false);
+    expect(second.connected).toBe(false);
+    expect(factory).toHaveBeenCalledTimes(2);
+
+    await connection.close();
+  });
+
   it("should authenticate the reconnected session when a restore listener fails", async () => {
     const first = new FakeTransport();
     const second = new FakeTransport();

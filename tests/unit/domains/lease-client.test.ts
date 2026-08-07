@@ -211,20 +211,21 @@ describe("lease acquisition", () => {
     expect(connection.requests).toHaveLength(2);
   });
 
-  it("preserves the broker message on a canonical deferred timeout", async () => {
+  it("should preserve broker message given deferred timeout when acquisition completes", async () => {
     const connection = new FakeLeaseConnection([acquireResponse(2, 0n)]);
     const client = createLeaseClient(connection as unknown as Connection);
     const pending = client.acquire("lease://realm/area/resource", 30, { waitSeconds: 1 });
     await Promise.resolve();
     const message = new TextEncoder().encode("lease wait timed out");
-    const error = new Uint8Array(1 + 4 + message.length);
+    const error = new Uint8Array(1 + 4 + 4 + message.length);
     error[0] = 1;
     const view = new DataView(error.buffer);
-    view.setUint32(1, message.length);
-    error.set(message, 5);
+    view.setUint32(1, 5006);
+    view.setUint32(5, message.length);
+    error.set(message, 9);
     connection.handlers.get(MSG_LEASE_ACQUIRE)?.(error);
 
-    await expect(pending).rejects.toMatchObject({ domainCode: 1 });
+    await expect(pending).rejects.toMatchObject({ domainCode: 5006 });
     await expect(pending).rejects.toThrow("lease wait timed out");
   });
 });
@@ -362,7 +363,7 @@ describe("lease subscribe/unsubscribe", () => {
     await subB.unsubscribe();
   });
 
-  it("keeps the local handler registered when the wire UNSUBSCRIBE fails, instead of dropping notifications silently", async () => {
+  it("should retain local handler given rejected unsubscribe when notifications continue", async () => {
     const connection = new FullLeaseConnection();
     connection.respond(MSG_LEASE_SUBSCRIBE, subscribeResponse(42n));
     const client = createLeaseClient(connection as unknown as Connection);
@@ -374,6 +375,7 @@ describe("lease subscribe/unsubscribe", () => {
 
     const writer = createBufferWriter();
     writer.writeU8(1);
+    writer.writeU32BE(5010);
     writer.writeString("broker rejected unsubscribe");
     connection.respond(MSG_LEASE_UNSUBSCRIBE, writer.getBuffer());
 

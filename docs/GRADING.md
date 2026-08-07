@@ -1,6 +1,6 @@
 ﻿# fitz-ts Grading
 
-Version: 0.2.0
+Version: 0.0.15
 Date: 2026-08-07
 Rubric: ../fitz/docs/clients/client-requirements.md
 
@@ -130,4 +130,4 @@ Rubric: ../fitz/docs/clients/client-requirements.md
 | REQ-DOCS-005 | T2 | PASS | PERF_RESULTS.md documents benchmark scope, evidence policy, captured results, and named release thresholds, while tests/unit/perf/hotpath-thresholds.test.ts enforces the budgeted bar | performance documentation now spells out the release gate |
 | REQ-DOCS-006 | T2 | PASS | README.md and docs/OPERATIONS.md now include an explicit release-oriented verification checklist covering lint, build, unit, integration, conformance, bench, and pack smoke flows | misuse and release verification guidance is now summarized as a concrete checklist rather than only implied by CI |
 | REQ-DOCS-007 | T2 | PASS | docs/OPERATIONS.md now documents the CONNECTED state, reconnect restoration ordering, async handler controls, shutdown expectations, and same-handle sequencing rules | production-hardening guidance is now materially stronger and aligned with the runtime behavior |
-| REQ-DOCS-008 | T2 | PASS | CHANGELOG.md exists at repo root and documents the 0.2.0 breaking contract changes | release change tracking artifact is present |
+| REQ-DOCS-008 | T2 | PASS | CHANGELOG.md exists at repo root and documents the 0.0.15 contract changes | release change tracking artifact is present |

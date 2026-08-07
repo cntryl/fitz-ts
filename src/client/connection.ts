@@ -135,7 +135,10 @@ export function createConnection(
       () => transport,
     );
 
-  const handlePossibleTransportFailure = (error: unknown): void => {
+  const handlePossibleTransportFailure = (
+    error: unknown,
+    failedTransport: Transport | null,
+  ): void => {
     if (closeRequested) {
       return;
     }
@@ -154,7 +157,7 @@ export function createConnection(
       error instanceof ConnectionError ||
       error instanceof AuthenticationError
     ) {
-      void handleConnectionLoss(error);
+      void handleConnectionLoss(error, failedTransport);
     }
   };
 
@@ -318,12 +321,14 @@ export function createConnection(
     allowReconnectRestore: boolean = false,
   ): Promise<Uint8Array> => {
     let sendStarted = false;
+    let activeTransport: Transport | null = null;
     await waitForRequestReady(signal, allowReconnectRestore);
     const releaseRequestSlot = await acquireRequestSlot(messageType, signal);
     const startedAt = Date.now();
 
     try {
-      const activeTransport = ensureTransport();
+      const requestTransport = ensureTransport();
+      activeTransport = requestTransport;
       const frame = FrameCodec.encodeFrame(messageType, requestPayload);
 
       return await multiplexer.request(
@@ -331,7 +336,7 @@ export function createConnection(
         frame,
         (data) => {
           sendStarted = true;
-          return sendSerialized(activeTransport, data);
+          return sendSerialized(requestTransport, data);
         },
         timeout,
         signal,
@@ -350,7 +355,7 @@ export function createConnection(
         ...describeErrorFields(error),
         error: describeError(error),
       });
-      handlePossibleTransportFailure(error);
+      handlePossibleTransportFailure(error, activeTransport);
       throw error;
     } finally {
       releaseRequestSlot();
@@ -379,6 +384,7 @@ export function createConnection(
     signal?: AbortSignal,
   ): Promise<void> => {
     let sendStarted = false;
+    let activeTransport: Transport | null = null;
     const releaseReadyWaitSlot = acquireReadyWaitSlot();
     try {
       await waitForReady(signal, timeout);
@@ -390,11 +396,12 @@ export function createConnection(
     const startedAt = Date.now();
 
     try {
-      const activeTransport = ensureTransport();
+      const sendTransport = ensureTransport();
+      activeTransport = sendTransport;
       const frame = FrameCodec.encodeFrame(messageType, requestPayload);
 
       sendStarted = true;
-      await sendSerialized(activeTransport, frame);
+      await sendSerialized(sendTransport, frame);
     } catch (error) {
       attachResilienceMeta(error, {
         boundary: sendStarted ? "post-send" : "pre-send",
@@ -409,7 +416,7 @@ export function createConnection(
         ...describeErrorFields(error),
         error: describeError(error),
       });
-      handlePossibleTransportFailure(error);
+      handlePossibleTransportFailure(error, activeTransport);
       throw error;
     } finally {
       releaseRequestSlot();
@@ -672,8 +679,8 @@ export function createConnection(
         await activeTransport.sendHeartbeat!(heartbeat);
       });
     },
-    onFailure: (heartbeatError) => {
-      void handleConnectionLoss(heartbeatError);
+    onFailure: (heartbeatError, failedTransport) => {
+      void handleConnectionLoss(heartbeatError, failedTransport);
     },
     describeError,
   });
@@ -705,7 +712,7 @@ export function createConnection(
         throw connectionClosedError();
       }
       throwIfAborted(signal);
-      receiveLoop = startReceiveLoop();
+      receiveLoop = startReceiveLoop(activeTransport);
 
       setState(ConnectionState.Connected);
       setState(ConnectionState.Authenticating);
@@ -715,7 +722,7 @@ export function createConnection(
         throw new AuthenticationError("Authentication rejected", { state });
       }
 
-      const sendConnectPromise = sendConnect();
+      const sendConnectPromise = sendConnect(activeTransport);
       void sendConnectPromise.catch(() => undefined);
       await Promise.race([sendConnectPromise, authOutcome.promise]);
       if (closeRequested) {
@@ -752,33 +759,32 @@ export function createConnection(
       }
       emitLifecycleEvent(isReconnect ? "reconnect_succeeded" : "connect_succeeded");
     } catch (error) {
-      // If a connection loss was detected concurrently (e.g. the receive
-      // loop failing during the auth-settle window below), handleConnection-
-      // LossOnce runs synchronously to completion — including its own
-      // disconnect fanout and lifecycle event — before rejecting the shared
-      // `authOutcome` deferred, which is what unblocks the
-      // `await Promise.race(...)` above and lands us here. It always calls
-      // setState(Closed) as the last thing it does before returning, so
-      // `state` already being Closed on catch-entry is a reliable signal
-      // that this exact failure was already fully processed elsewhere.
-      const alreadyHandledByConnectionLoss = state === ConnectionState.Closed;
+      const unconfirmedAtCatch = isUnconfirmedSessionLoss();
+      const wasReconnectRestoreActive = reconnectRestoreActive;
       authOutcome = null;
       reconnectRestoreActive = false;
       stopHeartbeat();
+      // This path owns transport teardown. Prevent close() from turning its
+      // deliberate receive rejection into a second connection-loss incident.
+      receiveLoopAbort = true;
       if (activeTransport) {
         await activeTransport.close().catch(() => undefined);
       }
       if (transport === activeTransport) {
         transport = null;
       }
+      // Closing the failed transport above can reject its pending receive(),
+      // allowing that loop's connection-loss path to finish teardown while
+      // this catch block is suspended. Check after close() so we do not
+      // overwrite its terminal CLOSED/authRejected state with DISCONNECTED.
+      const alreadyHandledByConnectionLoss = state === ConnectionState.Closed;
       const inferredAuthFailure =
-        !closeRequested &&
-        !isAbortError(error) &&
-        !reconnectRestoreActive &&
-        isUnconfirmedSessionLoss();
+        !closeRequested && !isAbortError(error) && !wasReconnectRestoreActive && unconfirmedAtCatch;
       const failure = inferredAuthFailure ? createInferredAuthenticationError(error) : error;
       const rejectedAuth = failure instanceof AuthenticationError;
-      authRejected = rejectedAuth;
+      if (rejectedAuth) {
+        authRejected = true;
+      }
       if (!alreadyHandledByConnectionLoss) {
         if (closeRequested) {
           setState(ConnectionState.Closed);
@@ -796,21 +802,26 @@ export function createConnection(
     }
   };
 
-  const sendConnect = async (): Promise<void> => {
+  const sendConnect = async (activeTransport: Transport): Promise<void> => {
     const token = await tokenProvider();
+    if (transport !== activeTransport) {
+      throw new ConnectionError("Connection changed while preparing CONNECT", { state });
+    }
     const frame = FrameCodec.encodeFrame(MSG_CONNECT, utf8Encoder.encode(token));
-    await ensureTransport().send(frame);
+    await activeTransport.send(frame);
     markOutboundActivity();
   };
 
-  const startReceiveLoop = async (): Promise<void> => {
-    while (!receiveLoopAbort && !closeRequested) {
+  const startReceiveLoop = async (activeTransport: Transport): Promise<void> => {
+    while (!receiveLoopAbort && !closeRequested && transport === activeTransport) {
       try {
-        const activeTransport = ensureTransport();
         const data = await activeTransport.receive();
+        if (transport !== activeTransport) {
+          return;
+        }
         markRemoteActivity();
         const frames = frameParser.parseFrames(data);
-        updatePartialFrameTimeout();
+        updatePartialFrameTimeout(activeTransport);
 
         if (frames.length > 0) {
           confirmSession();
@@ -824,25 +835,35 @@ export function createConnection(
           return;
         }
 
-        await handleConnectionLoss(error);
+        await handleConnectionLoss(error, activeTransport);
         return;
       }
     }
   };
 
-  const handleConnectionLoss = async (error: unknown): Promise<void> => {
+  const handleConnectionLoss = async (
+    error: unknown,
+    failedTransport: Transport | null = transport,
+  ): Promise<void> => {
     if (connectionLossPromise) {
       await connectionLossPromise;
       return;
     }
 
-    connectionLossPromise = handleConnectionLossOnce(error).finally(() => {
+    connectionLossPromise = handleConnectionLossOnce(error, failedTransport).finally(() => {
       connectionLossPromise = null;
     });
     await connectionLossPromise;
   };
 
-  const handleConnectionLossOnce = async (error: unknown): Promise<void> => {
+  const handleConnectionLossOnce = async (
+    error: unknown,
+    failedTransport: Transport | null,
+  ): Promise<void> => {
+    if (failedTransport && transport !== failedTransport) {
+      return;
+    }
+
     stopHeartbeat();
     clearPartialFrameTimeout();
     const inferredAuthFailure = isUnconfirmedSessionLoss();
@@ -893,8 +914,7 @@ export function createConnection(
         reconnectPromise = null;
       });
     }
-
-    await reconnectPromise;
+    void reconnectPromise.catch(() => undefined);
   };
 
   const reconnectScheduler = createReconnectScheduler({
@@ -999,7 +1019,7 @@ export function createConnection(
     }
   };
 
-  const updatePartialFrameTimeout = (): void => {
+  const updatePartialFrameTimeout = (activeTransport: Transport): void => {
     const pendingFrame = frameParser.getPendingFrameInfo();
     if (!pendingFrame.hasPending) {
       clearPartialFrameTimeout();
@@ -1010,7 +1030,12 @@ export function createConnection(
     partialFrameTimeout = setTimeout(() => {
       partialFrameTimeout = undefined;
       const currentPendingFrame = frameParser.getPendingFrameInfo();
-      if (!currentPendingFrame.hasPending || closeRequested || receiveLoopAbort) {
+      if (
+        !currentPendingFrame.hasPending ||
+        closeRequested ||
+        receiveLoopAbort ||
+        transport !== activeTransport
+      ) {
         return;
       }
 
@@ -1022,13 +1047,16 @@ export function createConnection(
           ...currentPendingFrame,
         },
       );
-      void failPartialFrame(error);
+      void failPartialFrame(error, activeTransport);
     }, heartbeatTimeoutMs);
   };
 
-  const failPartialFrame = async (error: ProtocolError): Promise<void> => {
-    await transport?.close().catch(() => undefined);
-    await handleConnectionLoss(error);
+  const failPartialFrame = async (
+    error: ProtocolError,
+    failedTransport: Transport,
+  ): Promise<void> => {
+    await failedTransport.close().catch(() => undefined);
+    await handleConnectionLoss(error, failedTransport);
   };
 
   const emitDisconnect = (): void => {

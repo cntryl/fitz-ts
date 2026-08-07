@@ -5,7 +5,7 @@
 import { describe, it, expect } from "vite-plus/test";
 import { LeaseCodec } from "../../../src/domains/lease/codec";
 import { createBufferWriter } from "../../../src/core/buffer";
-import { ProtocolError } from "../../../src/core/errors";
+import { LeaseError, ProtocolError } from "../../../src/core/errors";
 import { testData as _testData } from "../helpers/test-utils";
 
 describe("LeaseCodec", () => {
@@ -33,14 +33,20 @@ describe("LeaseCodec", () => {
   });
 
   describe("ACQUIRE decoding", () => {
-    it("preserves the canonical plain-message acquire error envelope", () => {
+    it("should preserve domain code given typed error when decoding acquire", () => {
       const writer = createBufferWriter(64);
       writer.writeU8(1);
+      writer.writeU32BE(5001);
       writer.writeString("lease held by another owner");
 
-      expect(() => LeaseCodec.decodeAcquireResponse(writer.getBuffer())).toThrow(
-        "lease held by another owner",
-      );
+      try {
+        LeaseCodec.decodeAcquireResponse(writer.getBuffer());
+        throw new Error("expected ACQUIRE decoding to fail");
+      } catch (error) {
+        expect(error).toBeInstanceOf(LeaseError);
+        expect((error as LeaseError).domainCode).toBe(5001);
+        expect((error as LeaseError).message).toContain("lease held by another owner");
+      }
     });
 
     it("should_decode_acquire_response_with_token", () => {

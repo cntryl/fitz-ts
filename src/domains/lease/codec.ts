@@ -11,6 +11,7 @@ import {
   writeU32BEAt,
 } from "../../core/buffer";
 import { LeaseError, ProtocolError } from "../../core/errors";
+import { parseStandardResponse } from "../../protocol/response";
 import { AcquireResponse, QueryResponse } from "./types";
 
 export const LeaseCodec = {
@@ -39,22 +40,21 @@ export const LeaseCodec = {
    * response_type: 0=Acquired, 1=AlreadyHeld (idempotent)
    */
   decodeAcquireResponse(payload: Uint8Array): AcquireResponse {
-    if (payload.length < 1) {
-      throw new ProtocolError(
-        `ACQUIRE response too short: got ${payload.length} bytes`,
-        undefined,
-        { operation: "LEASE_ACQUIRE", payloadLength: payload.length },
+    if (payload.length === 0) {
+      throw new ProtocolError("ACQUIRE response too short: got 0 bytes", undefined, {
+        operation: "LEASE_ACQUIRE",
+        payloadLength: 0,
+      });
+    }
+    const parsed = parseStandardResponse(payload);
+    if (!parsed.success) {
+      throw new LeaseError(
+        `ACQUIRE failed: ${parsed.error ?? "unknown error"}`,
+        "ACQUIRE_FAILED",
+        parsed.errorCode,
       );
     }
-
-    const reader = createBufferReader(payload);
-    const status = reader.readU8();
-    if (status !== 0) {
-      const message = reader.remainingBytes() >= 4 ? reader.readString() : `status ${status}`;
-      if (!reader.isEOF())
-        throw new ProtocolError("ACQUIRE error response has trailing data", status);
-      throw new LeaseError(`ACQUIRE failed: ${message}`, "ACQUIRE_FAILED", status);
-    }
+    const reader = createBufferReader(parsed.data);
     if (reader.remainingBytes() < 9)
       throw new ProtocolError("ACQUIRE success response is truncated", undefined, {
         operation: "LEASE_ACQUIRE",
@@ -132,15 +132,12 @@ export const LeaseCodec = {
    * Held: [u8 has_holder=1][string owner_id][u64 ttl_remaining_secs][u32 pending_waiters]
    */
   decodeQueryResponse(payload: Uint8Array): QueryResponse {
-    const reader = createBufferReader(payload);
-    const status = reader.readU8();
-    if (status !== 0) {
-      const errorMessage = reader.readString();
-      if (!reader.isEOF()) {
-        throw new ProtocolError("QUERY error response has trailing data", status);
-      }
-      return { status, errorMessage };
+    const parsed = parseStandardResponse(payload);
+    if (!parsed.success) {
+      return { status: 1, errorMessage: parsed.error, errorCode: parsed.errorCode };
     }
+    const status = 0;
+    const reader = createBufferReader(parsed.data);
     const hasHolder = reader.readU8();
 
     if (hasHolder === 0) {
@@ -181,6 +178,18 @@ export const LeaseCodec = {
    */
   encodeUnsubscribe(route: string): Uint8Array {
     return getRouteEncoding(route).slice();
+  },
+
+  decodeSuccessResponse(payload: Uint8Array, operation: string): Uint8Array {
+    const parsed = parseStandardResponse(payload);
+    if (!parsed.success) {
+      throw new LeaseError(
+        `${operation} failed: ${parsed.error ?? "unknown error"}`,
+        `${operation}_FAILED`,
+        parsed.errorCode,
+      );
+    }
+    return parsed.data;
   },
 
   /**

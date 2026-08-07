@@ -3,6 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 import { waitFor } from "./helpers";
 import { TestFixture } from "./fixture/fixture";
 import { runWithBothTransports } from "./fixture/transport";
+import { ErrCodeLeaseHeld, LeaseError } from "../../src";
 
 describe("Lease integration", () => {
   runWithBothTransports(({ transport, authMode }) => {
@@ -15,7 +16,7 @@ describe("Lease integration", () => {
       expect(lease.getExpiry()).toBeGreaterThan(BigInt(Math.floor(Date.now() / 1000)));
     });
 
-    it("should reject acquire when lease is already held", async () => {
+    it("should expose lease held code given held lease when acquiring", async () => {
       const f1 = new TestFixture(transport, authMode);
       const f2 = new TestFixture(transport, authMode);
       await f1.connectOrFail();
@@ -25,7 +26,10 @@ describe("Lease integration", () => {
       const lease = await f1.client().lease.acquire(route, 30);
       expect(lease.getExpiry()).toBeGreaterThan(BigInt(Math.floor(Date.now() / 1000)));
 
-      await expect(f2.client().lease.acquire(route, 30)).rejects.toBeTruthy();
+      await expect(f2.client().lease.acquire(route, 30)).rejects.toMatchObject({
+        name: LeaseError.name,
+        domainCode: ErrCodeLeaseHeld,
+      });
     });
 
     it("should extend ttl when renew is called with a valid token", async () => {

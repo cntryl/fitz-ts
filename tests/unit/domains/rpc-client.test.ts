@@ -608,7 +608,7 @@ describe("RpcClient", () => {
     expect(connection.countRequests(MSG_RPC_SUBSCRIBE_WORKER)).toBe(2);
   });
 
-  it("preserves a replacement worker registered while the previous worker is unsubscribing", async () => {
+  it("should preserve the replacement worker given an in-flight unsubscribe when registration overlaps", async () => {
     const connection = new FakeRpcConnection();
     const client = createRpcClient(connection);
     const route = "rpc://realm/area/method";
@@ -620,15 +620,31 @@ describe("RpcClient", () => {
       expect(connection.countRequests(MSG_RPC_UNSUBSCRIBE_WORKER)).toBe(1);
     });
 
-    await client.registerWorker(route, async () => undefined);
-    expect(connection.countRequests(MSG_RPC_SUBSCRIBE_WORKER)).toBe(2);
+    const replacement = client.registerWorker(route, async () => undefined);
+    await Promise.resolve();
+    expect(connection.countRequests(MSG_RPC_SUBSCRIBE_WORKER)).toBe(1);
 
     releaseUnsubscribe();
-    await unsubscribing;
+    await Promise.all([unsubscribing, replacement]);
+    expect(connection.countRequests(MSG_RPC_SUBSCRIBE_WORKER)).toBe(2);
 
     // The replacement remains in the local worker registry and is restored
     // on reconnect. An unconditional workers.delete(route) would leave the
     // broker subscribed while the client silently dropped inbound calls.
+    await connection.reconnect();
+    expect(connection.countRequests(MSG_RPC_SUBSCRIBE_WORKER)).toBe(3);
+  });
+
+  it("should preserve the replacement worker given a stale handle when the stale handle unsubscribes", async () => {
+    const connection = new FakeRpcConnection();
+    const client = createRpcClient(connection);
+    const route = "rpc://realm/area/method";
+    const original = await client.registerWorker(route, async () => undefined);
+    await client.registerWorker(route, async () => undefined);
+
+    await original.unsubscribe();
+
+    expect(connection.countRequests(MSG_RPC_UNSUBSCRIBE_WORKER)).toBe(0);
     await connection.reconnect();
     expect(connection.countRequests(MSG_RPC_SUBSCRIBE_WORKER)).toBe(3);
   });
@@ -685,6 +701,37 @@ describe("RpcClient", () => {
       value: { body: new Uint8Array([1]), sequence: 0n },
     });
     await expect(iterator.next()).rejects.toMatchObject({ name: "ConnectionError" });
+  });
+
+  it("should deliver the pending frame given a later terminal error when both frames arrive before the consumer resumes", async () => {
+    const connection = new FakeRpcConnection();
+    const client = createRpcClient(connection);
+    const iterator = await client.call("rpc://realm/area/method", new Uint8Array([1]));
+    const request = connection.lastRequest;
+    if (!request) {
+      throw new Error("Expected RPC request payload to be recorded");
+    }
+
+    const decoded = RpcCodec.decodeInboundRequest(request.payload);
+    const responseHandler = connection.notificationHandlers.get(MSG_RPC_RESPONSE);
+    if (!responseHandler) {
+      throw new Error("Expected RPC response handler to be registered");
+    }
+
+    const next = iterator.next();
+    responseHandler(RpcCodec.encodeResponse(decoded.correlationId, 0n, new Uint8Array([1]), false));
+    responseHandler(
+      RpcCodec.encodeResponse(decoded.correlationId, 1n, encodeWorkerNotFoundBody(), true),
+    );
+
+    await expect(next).resolves.toMatchObject({
+      done: false,
+      value: { body: new Uint8Array([1]), sequence: 0n },
+    });
+    await expect(iterator.next()).rejects.toMatchObject({
+      code: "RPC_WORKER_NOT_FOUND",
+      domainCode: ErrCodeRpcWorkerNotFound,
+    });
   });
 
   it("does not warn when a handler's late send fails only because the connection already disconnected", async () => {

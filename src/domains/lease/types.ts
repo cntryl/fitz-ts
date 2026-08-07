@@ -84,7 +84,7 @@ export function createLease(
       try {
         const requestPayload = LeaseCodec.encodeExtend(route, currentToken, ttlSecs);
         const response = await connection.request(MSG_LEASE_RENEW, requestPayload, signal);
-        const data = assertPlainSuccess(response, "EXTEND");
+        const data = LeaseCodec.decodeSuccessResponse(response, "EXTEND");
         if (!data || data.length < 8) {
           throw new LeaseError("EXTEND response missing fencing token", "EXTEND_INVALID_RESPONSE");
         }
@@ -106,7 +106,7 @@ export function createLease(
       unsubscribeDisconnect();
       const payload = LeaseCodec.encodeRelease(route, currentToken);
       const response = await connection.request(MSG_LEASE_RELEASE, payload, signal);
-      assertPlainSuccess(response, "RELEASE");
+      LeaseCodec.decodeSuccessResponse(response, "RELEASE");
     });
 
   const getExpiry = (): bigint => currentExpiry;
@@ -150,6 +150,7 @@ export interface LeaseInfo {
 export interface QueryResponse {
   status: number;
   errorMessage?: string;
+  errorCode?: number;
   isHeld?: boolean;
   owner?: string;
   token?: bigint;
@@ -208,6 +209,5 @@ export class LeaseLifecycleError extends FitzError {
 
 // Import needed types for Lease class methods
 import { createBufferReader } from "../../core/buffer";
-import { assertPlainSuccess } from "../../protocol/response";
 import { MSG_LEASE_RENEW, MSG_LEASE_RELEASE } from "../../frame/types";
 import { LeaseCodec } from "./codec";

@@ -94,6 +94,7 @@ export const QueueCodec = {
   /**
    * Encode RESERVE request.
    * Payload: [route: string][lease_seconds: u64][has_batch_size: u8][batch_size: u32]
+   * [has_wait_seconds: u8][wait_seconds: u64]
    *
    */
   encodeReserve(

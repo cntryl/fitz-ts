@@ -35,7 +35,7 @@ import {
 } from "../internal/subscription-handle";
 import { LeaseCodec } from "./codec";
 import { createBufferReader } from "../../core/buffer";
-import { parsePlainResponse } from "../../protocol/response";
+import { parseStandardResponse } from "../../protocol/response";
 import {
   ChangeHandler,
   ChangeNotification,
@@ -133,7 +133,7 @@ export function createLeaseClient(connection: LeaseConnectionPort): LeaseClient 
         return { subId, handlers: new Map(state.handlers), generation: state.generation };
       },
       async (route) => {
-        parsePlainResponse(
+        parseStandardResponse(
           await requestReconnectFrame(MSG_LEASE_UNSUBSCRIBE, LeaseCodec.encodeUnsubscribe(route)),
         );
       },
@@ -369,7 +369,7 @@ export function createLeaseClient(connection: LeaseConnectionPort): LeaseClient 
           throw new LeaseError(
             `QUERY failed: ${decoded.errorMessage ?? `status ${decoded.status}`}`,
             "QUERY_FAILED",
-            decoded.status,
+            decoded.errorCode,
           );
         }
         return {
@@ -418,7 +418,7 @@ export function createLeaseClient(connection: LeaseConnectionPort): LeaseClient 
 
   const subscribeWire = async (route: string, request = requestFrame): Promise<bigint> => {
     const payload = LeaseCodec.encodeSubscribe(route);
-    const parsed = parsePlainResponse(await request(MSG_LEASE_SUBSCRIBE, payload));
+    const parsed = parseStandardResponse(await request(MSG_LEASE_SUBSCRIBE, payload));
     if (!parsed.success) {
       throw new LeaseError(
         `SUBSCRIBE failed: ${parsed.error ?? "unknown error"}`,
@@ -474,7 +474,7 @@ export function createLeaseClient(connection: LeaseConnectionPort): LeaseClient 
     // unsubscribe() throw should be able to assume nothing changed.
     const wireUnsubscribe = (async (): Promise<void> => {
       const payload = LeaseCodec.encodeUnsubscribe(route);
-      const parsed = parsePlainResponse(await requestFrame(MSG_LEASE_UNSUBSCRIBE, payload));
+      const parsed = parseStandardResponse(await requestFrame(MSG_LEASE_UNSUBSCRIBE, payload));
       if (!parsed.success) {
         throw new LeaseError(
           `UNSUBSCRIBE failed: ${parsed.error ?? "unknown error"}`,
