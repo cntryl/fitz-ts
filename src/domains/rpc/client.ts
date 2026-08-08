@@ -22,7 +22,6 @@ import {
   RpcHandler,
   RpcSubscription,
   ResponseWriter,
-  RpcStatus,
   createRpcSubscription,
 } from "./types";
 import {
@@ -48,8 +47,9 @@ import {
 } from "../../core/errors";
 import { ConnectionState } from "../../core/types";
 import { createBufferWriter, readU128BEAt, utf8Encoder } from "../../core/buffer";
-import { isConcreteRouteShape } from "../_routes";
+import { isConcreteRouteShape, isRegistrationPatternShape, routeMatchesPattern } from "../_routes";
 import { restoreMapEntriesAtomically } from "../internal/restore";
+import { parseStandardResponse } from "../../protocol/response";
 
 type RpcConnectionPort = RequestPort &
   SendPort &
@@ -72,11 +72,49 @@ type RegisteredWorker = {
   options: Required<RegisterWorkerOptions>;
 };
 
+type RpcPatternSpecificity = readonly [
+  literalSegments: number,
+  singleWildcards: number,
+  doubleWildcards: number,
+  segmentCount: number,
+];
+
 const DEFAULT_WORKER_MAX_CONCURRENCY = 1;
 const MAX_WORKER_MAX_CONCURRENCY = 1024;
 
+function rpcPatternSpecificity(pattern: string): RpcPatternSpecificity {
+  const segments = pattern.slice(pattern.indexOf("://") + 3).split("/");
+  let literalSegments = 0;
+  let singleWildcards = 0;
+  let doubleWildcards = 0;
+
+  for (const segment of segments) {
+    if (segment === "*") singleWildcards++;
+    else if (segment === "**") doubleWildcards++;
+    else literalSegments++;
+  }
+
+  return [literalSegments, singleWildcards, doubleWildcards, segments.length];
+}
+
+function isMoreSpecificRpcPattern(candidate: string, current: string): boolean {
+  const candidateScore = rpcPatternSpecificity(candidate);
+  const currentScore = rpcPatternSpecificity(current);
+
+  if (candidateScore[0] !== currentScore[0]) return candidateScore[0] > currentScore[0];
+  if (candidateScore[1] !== currentScore[1]) return candidateScore[1] > currentScore[1];
+  if (candidateScore[2] !== currentScore[2]) return candidateScore[2] < currentScore[2];
+  if (candidateScore[3] !== currentScore[3]) return candidateScore[3] > currentScore[3];
+  return candidate < current;
+}
+
 type ManagedResponseWriter = ResponseWriter & {
   dispose(): void;
+  // False when the writer became unusable for a reason the handler couldn't
+  // have avoided (the connection dropped, or a send failed for a benign
+  // shutdown reason) — only a handler that settles with the writer still
+  // live and never sent isEnd:true warrants the L11 warning below.
+  needsTerminalWarning(): boolean;
 };
 
 function createRpcResponseWriter(
@@ -85,6 +123,8 @@ function createRpcResponseWriter(
 ): ManagedResponseWriter {
   let sequence = 0n;
   let stale = false;
+  let ended = false;
+  let benignlyDisposed = false;
   let unsubscribeDisconnect: () => void = () => undefined;
 
   const dispose = (): void => {
@@ -98,6 +138,7 @@ function createRpcResponseWriter(
   };
 
   unsubscribeDisconnect = connection.onDisconnect(() => {
+    benignlyDisposed = true;
     dispose();
   });
 
@@ -111,10 +152,12 @@ function createRpcResponseWriter(
     try {
       await connection.send(MSG_RPC_RESPONSE, payload);
       if (isEnd) {
+        ended = true;
         dispose();
       }
     } catch (error) {
       if (isBenignShutdownError(error, connection)) {
+        benignlyDisposed = true;
         dispose();
         return;
       }
@@ -125,6 +168,7 @@ function createRpcResponseWriter(
   return {
     send,
     dispose,
+    needsTerminalWarning: () => !ended && !benignlyDisposed,
   };
 }
 
@@ -221,16 +265,20 @@ function createRpcIterator(
       throw abortError();
     }
 
-    if (failureReason !== undefined) {
-      throw failureReason;
-    }
-
+    // Frames pushed before a later failure are still deliverable and must
+    // drain first — only surface the failure once the buffer is empty, or a
+    // successfully received frame gets discarded in favor of the error that
+    // arrived after it.
     if (buffer.length > 0) {
       const value = buffer.shift();
       if (!value) {
         return { value: undefined, done: true };
       }
       return { value, done: false };
+    }
+
+    if (failureReason !== undefined) {
+      throw failureReason;
     }
 
     if (done) {
@@ -242,7 +290,13 @@ function createRpcIterator(
         clearPendingWait();
         done = true;
         cleanupPendingRpc();
-        reject(new RpcError("RPC call timeout", "TIMEOUT", RpcStatus.Timeout));
+        // Use the domain error-code namespace (matches what a broker-side
+        // timeout reports via rpcErrorCodeName/ErrCodeRpcTimeout below), not
+        // the wire status enum — RpcStatus.Timeout is a different numbering
+        // space, and mixing them made isRetryable() treat a client-local
+        // timeout inconsistently from a broker-reported one despite both
+        // sharing the same `.code` string.
+        reject(new RpcError("RPC call timeout", "TIMEOUT", ErrCodeRpcTimeout));
       }, timeoutMs);
       clearPendingNext = () => {
         clearTimeout(timer);
@@ -271,10 +325,6 @@ function createRpcIterator(
 
     if (frame === null) {
       return { value: undefined, done: true };
-    }
-
-    if (failureReason !== undefined) {
-      throw failureReason;
     }
 
     return { value: frame, done: false };
@@ -310,14 +360,45 @@ function createRpcIterator(
   };
 }
 
-export type RpcClient = ReturnType<typeof createRpcClient>;
+export interface RpcClient {
+  call(
+    route: string,
+    body: Uint8Array,
+    options?: RequestOptions,
+  ): Promise<AsyncIterableIterator<ResponseFrame>>;
+  registerWorker(
+    route: string,
+    handler: RpcHandler,
+    options?: RegisterWorkerOptions,
+  ): Promise<RpcSubscription>;
+}
 
-export function createRpcClient(connection: RpcConnectionPort) {
+export function createRpcClient(connection: RpcConnectionPort): RpcClient {
   const { requestFrame, requestReconnectFrame } = createDomainClient(connection);
   type PendingRpcEntry = { iterator: RpcIterator; correlationId: Uint8Array };
   const pendingRpcs = new Map<bigint, PendingRpcEntry>();
   const workers = new Map<string, RegisteredWorker>();
+  const workerMutationTails = new Map<string, Promise<void>>();
   let initialized = false;
+
+  const withWorkerMutation = async <T>(route: string, task: () => Promise<T>): Promise<T> => {
+    const previous = workerMutationTails.get(route) ?? Promise.resolve();
+    let release: () => void = () => undefined;
+    const current = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    workerMutationTails.set(route, current);
+
+    await previous;
+    try {
+      return await task();
+    } finally {
+      release();
+      if (workerMutationTails.get(route) === current) {
+        workerMutationTails.delete(route);
+      }
+    }
+  };
 
   const cleanupPendingRpc = (correlationKey: bigint, correlationId: Uint8Array): void => {
     if (!pendingRpcs.has(correlationKey)) {
@@ -340,15 +421,26 @@ export function createRpcClient(connection: RpcConnectionPort) {
       return;
     }
 
-    await restoreMapEntriesAtomically(workers, async (route, registration) => {
-      await registerWorkerInternal(
-        route,
-        registration.handler,
-        registration.options,
-        requestReconnectFrame,
-      );
-      return registration;
-    });
+    await restoreMapEntriesAtomically(
+      workers,
+      async (route, registration) => {
+        await registerWorkerInternal(
+          route,
+          registration.handler,
+          registration.options,
+          requestReconnectFrame,
+        );
+        return registration;
+      },
+      async (route) => {
+        parseStandardResponse(
+          await requestReconnectFrame(
+            MSG_RPC_UNSUBSCRIBE_WORKER,
+            RpcCodec.encodeUnsubscribeWorker(route),
+          ),
+        );
+      },
+    );
   });
 
   const call = async (
@@ -385,20 +477,20 @@ export function createRpcClient(connection: RpcConnectionPort) {
     handler: RpcHandler,
     options: Required<RegisterWorkerOptions>,
     request = requestFrame,
-  ): Promise<void> => {
+  ): Promise<RegisteredWorker> => {
     const payload = RpcCodec.encodeSubscribeWorker(route, options.maxConcurrency);
-    const response = await request(MSG_RPC_SUBSCRIBE_WORKER, payload);
-    const decoded = RpcCodec.decodeSubscribeWorkerResponse(response);
-
-    if (decoded.status !== RpcStatus.Ok) {
+    const parsed = parseStandardResponse(await request(MSG_RPC_SUBSCRIBE_WORKER, payload));
+    if (!parsed.success) {
       throw new RpcError(
-        `RPC SUBSCRIBE_WORKER failed: status ${decoded.status}`,
+        `RPC SUBSCRIBE_WORKER failed: ${parsed.error ?? "unknown error"}`,
         "SUBSCRIBE_FAILED",
-        decoded.status,
+        parsed.errorCode,
       );
     }
 
-    workers.set(route, { handler, options });
+    const registration = { handler, options };
+    workers.set(route, registration);
+    return registration;
   };
 
   const registerWorker = async (
@@ -406,32 +498,43 @@ export function createRpcClient(connection: RpcConnectionPort) {
     handler: RpcHandler,
     options?: RegisterWorkerOptions,
   ): Promise<RpcSubscription> => {
-    assertRpcRoute(route);
+    assertRpcRegistrationPattern(route);
     initRpcHandler();
     const normalizedOptions = normalizeRegisterWorkerOptions(options);
-    await registerWorkerInternal(route, handler, normalizedOptions);
+    const registration = await withWorkerMutation(route, async () => {
+      return await registerWorkerInternal(route, handler, normalizedOptions);
+    });
 
     const unsubscribeFn = async (registeredRoute: string) => {
-      await unregisterWorker(registeredRoute);
+      await unregisterWorker(registeredRoute, registration);
     };
 
     return createRpcSubscription(route, unsubscribeFn);
   };
 
-  const unregisterWorker = async (route: string): Promise<void> => {
-    workers.delete(route);
-
-    try {
-      const payload = RpcCodec.encodeUnsubscribeWorker(route);
-      const response = await requestFrame(MSG_RPC_UNSUBSCRIBE_WORKER, payload);
-      const decoded = RpcCodec.decodeUnsubscribeWorkerResponse(response);
-
-      if (decoded.status !== RpcStatus.Ok) {
+  const unregisterWorker = async (route: string, registration: RegisteredWorker): Promise<void> => {
+    await withWorkerMutation(route, async () => {
+      // A handle superseded by a newer registration no longer owns the wire
+      // route. Sending UNSUBSCRIBE_WORKER from that stale handle would remove
+      // the replacement on the broker while leaving it present locally.
+      if (workers.get(route) !== registration) {
         return;
       }
-    } catch {
-      return;
-    }
+
+      // Confirm the wire UNSUBSCRIBE_WORKER before dropping local tracking —
+      // deleting first would permanently orphan the worker locally when the
+      // wire request fails even though the broker may still consider it live.
+      const payload = RpcCodec.encodeUnsubscribeWorker(route);
+      const parsed = parseStandardResponse(await requestFrame(MSG_RPC_UNSUBSCRIBE_WORKER, payload));
+      if (!parsed.success) {
+        throw new RpcError(
+          `RPC UNSUBSCRIBE_WORKER failed: ${parsed.error ?? "unknown error"}`,
+          "UNSUBSCRIBE_FAILED",
+          parsed.errorCode,
+        );
+      }
+      workers.delete(route);
+    });
   };
 
   const initRpcHandler = (): void => {
@@ -503,7 +606,20 @@ export function createRpcClient(connection: RpcConnectionPort) {
   };
 
   const handleRpcRequest = (req: DecodedInboundRequest): void => {
-    const registration = workers.get(req.route);
+    let registration = workers.get(req.route);
+
+    if (!registration) {
+      let selectedPattern: string | undefined;
+      for (const [pattern, candidate] of workers) {
+        if (
+          routeMatchesPattern(req.route, pattern) &&
+          (selectedPattern === undefined || isMoreSpecificRpcPattern(pattern, selectedPattern))
+        ) {
+          selectedPattern = pattern;
+          registration = candidate;
+        }
+      }
+    }
 
     if (!registration) {
       return;
@@ -532,6 +648,15 @@ export function createRpcClient(connection: RpcConnectionPort) {
           // Best-effort error response.
         }
       } finally {
+        // A handler that settles without ever sending a terminal frame
+        // leaves the caller's iterator waiting until it hits the generic
+        // call timeout, with nothing pointing at the actual cause — warn
+        // here, with the route, so it's diagnosable instead of mysterious.
+        if (writer.needsTerminalWarning()) {
+          console.warn(
+            `[fitz] RPC worker handler for route "${req.route}" completed without sending a terminal response (isEnd: true); the caller will hang until the call times out.`,
+          );
+        }
         writer.dispose();
       }
     });
@@ -573,8 +698,6 @@ export function createRpcClient(connection: RpcConnectionPort) {
   };
 }
 
-export const RpcClient = createRpcClient;
-
 export * from "./types";
 
 function encodeRpcErrorBody(code: number, message: string): Uint8Array {
@@ -589,6 +712,15 @@ function assertRpcRoute(route: string): void {
   if (!isConcreteRouteShape(route, "rpc")) {
     throw new RpcError(
       `Invalid rpc route: ${route} (expected rpc://{realm}/{area}/{resource} or any other concrete rpc route, no empty segments or wildcards)`,
+      "INVALID_ROUTE",
+    );
+  }
+}
+
+function assertRpcRegistrationPattern(pattern: string): void {
+  if (!isRegistrationPatternShape(pattern, "rpc")) {
+    throw new RpcError(
+      `Invalid rpc worker pattern: ${pattern} (wildcards must be whole * or ** segments)`,
       "INVALID_ROUTE",
     );
   }

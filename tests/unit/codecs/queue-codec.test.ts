@@ -5,6 +5,7 @@
 import { describe, it, expect } from "vite-plus/test";
 import { QueueCodec } from "../../../src/domains/queue/codec";
 import { createBufferReader, createBufferWriter } from "../../../src/core/buffer";
+import { QueueError } from "../../../src/core/errors";
 import { testData } from "../helpers/test-utils";
 
 describe("QueueCodec", () => {
@@ -86,6 +87,7 @@ describe("QueueCodec", () => {
       expect(reader.readRoute()).toBe(route);
       expect(reader.readU64BE()).toBe(BigInt(ttlSecs));
       expect(reader.readU8()).toBe(0);
+      expect(reader.readU8()).toBe(0);
       expect(reader.isEOF()).toBe(true);
     });
 
@@ -100,6 +102,19 @@ describe("QueueCodec", () => {
       expect(reader.readU64BE()).toBe(BigInt(ttlSecs));
       expect(reader.readU8()).toBe(1);
       expect(reader.readU32BE()).toBe(10);
+      expect(reader.readU8()).toBe(0);
+      expect(reader.isEOF()).toBe(true);
+    });
+
+    it("should_encode_server_side_wait_seconds", () => {
+      const encoded = QueueCodec.encodeReserve("queue://acme/jobs/tasks", 30, 1, 5);
+      const reader = createBufferReader(encoded);
+      expect(reader.readRoute()).toBe("queue://acme/jobs/tasks");
+      expect(reader.readU64BE()).toBe(30n);
+      expect(reader.readU8()).toBe(1);
+      expect(reader.readU32BE()).toBe(1);
+      expect(reader.readU8()).toBe(1);
+      expect(reader.readU64BE()).toBe(5n);
       expect(reader.isEOF()).toBe(true);
     });
   });
@@ -117,7 +132,7 @@ describe("QueueCodec", () => {
       const response = writer.getBuffer();
 
       // Act
-      const decoded = QueueCodec.decodeReserveResponse(response);
+      const decoded = QueueCodec.decodeReserveResponse(response, "queue://prod/app/tasks");
 
       // Assert
       expect(decoded.status).toBe(0);
@@ -126,15 +141,35 @@ describe("QueueCodec", () => {
         throw new Error("Expected reserve items");
       }
       expect(items).toHaveLength(1);
+      expect(items[0].route).toBe("queue://prod/app/tasks");
       expect(items[0].id).toBe(100n);
       expect(items[0].token).toBe(777n);
     });
 
+    it("should_reject_wildcard_route_in_reserve_response", () => {
+      const writer = createBufferWriter(128);
+      writer.writeU8(0);
+      writer.writeU32BE(1);
+      writer.writeRoute("queue://*/app/*");
+      writer.writeU64BE(100n);
+      writer.writeU64BE(777n);
+      writer.writeU32BE(0);
+
+      try {
+        QueueCodec.decodeReserveResponse(writer.getBuffer(), "queue://*/app/*");
+        throw new Error("expected decode to fail");
+      } catch (error) {
+        expect(error).toBeInstanceOf(QueueError);
+        expect((error as QueueError).code).toBe("QUEUE_RESERVE_INVALID_RESPONSE");
+      }
+    });
+
     it("should_decode_reserve_error_response_with_error_code", () => {
       // Arrange
-      const writer = createBufferWriter(8);
+      const writer = createBufferWriter(32);
       writer.writeU8(1); // status = error
-      writer.writeU8(4); // QueueNotFound
+      writer.writeU32BE(4); // QueueNotFound
+      writer.writeString("Queue not found");
       const response = writer.getBuffer();
 
       // Act
@@ -143,6 +178,7 @@ describe("QueueCodec", () => {
       // Assert
       expect(decoded.status).toBe(1);
       expect(decoded.errorCode).toBe(4);
+      expect(decoded.errorMessage).toBe("Queue not found");
     });
 
     it("should_decode_reserve_response_no_item", () => {
@@ -223,6 +259,7 @@ describe("QueueCodec", () => {
       // Arrange
       const writer = createBufferWriter(16);
       writer.writeU8(0); // status
+      writer.writeU8(1); // has subId
       writer.writeU64BE(555n); // subId
       const response = writer.getBuffer();
 
@@ -232,6 +269,22 @@ describe("QueueCodec", () => {
       // Assert
       expect(decoded.status).toBe(0);
       expect(decoded.subId).toBe(555n);
+    });
+
+    it("should_decode_plain_subscription_error", () => {
+      // Arrange
+      const message = "x".repeat(4006);
+      const writer = createBufferWriter(4096);
+      writer.writeU8(1);
+      writer.writeString(message);
+
+      // Act
+      const decoded = QueueCodec.decodeSubscribeResponse(writer.getBuffer());
+
+      // Assert
+      expect(decoded.status).toBe(1);
+      expect(decoded.errorCode).toBeUndefined();
+      expect(decoded.errorMessage).toBe(message);
     });
   });
 });

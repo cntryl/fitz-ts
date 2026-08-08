@@ -24,7 +24,7 @@ Caller-triggered abort during `connect({ signal })` fails the attempt without
 marking the client as auth rejected. A later `connect()` attempt may be made on
 the same client instance.
 
-After the client has established at least one authenticated session, transport loss moves it back through `RECONNECTING` and then `AUTHENTICATING` unless `reconnect.enabled` is set to `false`. Reconnect listeners are replayed during the reconnect authentication flow before the client reports `AUTHENTICATED`, so notice, queue, lease, and stream subscriptions are restored and RPC workers are re-registered before the connection is considered fully ready again.
+After the client has established at least one authenticated session, transport loss moves it back through `RECONNECTING` and then `AUTHENTICATING` unless `reconnect.enabled` is set to `false`. Reconnect listeners are replayed during the reconnect authentication flow before the client reports `AUTHENTICATED`, so KV, notice, queue, lease, schedule, and stream subscriptions can be restored and RPC workers can be re-registered before the connection is considered fully ready again. Listener failures are reported through observability and isolated from the connection state so one domain cannot prevent the reconnected session from becoming usable.
 
 If application code calls `connect()` during that recovery window, the call
 waits for the active reconnect path to finish. It does not start a second dial,
@@ -117,7 +117,7 @@ Async handler controls:
 Example:
 
 ```typescript
-import { Client, type FitzLogger, type FitzMeter, type FitzTracer } from "@cntryl/fitz";
+import { createClient, type FitzLogger, type FitzMeter, type FitzTracer } from "@cntryl/fitz";
 
 const logger: FitzLogger = {
   log(level, event, fields) {
@@ -152,7 +152,7 @@ const meter: FitzMeter = {
   },
 };
 
-const client = Client({
+const client = createClient({
   url: "ws://localhost:4090/ws",
   reconnect: { enabled: true },
   observability: {

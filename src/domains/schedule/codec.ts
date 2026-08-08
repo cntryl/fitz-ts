@@ -16,7 +16,7 @@ import {
   ScheduleDeliveryMode,
   ScheduleCreateResponse,
   ScheduleCancelResponse,
-  ScheduleListResponse,
+  ScheduleListPage,
   ScheduleSubscribeResponse,
   ScheduleUnsubscribeResponse,
 } from "./types";
@@ -58,8 +58,12 @@ export const ScheduleCodec = {
   decodeCreateResponse(data: Uint8Array): ScheduleCreateResponse {
     const reader = createBufferReader(data);
     let scheduleId: string | undefined;
-    if (!reader.isEOF() && reader.readU8() === 1) {
+    if (!reader.isEOF()) {
+      if (reader.readU8() !== 1) {
+        throw new Error("CREATE response has invalid schedule_id flag");
+      }
       scheduleId = reader.readString();
+      if (!reader.isEOF()) throw new Error("CREATE response has trailing bytes");
     }
 
     return { scheduleId };
@@ -77,58 +81,43 @@ export const ScheduleCodec = {
    * Decode CANCEL response
    * Success payload: empty
    */
-  decodeCancelResponse(_data: Uint8Array): ScheduleCancelResponse {
+  decodeCancelResponse(data: Uint8Array): ScheduleCancelResponse {
+    if (data.length !== 0) throw new Error("CANCEL response has trailing bytes");
     return {};
   },
 
-  /**
-   * Encode LIST request
-   * Payload: [optional offset: u64][optional limit: u64]
-   */
-  encodeList(offset: bigint = 0n, limit: bigint = 0n): Uint8Array {
-    const buffer = new Uint8Array(18);
-    let bufferOffset = 0;
-
-    buffer[bufferOffset++] = 1;
-    bufferOffset = writeU64BEAt(buffer, bufferOffset, offset);
-    buffer[bufferOffset++] = 1;
-    writeU64BEAt(buffer, bufferOffset, limit);
+  encodeListPage(offsetValue?: bigint, limit?: bigint): Uint8Array {
+    if (offsetValue !== undefined && offsetValue < 0n)
+      throw new Error("schedule LIST offset must be non-negative");
+    if (limit !== undefined && (limit < 0n || limit > 1000n))
+      throw new Error("schedule LIST limit must be between 0 and 1000");
+    const buffer = new Uint8Array(
+      1 + (offsetValue === undefined ? 0 : 8) + 1 + (limit === undefined ? 0 : 8),
+    );
+    let offset = 0;
+    buffer[offset++] = offsetValue === undefined ? 0 : 1;
+    if (offsetValue !== undefined) offset = writeU64BEAt(buffer, offset, offsetValue);
+    buffer[offset++] = limit === undefined ? 0 : 1;
+    if (limit !== undefined) writeU64BEAt(buffer, offset, limit);
     return buffer;
   },
 
-  /**
-   * Decode LIST response
-   * Success payload: [total_count: u64][has_entry: u8]...[route: string][cron: string][delivery_mode: u8][payload: bytes when has_entry=1]
-   */
-  decodeListResponse(data: Uint8Array): ScheduleListResponse {
+  decodeListPage(data: Uint8Array): ScheduleListPage {
     const reader = createBufferReader(data);
-    if (reader.remainingBytes() < 8) {
-      throw new Error("LIST response missing total_count");
-    }
     const totalCount = reader.readU64BE();
     const entries: ScheduleEntry[] = [];
-
-    while (!reader.isEOF()) {
-      const hasEntry = reader.readU8();
-      if (hasEntry === 0) {
-        break;
-      }
-
+    while (true) {
+      const sentinel = reader.readU8();
+      if (sentinel === 0) break;
+      if (sentinel !== 1) throw new Error("LIST_PAGE response has invalid entry sentinel");
       const route = reader.readString();
       const cron = reader.readString();
       const deliveryMode = decodeDeliveryMode(reader.readU8());
-      const payloadBytes = reader.readBytes(reader.readU32BE());
-
-      entries.push({
-        id: route, // Route as identity
-        route,
-        cron,
-        deliveryMode,
-        payload: payloadBytes,
-      });
+      const payload = reader.readBytes(reader.readU32BE());
+      entries.push({ id: route, route, cron, deliveryMode, payload });
     }
-
-    return { totalCount, entries };
+    if (!reader.isEOF()) throw new Error("LIST_PAGE response has trailing bytes");
+    return { entries, totalCount };
   },
 
   /**
@@ -157,7 +146,11 @@ export const ScheduleCodec = {
       throw new Error("SUBSCRIBE response too short for subscription_id");
     }
 
-    return { subId: reader.readU64BE() };
+    const subId = reader.readU64BE();
+    if (!reader.isEOF()) {
+      throw new Error("SUBSCRIBE response has trailing bytes");
+    }
+    return { subId };
   },
 
   /**
@@ -172,13 +165,14 @@ export const ScheduleCodec = {
    * Decode UNSUBSCRIBE response
    * Success payload: empty
    */
-  decodeUnsubscribeResponse(_data: Uint8Array): ScheduleUnsubscribeResponse {
+  decodeUnsubscribeResponse(data: Uint8Array): ScheduleUnsubscribeResponse {
+    if (data.length !== 0) throw new Error("UNSUBSCRIBE response has trailing bytes");
     return {};
   },
 
   /**
    * Decode NOTIFY notification (MSG_SCHEDULE_NOTIFY 705)
-   * Payload: [subscription_id: u64][payload: bytes]
+   * Payload: [subscription_id: u64][exact_route: string][payload: bytes]
    */
   decodeNotification(payload: Uint8Array): DecodedScheduleNotification {
     if (payload.length < 12) {
@@ -187,6 +181,7 @@ export const ScheduleCodec = {
 
     const reader = createBufferReader(payload);
     const subId = reader.readU64BE();
+    const route = reader.readString();
     const payloadLength = reader.readU32BE();
     if (reader.remainingBytes() < payloadLength) {
       throw new Error("SCHEDULE_NOTIFY payload truncated");
@@ -197,18 +192,18 @@ export const ScheduleCodec = {
       throw new Error("SCHEDULE_NOTIFY payload has trailing bytes");
     }
 
-    return { subId, payload: notificationPayload };
+    return { subId, route, payload: notificationPayload };
   },
 };
 
 function encodeDeliveryMode(deliveryMode: ScheduleDeliveryMode): number {
-  if (deliveryMode === "broadcast") return 0;
-  if (deliveryMode === "single") return 1;
+  if (deliveryMode === "Broadcast") return 0;
+  if (deliveryMode === "Single") return 1;
   throw new Error(`Invalid schedule delivery mode: ${String(deliveryMode)}`);
 }
 
 function decodeDeliveryMode(value: number): ScheduleDeliveryMode {
-  if (value === 0) return "broadcast";
-  if (value === 1) return "single";
+  if (value === 0) return "Broadcast";
+  if (value === 1) return "Single";
   throw new Error(`Invalid schedule delivery mode byte: ${value}`);
 }

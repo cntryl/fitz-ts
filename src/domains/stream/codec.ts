@@ -15,6 +15,8 @@ import {
   type BufferReader,
   type BufferWriter,
 } from "../../core/buffer";
+import { StreamError } from "../../core/errors";
+import { isRouteShape, isStreamSelectorShape } from "../_routes";
 import {
   StreamCommitMode,
   StreamCommitPayload,
@@ -54,16 +56,17 @@ export const StreamCodec = {
     return buffer;
   },
 
-  /**
-   * Decode BEGIN response
-   * Payload: [status: u8][has_session_id: u8][session_id?: u64][data: bytes]
-   */
+  /** Decode BEGIN response: [status][session_id] on success. */
   decodeBeginResponse(payload: Uint8Array): {
     status: number;
     sessionId?: bigint;
+    errorCode?: number;
+    errorMessage?: string;
   } {
-    const decoded = this.decodeWrappedResponse(payload);
-    return { status: decoded.status, sessionId: decoded.sessionId };
+    const decoded = this.decodePlainWrappedResponse(payload);
+    if (decoded.status !== 0) return decoded;
+    if (decoded.data.length < 8) return { status: decoded.status };
+    return { status: decoded.status, sessionId: createBufferReader(decoded.data).readU64BE() };
   },
 
   /**
@@ -114,20 +117,26 @@ export const StreamCodec = {
     return buffer;
   },
 
-  /**
-   * Decode APPEND response
-   * Payload: [status: u8][has_session_id: u8][session_id?: u64][data: bytes]
-   */
+  /** Decode APPEND response: [status][assigned_offset] on success. */
   decodeAppendResponse(payload: Uint8Array): {
     status: number;
     offset?: bigint;
+    errorCode?: number;
+    errorMessage?: string;
   } {
-    const decoded = this.decodeWrappedResponse(payload);
-    if (decoded.status !== 0 || decoded.data.length < 8) {
-      return { status: decoded.status };
+    const decoded = this.decodePlainWrappedResponse(payload);
+    if (decoded.status !== 0 || decoded.data.length < 12) {
+      return decoded;
     }
 
     const reader = createBufferReader(decoded.data);
+    const length = reader.readU32BE();
+    if (length !== 8 || reader.remainingBytes() !== length) {
+      throw new StreamError(
+        "APPEND response has invalid payload length",
+        "APPEND_INVALID_RESPONSE",
+      );
+    }
     return { status: decoded.status, offset: reader.readU64BE() };
   },
 
@@ -146,10 +155,12 @@ export const StreamCodec = {
    * Decode COMMIT response
    * Payload: [status: u8]
    */
-  decodeCommitResponse(payload: Uint8Array): { status: number } {
-    const reader = createBufferReader(payload);
-    const status = reader.readU8();
-    return { status };
+  decodeCommitResponse(payload: Uint8Array): {
+    status: number;
+    errorCode?: number;
+    errorMessage?: string;
+  } {
+    return this.decodeWrappedResponse(payload);
   },
 
   /**
@@ -166,15 +177,17 @@ export const StreamCodec = {
    * Decode ROLLBACK response
    * Payload: [status: u8]
    */
-  decodeRollbackResponse(payload: Uint8Array): { status: number } {
-    const reader = createBufferReader(payload);
-    const status = reader.readU8();
-    return { status };
+  decodeRollbackResponse(payload: Uint8Array): {
+    status: number;
+    errorCode?: number;
+    errorMessage?: string;
+  } {
+    return this.decodeWrappedResponse(payload);
   },
 
   /**
    * Encode READ request
-   * Payload: [route: string][start_offset: u64][limit: u64][has_max_bytes: u8][max_bytes?: u64][has_filter: u8][filter_length?: u32_be][filter?: custom]
+   * Payload: [route][start][limit][optional max_bytes][optional filter][optional cursor_fingerprint][optional captured_watermark]
    */
   encodeRead(
     route: string,
@@ -201,7 +214,11 @@ export const StreamCodec = {
         1 +
         (hasMaxBytes ? 8 : 0) +
         1 +
-        (filterBytes ? 4 + filterBytes.length : 0),
+        (filterBytes ? 4 + filterBytes.length : 0) +
+        1 +
+        (options?.cursorFingerprint === undefined ? 0 : 8) +
+        1 +
+        (options?.capturedWatermark === undefined ? 0 : 8),
     );
     let offset = 0;
 
@@ -218,7 +235,14 @@ export const StreamCodec = {
     if (filterBytes) {
       offset = writeU32BEAt(buffer, offset, filterBytes.length);
       buffer.set(filterBytes, offset);
+      offset += filterBytes.length;
     }
+    buffer[offset++] = options?.cursorFingerprint === undefined ? 0 : 1;
+    if (options?.cursorFingerprint !== undefined)
+      offset = writeU64BEAt(buffer, offset, options.cursorFingerprint);
+    buffer[offset++] = options?.capturedWatermark === undefined ? 0 : 1;
+    if (options?.capturedWatermark !== undefined)
+      writeU64BEAt(buffer, offset, options.capturedWatermark);
     return buffer;
   },
 
@@ -226,33 +250,73 @@ export const StreamCodec = {
    * Decode READ response
    * Payload: [status: u8][has_session_id: u8][session_id?: u64][data: bytes]
    */
-  decodeReadResponse(payload: Uint8Array): {
+  decodeReadResponse(
+    payload: Uint8Array,
+    selector: string,
+  ): {
     status: number;
     items: StreamReadItem[];
     cursor?: StreamReadCursor;
+    errorCode?: number;
+    errorMessage?: string;
   } {
     const decoded = this.decodeWrappedResponse(payload);
     if (decoded.status !== 0) {
-      return { status: decoded.status, items: [] };
+      return { ...decoded, items: [] };
+    }
+
+    if (!isStreamSelector(selector)) {
+      throw new StreamError(
+        "READ response requires a canonical stream selector",
+        "READ_INVALID_RESPONSE",
+      );
     }
 
     if (decoded.data.length === 0) {
       return { status: decoded.status, items: [] };
     }
 
-    const reader = createBufferReader(decoded.data);
+    const envelope = createBufferReader(decoded.data);
+    if (envelope.readU8() !== 0) {
+      throw new StreamError("READ response has invalid session flag", "READ_INVALID_RESPONSE");
+    }
+    const dataLength = envelope.readU32BE();
+    if (dataLength !== envelope.remainingBytes()) {
+      throw new StreamError("READ response has invalid payload length", "READ_INVALID_RESPONSE");
+    }
+    const reader = createBufferReader(envelope.readBytes(dataLength));
+    const extended = isGlobalSelector(selector);
     const count = reader.readU32BE();
     const items: StreamReadItem[] = [];
 
     for (let i = 0; i < count; i++) {
-      items.push(this.decodeStreamReadItem(reader));
+      const concreteRoute = reader.readRoute();
+      if (!isRouteShape(concreteRoute, "stream", 3)) {
+        throw new StreamError(
+          `READ response contains invalid concrete stream route: ${concreteRoute}`,
+          "READ_INVALID_RESPONSE",
+        );
+      }
+      items.push(this.decodeStreamReadItem(reader, concreteRoute, extended));
     }
 
+    const hasGlobal = extended;
+    const lastResourceOffset = reader.readU64BE();
+    const lastAreaOffset = reader.readOptionalU64() ?? undefined;
+    const lastRealmOffset = reader.readOptionalU64() ?? undefined;
+    const lastGlobalOffset = extended ? (reader.readOptionalU64() ?? undefined) : undefined;
+    const hasMoreFlag = reader.readU8();
+    if (hasMoreFlag !== 0 && hasMoreFlag !== 1) {
+      throw new StreamError("READ response has an invalid hasMore flag", "READ_INVALID_RESPONSE");
+    }
     const cursor: StreamReadCursor = {
-      lastResourceOffset: reader.readU64BE(),
-      lastAreaOffset: reader.readOptionalU64() ?? undefined,
-      lastRealmOffset: reader.readOptionalU64() ?? undefined,
-      hasMore: reader.readU8() === 1,
+      lastResourceOffset,
+      lastAreaOffset,
+      lastRealmOffset,
+      lastGlobalOffset,
+      hasMore: hasMoreFlag === 1,
+      cursorFingerprint: hasGlobal ? (reader.readOptionalU64() ?? undefined) : undefined,
+      capturedWatermark: hasGlobal ? (reader.readOptionalU64() ?? undefined) : undefined,
     };
 
     if (!reader.isEOF()) {
@@ -274,17 +338,25 @@ export const StreamCodec = {
    * Decode LAST response
    * Payload: [status: u8][has_session_id: u8][session_id?: u64][data: bytes]
    */
-  decodeLastResponse(payload: Uint8Array): {
+  decodeLastResponse(
+    payload: Uint8Array,
+    route: string,
+  ): {
     status: number;
     record?: StreamRecord;
+    errorCode?: number;
+    errorMessage?: string;
   } {
     const decoded = this.decodeWrappedResponse(payload);
     if (decoded.status !== 0 || decoded.data.length === 0) {
-      return { status: decoded.status };
+      return decoded;
     }
 
     const reader = createBufferReader(decoded.data);
-    const record = this.decodeStreamRecord(reader);
+    const record = this.decodeStreamRecord(reader, route, false);
+    if (!reader.isEOF()) {
+      throw new StreamError("LAST response has trailing bytes", "LAST_INVALID_RESPONSE");
+    }
 
     return { status: decoded.status, record };
   },
@@ -304,10 +376,12 @@ export const StreamCodec = {
   decodeMetadataResponse(payload: Uint8Array): {
     status: number;
     metadata?: StreamMetadata;
+    errorCode?: number;
+    errorMessage?: string;
   } {
     const decoded = this.decodeWrappedResponse(payload);
     if (decoded.status !== 0 || decoded.data.length === 0) {
-      return { status: decoded.status };
+      return decoded;
     }
 
     const reader = createBufferReader(decoded.data);
@@ -341,33 +415,10 @@ export const StreamCodec = {
     return writer.getBufferView();
   },
 
-  decodeSubscribeResponse(payload: Uint8Array): {
-    status: number;
-    subId?: bigint;
-  } {
-    const reader = createBufferReader(payload);
-    const status = reader.readU8();
-    if (status !== 0 || reader.isEOF()) {
-      return { status };
-    }
-
-    const hasValue = reader.readU8();
-    if (hasValue !== 1 || reader.isEOF()) {
-      return { status };
-    }
-
-    return { status, subId: reader.readU64BE() };
-  },
-
   encodeUnsubscribe(pattern: string): Uint8Array {
     const writer = createBufferWriter(128);
     writer.writeRoute(pattern);
     return writer.getBufferView();
-  },
-
-  decodeUnsubscribeResponse(payload: Uint8Array): { status: number } {
-    const reader = createBufferReader(payload);
-    return { status: reader.readU8() };
   },
 
   decodeNotification(payload: Uint8Array): {
@@ -396,20 +447,23 @@ export const StreamCodec = {
     };
   },
 
-  decodeStreamRecord(reader: BufferReader): StreamRecord {
+  decodeStreamRecord(reader: BufferReader, route: string, extended = false): StreamRecord {
     const offset = reader.readU64BE();
     const areaOffset = reader.readOptionalU64();
     const realmOffset = reader.readOptionalU64();
+    const globalOffset = extended ? reader.readOptionalU64() : undefined;
     const body = reader.readBytes(reader.readU32BE());
     const metadata = this.readOptionalBytes(reader);
     const timestamp = reader.readU64BE();
 
     return {
+      route,
       offset,
       timestamp,
       body,
       areaOffset,
       realmOffset,
+      globalOffset,
       metadata,
     };
   },
@@ -418,20 +472,26 @@ export const StreamCodec = {
     return items.flatMap((item) => (item.kind === "event" ? [item.record] : []));
   },
 
-  decodeStreamReadItem(reader: BufferReader): StreamReadItem {
+  decodeStreamReadItem(reader: BufferReader, route: string, extended = false): StreamReadItem {
     const tag = reader.readU8();
     switch (tag) {
       case 0:
-        return { kind: "event", record: this.decodeStreamRecord(reader) };
+        return {
+          kind: "event",
+          route,
+          record: this.decodeStreamRecord(reader, route, extended),
+        };
       case 1:
         return {
           kind: "filtered",
+          route,
           offset: reader.readU64BE(),
           reason: this.decodeStreamFilteredReason(reader),
         };
       case 2:
         return {
           kind: "filtered_range",
+          route,
           fromOffset: reader.readU64BE(),
           toOffset: reader.readU64BE(),
           reason: this.decodeStreamFilteredReason(reader),
@@ -471,34 +531,41 @@ export const StreamCodec = {
     status: number;
     sessionId?: bigint;
     data: Uint8Array;
+    errorCode?: number;
+    errorMessage?: string;
   } {
     const reader = createBufferReader(payload);
     const status = reader.readU8();
     if (status !== 0) {
-      return { status, data: new Uint8Array(0) };
+      if (reader.remainingBytes() < 8) return { status, data: new Uint8Array(0) };
+      const errorCode = reader.readU32BE();
+      const errorMessage = reader.readString();
+      return { status, data: new Uint8Array(0), errorCode, errorMessage };
     }
+    return { status, data: reader.remaining() };
+  },
 
-    let sessionId: bigint | undefined;
-    if (!reader.isEOF()) {
-      const hasSessionId = reader.readU8();
-      if (hasSessionId === 1 && reader.remainingBytes() >= 8) {
-        sessionId = reader.readU64BE();
-      }
+  decodePlainWrappedResponse(payload: Uint8Array): {
+    status: number;
+    data: Uint8Array;
+    errorMessage?: string;
+  } {
+    const reader = createBufferReader(payload);
+    const status = reader.readU8();
+    if (status !== 0) {
+      return { status, data: new Uint8Array(0), errorMessage: reader.readString() };
     }
-
-    if (reader.isEOF()) {
-      return { status, sessionId, data: new Uint8Array(0) };
-    }
-
-    const dataLength = reader.readU32BE();
-    const data = reader.readBytes(dataLength);
-    if (!reader.isEOF()) {
-      throw new Error("wrapped response has trailing bytes");
-    }
-
-    return { status, sessionId, data };
+    return { status, data: reader.remaining() };
   },
 };
+
+export function isGlobalSelector(selector: string): boolean {
+  return selector === "stream://**" || selector === "stream://*/*/*";
+}
+
+function isStreamSelector(selector: string): boolean {
+  return isStreamSelectorShape(selector);
+}
 
 function encodeStreamFilterSet(filter: StreamFilterSet, writer: BufferWriter): void {
   writer.writeU8(0);

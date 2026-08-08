@@ -4,7 +4,7 @@
  */
 
 import type { DisconnectListenerPort, RequestPort } from "../base";
-import { LeaseError } from "../../core/errors";
+import { FitzError, LeaseError } from "../../core/errors";
 
 /**
  * Change notification when a lease is released or expires
@@ -16,7 +16,7 @@ export interface ChangeNotification {
 /**
  * Handler for lease change notifications
  */
-export type ChangeHandler = (notif: ChangeNotification) => Promise<void>;
+export type ChangeHandler = (notif: ChangeNotification) => void | Promise<void>;
 
 /**
  * Active lease change subscription
@@ -24,17 +24,19 @@ export type ChangeHandler = (notif: ChangeNotification) => Promise<void>;
 export type LeaseSubscription = ReturnType<typeof createLeaseSubscription>;
 
 export function createLeaseSubscription(
-  subId: bigint,
-  pattern: string,
-  unsubscribeFn: (subId: bigint) => Promise<void>,
+  getSubId: () => bigint,
+  route: string,
+  unsubscribeFn: () => Promise<void>,
 ) {
   const unsubscribe = async (): Promise<void> => {
-    await unsubscribeFn(subId);
+    await unsubscribeFn();
   };
 
   return {
-    subId,
-    pattern,
+    get subId(): bigint {
+      return getSubId();
+    },
+    route,
     unsubscribe,
   };
 }
@@ -82,7 +84,7 @@ export function createLease(
       try {
         const requestPayload = LeaseCodec.encodeExtend(route, currentToken, ttlSecs);
         const response = await connection.request(MSG_LEASE_RENEW, requestPayload, signal);
-        const data = assertSuccess(response, "EXTEND");
+        const data = LeaseCodec.decodeSuccessResponse(response, "EXTEND");
         if (!data || data.length < 8) {
           throw new LeaseError("EXTEND response missing fencing token", "EXTEND_INVALID_RESPONSE");
         }
@@ -104,7 +106,7 @@ export function createLease(
       unsubscribeDisconnect();
       const payload = LeaseCodec.encodeRelease(route, currentToken);
       const response = await connection.request(MSG_LEASE_RELEASE, payload, signal);
-      assertSuccess(response, "RELEASE");
+      LeaseCodec.decodeSuccessResponse(response, "RELEASE");
     });
 
   const getExpiry = (): bigint => currentExpiry;
@@ -121,8 +123,13 @@ export function createLease(
  */
 export interface AcquireResponse {
   token: bigint;
-  responseType: 0 | 1;
+  responseType: 0 | 1 | 2 | 3;
   expiresAt?: bigint;
+}
+
+export interface LeaseAcquireOptions {
+  waitSeconds?: number;
+  signal?: AbortSignal;
 }
 
 /**
@@ -142,6 +149,8 @@ export interface LeaseInfo {
  */
 export interface QueryResponse {
   status: number;
+  errorMessage?: string;
+  errorCode?: number;
   isHeld?: boolean;
   owner?: string;
   token?: bigint;
@@ -177,14 +186,21 @@ export enum LeaseStatus {
 
 export interface WithLeaseOptions {
   waitForAvailability?: boolean;
+  waitSeconds?: number;
   signal?: AbortSignal;
 }
 
-export class LeaseLifecycleError extends Error {
+/**
+ * Represents a combination of failures across a withLease() invocation's
+ * lifecycle (lease loss, callback failure, release failure) rather than a
+ * single domain-status code, so it's a standalone FitzError subclass with
+ * its own code prefix rather than a LeaseError subclass.
+ */
+export class LeaseLifecycleError extends FitzError {
   readonly causes: readonly unknown[];
 
   constructor(message: string, causes: readonly unknown[]) {
-    super(message);
+    super(message, "LEASE_LIFECYCLE_MULTIPLE_FAILURES", undefined, { causes });
     this.name = "LeaseLifecycleError";
     this.causes = causes;
     Object.setPrototypeOf(this, LeaseLifecycleError.prototype);
@@ -193,6 +209,5 @@ export class LeaseLifecycleError extends Error {
 
 // Import needed types for Lease class methods
 import { createBufferReader } from "../../core/buffer";
-import { assertSuccess } from "../../protocol/response";
 import { MSG_LEASE_RENEW, MSG_LEASE_RELEASE } from "../../frame/types";
 import { LeaseCodec } from "./codec";

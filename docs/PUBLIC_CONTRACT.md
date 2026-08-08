@@ -29,10 +29,20 @@ contractual.
 - Calling `connect()` while the client is already connecting or reconnecting
   waits for that in-flight lifecycle. It does not create a second transport or
   replace cached domain clients.
-- Reconnect replays notice, queue, lease, schedule, and stream subscriptions.
+- Reconnect replays KV, notice, queue, lease, schedule, and stream subscriptions.
 - Reconnect re-registers RPC workers before reporting `AUTHENTICATED`.
 - In-flight request or iterator work from the pre-disconnect connection is
   failed; callers must reacquire fresh handles after reconnect.
+- Restoring subscriptions/workers is best-effort per entry: if any single
+  KV/notice/queue/lease/schedule/stream subscription or RPC worker fails to
+  restore, the client still proceeds to `AUTHENTICATED` with the remaining
+  entries restored — it does not fail the whole reconnect, and it does not
+  retry that entry on its own. This is a **must-handle contract point, not an
+  edge case**: a caller that needs every registration reinstated has to listen
+  for the `reconnect_restore_failed` lifecycle event (and/or the
+  `fitz.connection.reconnect_restore_failed` observability log) and
+  re-register the affected entry itself. Silently assuming reconnect always
+  fully restores prior state will miss this failure mode.
 
 ## Heartbeats And Wake Gates
 
@@ -66,6 +76,42 @@ contractual.
   subscription and must not duplicate broker-side registration.
 - `QueueItem`, `Lease`, `KvTransaction`, and `StreamSession` handles from the
   pre-disconnect session are stale after reconnect and fail fast.
+- `lease.acquire()` and `lease.withLease()` calls are serialized per client
+  instance across every route, not just per-route. This follows from the
+  protocol: a deferred ACQUIRE completion notification carries no
+  correlation id, only FIFO arrival order, so a second `acquire()` for a
+  completely unrelated route cannot even send its request until the prior
+  call's full lifecycle (including any deferred wait) has resolved.
+
+## Subscription Registrations
+
+- KV, Queue, Stream, Notice, RPC worker, and Schedule registrations accept
+  exact routes and whole-segment `*` or `**` patterns, including wildcard
+  realms. Partial wildcards, empty segments, and wrong schemes are rejected.
+- KV, Queue, and Stream patterns must be capable of matching three concrete
+  segments; Schedule patterns must match four; Notice and RPC have flexible
+  depth.
+- The broker permits 128 wildcard registrations per domain and session. Exact
+  registrations do not count toward the cap, and duplicate original strings
+  are idempotent.
+- Lease subscriptions accept only an exact
+  `lease://realm/area/resource` route.
+- Every notification carries its exact concrete route. Queue availability
+  notifications also carry ready, delayed, and inflight counts.
+- Queue reserve accepts general whole-segment patterns capable of matching three
+  segments. Stream read and subscribe accept the complete documented ten-shape
+  selector matrix; Stream last is concrete-route only. Every reserved Queue item and every Stream read or
+  last item carries the exact concrete matched route; Stream event records carry
+  it as well. Route-less reserve/read/last responses are not supported. If any item
+  contains an invalid concrete route, the entire response fails closed; the
+  client never returns a partial reservation or read batch.
+
+Stream READ/SUBSCRIBE use the finite ten-shape selector matrix (including
+realm/resource and global filters), with only `realm/**` and `stream://**` as
+canonical aliases. Global READ cursors carry optional `lastGlobalOffset`,
+`cursorFingerprint`, and `capturedWatermark`; continuation sends the latter
+two values back as optional u64 fields. Schedule LIST is message 702 and uses
+optional offset/limit fields with a `totalCount` response.
 
 ## Packaging
 

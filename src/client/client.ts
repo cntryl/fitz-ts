@@ -12,5 +12,3 @@ export type Client = CoreClient<ClientConfig>;
 export function createClient(config: ClientConfig): Client {
   return createClientWithTransport(config, createNodeTransport);
 }
-
-export const Client = createClient;

@@ -5,7 +5,13 @@
 
 import type { DisconnectListenerPort, RequestPort } from "../base";
 import { StreamCodec } from "./codec";
-import { StreamAppendOptions, StreamCommitMode, StreamSession, StreamStatus } from "./types";
+import {
+  StreamAppendOptions,
+  StreamCommitMode,
+  StreamSession,
+  StreamStatus,
+  StreamStatusNames,
+} from "./types";
 import { StreamError } from "../../core/errors";
 import { MSG_STREAM_APPEND, MSG_STREAM_COMMIT, MSG_STREAM_ROLLBACK } from "../../frame/types";
 import { formatStatusName } from "../internal/status";
@@ -28,23 +34,17 @@ export function createStreamSession(
     }
   };
 
-  const checkStatus = (status: number, operation: string): void => {
-    if (status === StreamStatus.Ok) {
+  const checkStatus = (
+    response: { status: number; errorCode?: number; errorMessage?: string },
+    operation: string,
+  ): void => {
+    if (response.status === StreamStatus.Ok) {
       return;
     }
 
-    const statusNames: Record<number, string> = {
-      [StreamStatus.StreamNotFound]: "StreamNotFound",
-      [StreamStatus.OffsetOutOfRange]: "OffsetOutOfRange",
-      [StreamStatus.InvalidOffset]: "InvalidOffset",
-      [StreamStatus.StreamFull]: "StreamFull",
-      [StreamStatus.SessionNotFound]: "SessionNotFound",
-      [StreamStatus.SessionClosed]: "SessionClosed",
-      [StreamStatus.ExpectedOffsetMismatch]: "ExpectedOffsetMismatch",
-    };
-
-    const statusName = formatStatusName(status, statusNames);
-    throw new StreamError(`${operation} failed: ${statusName}`, statusName, status);
+    const code = response.errorCode ?? response.status;
+    const statusName = response.errorMessage ?? formatStatusName(code, StreamStatusNames);
+    throw new StreamError(`${operation} failed: ${statusName}`, operation, code);
   };
 
   const append = async (
@@ -66,7 +66,7 @@ export function createStreamSession(
     const response = await connection.request(MSG_STREAM_APPEND, payload, requestSignal);
     const decoded = StreamCodec.decodeAppendResponse(response);
 
-    checkStatus(decoded.status, "APPEND");
+    checkStatus(decoded, "APPEND");
 
     return decoded.offset ?? 0n;
   };
@@ -78,7 +78,7 @@ export function createStreamSession(
     const response = await connection.request(MSG_STREAM_COMMIT, payload, signal);
     const decoded = StreamCodec.decodeCommitResponse(response);
 
-    checkStatus(decoded.status, "COMMIT");
+    checkStatus(decoded, "COMMIT");
     closed = true;
     unsubscribeDisconnect();
   };
@@ -95,7 +95,7 @@ export function createStreamSession(
     try {
       const response = await connection.request(MSG_STREAM_ROLLBACK, payload, signal);
       const decoded = StreamCodec.decodeRollbackResponse(response);
-      checkStatus(decoded.status, "ROLLBACK");
+      checkStatus(decoded, "ROLLBACK");
     } catch {
       // Ignore rollback errors
     }
@@ -103,11 +103,16 @@ export function createStreamSession(
 
   const isOpen = (): boolean => !closed;
 
+  const asyncDispose = async (): Promise<void> => {
+    await rollback();
+  };
+
   return {
     append,
     commit,
     rollback,
     isOpen,
+    [Symbol.asyncDispose]: asyncDispose,
   };
 }
 

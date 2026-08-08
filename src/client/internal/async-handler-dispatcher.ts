@@ -97,7 +97,7 @@ export function createAsyncHandlerDispatcher(
     }
   };
 
-  const runTask = async (task: () => void | Promise<void>): Promise<void> => {
+  const runTask = (task: () => void | Promise<void>): Promise<void> => {
     let reported = false;
     const reportOnce = (error: unknown): void => {
       if (reported) {
@@ -107,17 +107,31 @@ export function createAsyncHandlerDispatcher(
       onError(error);
     };
 
-    const timeoutId = setTimeout(() => {
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+    const taskPromise = Promise.resolve()
+      .then(task)
+      .catch((error: unknown) => {
+        reportOnce(error);
+      })
+      .finally(() => {
+        clearTimeout(timeoutId);
+      });
+
+    // Report a timeout promptly, but do NOT let it settle the promise this
+    // function returns — dispatch()'s caller frees the concurrency slot and
+    // (via drain()) considers the handler finished as soon as that promise
+    // settles. `asyncHandlers.maxConcurrency` is a hard bound
+    // (PUBLIC_CONTRACT.md's "Async handler fan-out is bounded by..."), so a
+    // slot must stay occupied for as long as the real handler invocation is
+    // still running, even after it has already been reported as timed out —
+    // otherwise repeated hung handlers could run unboundedly past the
+    // configured concurrency limit. reportOnce's dedup guard ensures the
+    // task's own eventual failure (if any) doesn't double-report.
+    timeoutId = setTimeout(() => {
       reportOnce(new Error(`Async handler timeout after ${timeoutMs}ms`));
     }, timeoutMs);
 
-    try {
-      await Promise.resolve().then(task);
-    } catch (error) {
-      reportOnce(error);
-    } finally {
-      clearTimeout(timeoutId);
-    }
+    return taskPromise;
   };
 
   const close = (): void => {

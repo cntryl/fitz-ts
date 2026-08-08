@@ -54,7 +54,7 @@ import {
   MSG_STREAM_NOTIFY,
   MSG_SCHEDULE_CREATE,
   MSG_SCHEDULE_CANCEL,
-  MSG_SCHEDULE_LIST,
+  MSG_SCHEDULE_LIST_PAGE,
   MSG_SCHEDULE_SUBSCRIBE,
   MSG_SCHEDULE_UNSUBSCRIBE,
   MSG_SCHEDULE_NOTIFY,
@@ -238,12 +238,39 @@ describe("protocol primitives", () => {
     const reader = createBufferReader(new Uint8Array([0x12]));
 
     expect(() => reader.readU16BE()).toThrow("Buffer overflow");
+    expect(() => reader.readU16BE()).toThrow(CodecError);
   });
 
   it("rejects truncated string contents", () => {
     const reader = createBufferReader(new Uint8Array([0x00, 0x00, 0x00, 0x05, 0x68, 0x69]));
 
     expect(() => reader.readString()).toThrow("Buffer overflow");
+    expect(() => reader.readString()).toThrow(CodecError);
+  });
+
+  it("throws CodecError, not a bare Error, from every reader/writer bounds check", () => {
+    const reader = createBufferReader(new Uint8Array(0));
+    expect(() => reader.readU8()).toThrow(CodecError);
+    expect(() => reader.readBytes(1)).toThrow(CodecError);
+    expect(() => reader.setOffset(-1)).toThrow(CodecError);
+    expect(() => reader.peekU8()).toThrow(CodecError);
+
+    const writer = createBufferWriter(0);
+    expect(() => writer.overwriteU32BE(0, 1)).toThrow(CodecError);
+  });
+
+  it("getBuffer() always returns an owned copy, not a live alias of internal state", () => {
+    const writer = createBufferWriter(2);
+    writer.writeU8(0xaa);
+    writer.writeU8(0xbb);
+    const snapshot = writer.getBuffer();
+    expect(Array.from(snapshot)).toEqual([0xaa, 0xbb]);
+
+    writer.reset();
+    writer.writeU8(0xcc);
+
+    // The earlier snapshot must be unaffected by reusing the writer.
+    expect(Array.from(snapshot)).toEqual([0xaa, 0xbb]);
   });
 
   it("keeps message constants aligned with the canonical registry", () => {
@@ -293,7 +320,7 @@ describe("protocol primitives", () => {
       MSG_STREAM_NOTIFY,
       MSG_SCHEDULE_CREATE,
       MSG_SCHEDULE_CANCEL,
-      MSG_SCHEDULE_LIST,
+      MSG_SCHEDULE_LIST_PAGE,
       MSG_SCHEDULE_SUBSCRIBE,
       MSG_SCHEDULE_UNSUBSCRIBE,
       MSG_SCHEDULE_NOTIFY,
@@ -343,7 +370,7 @@ describe("protocol primitives", () => {
       MSG_STREAM_NOTIFY: 609,
       MSG_SCHEDULE_CREATE: 700,
       MSG_SCHEDULE_CANCEL: 701,
-      MSG_SCHEDULE_LIST: 702,
+      MSG_SCHEDULE_LIST_PAGE: 702,
       MSG_SCHEDULE_SUBSCRIBE: 703,
       MSG_SCHEDULE_UNSUBSCRIBE: 704,
       MSG_SCHEDULE_NOTIFY: 705,

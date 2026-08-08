@@ -5,6 +5,7 @@ import {
   ConnectionError,
   ErrCodeRpcBackpressure,
   ErrCodeRpcRouteNotRegistered,
+  ErrCodeRpcTimeout,
   ErrCodeRpcWorkerNotFound,
   RpcError,
 } from "../../../src/core/errors";
@@ -30,6 +31,9 @@ class FakeRpcConnection {
   public sendCalls: Array<{ messageType: number; payload: Uint8Array }> = [];
   public lastSignal: AbortSignal | undefined;
   public asyncDispatchAccepted = true;
+  public rpcResponse: Uint8Array = new Uint8Array([0]);
+  public requestError: Error | undefined;
+  private readonly requestGates = new Map<number, Promise<void>>();
   private state = ConnectionState.Authenticated;
   private readonly disconnectListeners = new Set<() => void>();
   private readonly reconnectListeners = new Set<() => void | Promise<void>>();
@@ -39,9 +43,15 @@ class FakeRpcConnection {
     payload: Uint8Array,
     signal?: AbortSignal,
   ): Promise<Uint8Array> {
+    if (this.requestError) throw this.requestError;
     this.lastRequest = { messageType, payload };
     this.requestCalls.push({ messageType, payload });
     this.lastSignal = signal;
+    const gate = this.requestGates.get(messageType);
+    if (gate) {
+      await gate;
+      this.requestGates.delete(messageType);
+    }
     if (signal?.aborted) {
       const error = new Error("The operation was aborted");
       error.name = "AbortError";
@@ -49,7 +59,7 @@ class FakeRpcConnection {
     }
 
     if (messageType === 300 || messageType === 301) {
-      return new Uint8Array([0]);
+      return this.rpcResponse;
     }
     throw new Error(`Unexpected request message type ${messageType}`);
   }
@@ -124,6 +134,17 @@ class FakeRpcConnection {
 
   countRequests(messageType: number): number {
     return this.requestCalls.filter((call) => call.messageType === messageType).length;
+  }
+
+  gate(messageType: number): () => void {
+    let release: () => void = () => undefined;
+    this.requestGates.set(
+      messageType,
+      new Promise<void>((resolve) => {
+        release = resolve;
+      }),
+    );
+    return release;
   }
 }
 
@@ -232,6 +253,29 @@ describe("RpcClient", () => {
     });
   });
 
+  it("should dispatch an overlapping RPC request to the most specific wildcard worker", async () => {
+    // Arrange
+    const connection = new FakeRpcConnection();
+    const client = createRpcClient(connection);
+    const broadWorker = vi.fn(async () => undefined);
+    const specificWorker = vi.fn(async () => undefined);
+    await client.registerWorker("rpc://realm/**", broadWorker);
+    await client.registerWorker("rpc://realm/orders/*", specificWorker);
+    const handler = connection.notificationHandlers.get(MSG_RPC_REQUEST);
+    if (!handler) throw new Error("Expected RPC request handler to be registered");
+
+    // Act
+    handler(
+      RpcCodec.encodeRequest(new Uint8Array(16), "rpc://realm/orders/create", new Uint8Array()),
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // Assert
+    expect(specificWorker).toHaveBeenCalledOnce();
+    expect(broadWorker).not.toHaveBeenCalled();
+  });
+
   it("returns a terminal backpressure response when local worker dispatch is saturated", async () => {
     const connection = new FakeRpcConnection();
     const client = createRpcClient(connection);
@@ -283,6 +327,40 @@ describe("RpcClient", () => {
 
     await connection.reconnect();
     expect(connection.countRequests(MSG_RPC_SUBSCRIBE_WORKER)).toBe(1);
+  });
+
+  it("surfaces a typed error when worker unregistration is rejected", async () => {
+    const connection = new FakeRpcConnection();
+    const client = createRpcClient(connection);
+    const subscription = await client.registerWorker(
+      "rpc://realm/area/method",
+      async () => undefined,
+    );
+    const writer = createBufferWriter();
+    writer.writeU8(1);
+    writer.writeU32BE(3002);
+    writer.writeString("worker not found");
+    connection.rpcResponse = writer.getBuffer();
+
+    await expect(subscription.unsubscribe()).rejects.toMatchObject({
+      name: "RpcError",
+      code: "RPC_UNSUBSCRIBE_FAILED",
+      domainCode: 3002,
+    });
+  });
+
+  it("propagates transport errors when worker unregistration fails", async () => {
+    const connection = new FakeRpcConnection();
+    const client = createRpcClient(connection);
+    const subscription = await client.registerWorker(
+      "rpc://realm/area/method",
+      async () => undefined,
+    );
+    connection.requestError = new ConnectionError("connection lost");
+
+    await expect(subscription.unsubscribe()).rejects.toMatchObject({
+      name: "ConnectionError",
+    });
   });
 
   it("should reject worker registration given maxConcurrency outside 1..1024 when subscribe is called", async () => {
@@ -507,6 +585,221 @@ describe("RpcClient", () => {
       expect(vi.getTimerCount()).toBe(0);
     } finally {
       vi.useRealTimers();
+    }
+  });
+
+  it("keeps a worker registered locally when the wire unsubscribe fails, so reconnect still restores it", async () => {
+    const connection = new FakeRpcConnection();
+    const client = createRpcClient(connection);
+    const subscription = await client.registerWorker(
+      "rpc://realm/area/method",
+      async () => undefined,
+    );
+    expect(connection.countRequests(MSG_RPC_SUBSCRIBE_WORKER)).toBe(1);
+
+    connection.requestError = new ConnectionError("connection lost");
+    await expect(subscription.unsubscribe()).rejects.toMatchObject({ name: "ConnectionError" });
+    connection.requestError = undefined;
+
+    // A failed UNSUBSCRIBE_WORKER must not have dropped the local
+    // registration — otherwise it never gets re-registered on reconnect
+    // even though the broker may still consider it live.
+    await connection.reconnect();
+    expect(connection.countRequests(MSG_RPC_SUBSCRIBE_WORKER)).toBe(2);
+  });
+
+  it("should preserve the replacement worker given an in-flight unsubscribe when registration overlaps", async () => {
+    const connection = new FakeRpcConnection();
+    const client = createRpcClient(connection);
+    const route = "rpc://realm/area/method";
+    const original = await client.registerWorker(route, async () => undefined);
+
+    const releaseUnsubscribe = connection.gate(MSG_RPC_UNSUBSCRIBE_WORKER);
+    const unsubscribing = original.unsubscribe();
+    await vi.waitFor(() => {
+      expect(connection.countRequests(MSG_RPC_UNSUBSCRIBE_WORKER)).toBe(1);
+    });
+
+    const replacement = client.registerWorker(route, async () => undefined);
+    await Promise.resolve();
+    expect(connection.countRequests(MSG_RPC_SUBSCRIBE_WORKER)).toBe(1);
+
+    releaseUnsubscribe();
+    await Promise.all([unsubscribing, replacement]);
+    expect(connection.countRequests(MSG_RPC_SUBSCRIBE_WORKER)).toBe(2);
+
+    // The replacement remains in the local worker registry and is restored
+    // on reconnect. An unconditional workers.delete(route) would leave the
+    // broker subscribed while the client silently dropped inbound calls.
+    await connection.reconnect();
+    expect(connection.countRequests(MSG_RPC_SUBSCRIBE_WORKER)).toBe(3);
+  });
+
+  it("should preserve the replacement worker given a stale handle when the stale handle unsubscribes", async () => {
+    const connection = new FakeRpcConnection();
+    const client = createRpcClient(connection);
+    const route = "rpc://realm/area/method";
+    const original = await client.registerWorker(route, async () => undefined);
+    await client.registerWorker(route, async () => undefined);
+
+    await original.unsubscribe();
+
+    expect(connection.countRequests(MSG_RPC_UNSUBSCRIBE_WORKER)).toBe(0);
+    await connection.reconnect();
+    expect(connection.countRequests(MSG_RPC_SUBSCRIBE_WORKER)).toBe(3);
+  });
+
+  it("uses the domain error-code namespace for a local call timeout, not the wire status enum", async () => {
+    vi.useFakeTimers();
+    try {
+      const connection = new FakeRpcConnection();
+      const client = createRpcClient(connection);
+
+      const iterator = await client.call("rpc://realm/area/method", new Uint8Array([1]), {
+        timeoutMs: 10,
+      });
+      const nextPromise = iterator.next();
+      // Attach the assertion before advancing timers so the rejection is
+      // observed synchronously as it settles, rather than being flagged as
+      // briefly unhandled.
+      const assertion = expect(nextPromise).rejects.toMatchObject({
+        code: "RPC_TIMEOUT",
+        domainCode: ErrCodeRpcTimeout,
+      });
+
+      await vi.advanceTimersByTimeAsync(10);
+      await assertion;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("drains an already-buffered frame before surfacing a later connection-loss failure", async () => {
+    const connection = new FakeRpcConnection();
+    const client = createRpcClient(connection);
+
+    const iterator = await client.call("rpc://realm/area/method", new Uint8Array([1]));
+    const request = connection.lastRequest;
+    if (!request) {
+      throw new Error("Expected RPC request payload to be recorded");
+    }
+
+    const decoded = RpcCodec.decodeInboundRequest(request.payload);
+    const responseHandler = connection.notificationHandlers.get(MSG_RPC_RESPONSE);
+    expect(responseHandler).toBeTypeOf("function");
+    if (!responseHandler) {
+      throw new Error("Expected RPC response handler to be registered");
+    }
+
+    // Buffer a non-terminal frame before anything calls next() ...
+    responseHandler(RpcCodec.encodeResponse(decoded.correlationId, 0n, new Uint8Array([1]), false));
+    // ... then the connection drops before the caller ever reads it.
+    connection.emitDisconnect();
+
+    await expect(iterator.next()).resolves.toMatchObject({
+      done: false,
+      value: { body: new Uint8Array([1]), sequence: 0n },
+    });
+    await expect(iterator.next()).rejects.toMatchObject({ name: "ConnectionError" });
+  });
+
+  it("should deliver the pending frame given a later terminal error when both frames arrive before the consumer resumes", async () => {
+    const connection = new FakeRpcConnection();
+    const client = createRpcClient(connection);
+    const iterator = await client.call("rpc://realm/area/method", new Uint8Array([1]));
+    const request = connection.lastRequest;
+    if (!request) {
+      throw new Error("Expected RPC request payload to be recorded");
+    }
+
+    const decoded = RpcCodec.decodeInboundRequest(request.payload);
+    const responseHandler = connection.notificationHandlers.get(MSG_RPC_RESPONSE);
+    if (!responseHandler) {
+      throw new Error("Expected RPC response handler to be registered");
+    }
+
+    const next = iterator.next();
+    responseHandler(RpcCodec.encodeResponse(decoded.correlationId, 0n, new Uint8Array([1]), false));
+    responseHandler(
+      RpcCodec.encodeResponse(decoded.correlationId, 1n, encodeWorkerNotFoundBody(), true),
+    );
+
+    await expect(next).resolves.toMatchObject({
+      done: false,
+      value: { body: new Uint8Array([1]), sequence: 0n },
+    });
+    await expect(iterator.next()).rejects.toMatchObject({
+      code: "RPC_WORKER_NOT_FOUND",
+      domainCode: ErrCodeRpcWorkerNotFound,
+    });
+  });
+
+  it("does not warn when a handler's late send fails only because the connection already disconnected", async () => {
+    const connection = new FakeRpcConnection();
+    const client = createRpcClient(connection);
+    const route = "rpc://realm/area/method";
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    try {
+      let releaseHandler: () => void = () => undefined;
+      const handlerGate = new Promise<void>((resolve) => {
+        releaseHandler = resolve;
+      });
+
+      await client.registerWorker(route, async (_req, writer) => {
+        await handlerGate;
+        // The connection has already disconnected by the time this runs —
+        // the writer is stale, so this send benignly fails. That must not
+        // be reported as "forgot to send a terminal response".
+        await writer.send(new Uint8Array([1]), true).catch(() => undefined);
+      });
+
+      const handler = connection.notificationHandlers.get(MSG_RPC_REQUEST);
+      expect(handler).toBeTypeOf("function");
+      if (!handler) {
+        throw new Error("Expected RPC request handler to be registered");
+      }
+
+      handler(RpcCodec.encodeRequest(new Uint8Array(16), route, new Uint8Array([9])));
+      await Promise.resolve();
+
+      connection.emitDisconnect();
+      releaseHandler();
+
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(warnSpy).not.toHaveBeenCalled();
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it("warns when a worker handler settles without sending a terminal response", async () => {
+    const connection = new FakeRpcConnection();
+    const client = createRpcClient(connection);
+    const route = "rpc://realm/area/method";
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    try {
+      await client.registerWorker(route, async (_req, writer) => {
+        await writer.send(new Uint8Array([1]), false);
+      });
+
+      const handler = connection.notificationHandlers.get(MSG_RPC_REQUEST);
+      expect(handler).toBeTypeOf("function");
+      if (!handler) {
+        throw new Error("Expected RPC request handler to be registered");
+      }
+
+      handler(RpcCodec.encodeRequest(new Uint8Array(16), route, new Uint8Array([9])));
+
+      await vi.waitFor(() => {
+        expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining(route));
+      });
+    } finally {
+      warnSpy.mockRestore();
     }
   });
 

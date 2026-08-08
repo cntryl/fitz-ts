@@ -1,4 +1,5 @@
 import { ConnectionState } from "../../core/types";
+import { AuthenticationError } from "../../core/errors";
 import { isAbortError, sleepWithAbort } from "./async";
 import { jitteredBackoffMs } from "./backoff";
 
@@ -41,6 +42,16 @@ export function createReconnectScheduler(options: ReconnectSchedulerOptions) {
         if (isAbortError(error)) {
           return "closed";
         }
+        // `handleConnectionLossOnce`'s own authRejected guard only protects
+        // the decision to START this loop — once running, an
+        // AuthenticationError thrown directly by openAndAuthenticate(true)
+        // (e.g. a revoked token) must stop retrying the same way, instead of
+        // being treated as just another transient failure and retried up to
+        // maxAttempts (which defaults to Infinity for a real Client).
+        if (error instanceof AuthenticationError) {
+          options.setState(ConnectionState.Closed);
+          return "closed";
+        }
         options.logRetry(attempts, actualDelayMs, delayMs, error);
         delayMs = Math.min(delayMs * 2, options.maxBackoffMs);
       }
@@ -60,19 +71,12 @@ export function createReconnectScheduler(options: ReconnectSchedulerOptions) {
     listeners: Iterable<() => void | Promise<void>>,
     onError: (error: unknown) => void,
   ) => {
-    let firstError: unknown;
-
     for (const listener of listeners) {
       try {
         await listener();
       } catch (error) {
         onError(error);
-        firstError ??= error;
       }
-    }
-
-    if (firstError !== undefined) {
-      throw firstError;
     }
   };
 

@@ -24,7 +24,7 @@ describe("fitz-ts subsystem benchmarks", () => {
   });
 
   benchBatch("schedule list encode", SYNC_CODEC_BATCH_SIZE, () => {
-    return ScheduleCodec.encodeList(0n, 250n);
+    return ScheduleCodec.encodeListPage(undefined, 250n);
   });
 
   benchBatch("stream begin encode", SYNC_CODEC_BATCH_SIZE, () => {

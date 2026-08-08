@@ -186,7 +186,6 @@ export function createTaskGroup(options: TaskGroupOptions) {
   };
 
   const stop = async (reason?: unknown): Promise<void> => {
-    void reason;
     if (state.status === "idle") {
       state.status = "stopped";
       ensureCompletion().resolve();
@@ -203,7 +202,7 @@ export function createTaskGroup(options: TaskGroupOptions) {
 
     if (state.status === "running") {
       state.status = "stopping";
-      state.controller?.abort();
+      state.controller?.abort(reason);
       return ensureCompletion().promise;
     }
 

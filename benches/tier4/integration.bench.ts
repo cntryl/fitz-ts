@@ -25,7 +25,7 @@ describe("fitz-ts integration benchmarks", () => {
       const schedulePayload = ScheduleCodec.encodeCreate(
         routes.schedule,
         scheduleCron,
-        "broadcast",
+        "Broadcast",
         body,
       );
       const streamPayload = StreamCodec.encodeBegin(routes.stream, streamMetadata);

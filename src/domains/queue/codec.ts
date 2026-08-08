@@ -5,12 +5,14 @@
 import {
   createBufferReader,
   getRouteEncoding,
-  utf8Decoder,
   writeU32BEAt,
   writeU64BEAt,
   writeU64BENumberAt,
   type BufferReader,
 } from "../../core/buffer";
+import { parseStandardResponse } from "../../protocol/response";
+import { QueueError } from "../../core/errors";
+import { isRouteShape, routeMatchesPattern } from "../_routes";
 import {
   QueueEnqueueResponse,
   QueueReserveResponse,
@@ -20,6 +22,31 @@ import {
   QueueUnsubscribeResponse,
   EnqueueOptions,
 } from "./types";
+
+type ParsedQueueResponse =
+  | { status: 0; reader: BufferReader }
+  | { status: 1; errorCode?: number; errorMessage?: string };
+
+function parseQueueResponse(payload: Uint8Array): ParsedQueueResponse {
+  const parsed = parseStandardResponse(payload);
+  if (!parsed.success) {
+    return {
+      status: 1,
+      errorCode: parsed.errorCode,
+      errorMessage: parsed.error,
+    };
+  }
+
+  return { status: 0, reader: createBufferReader(parsed.data) };
+}
+
+function parsePlainQueueResponse(payload: Uint8Array): ParsedQueueResponse {
+  const reader = createBufferReader(payload);
+  const status = reader.readU8();
+  if (status === 0) return { status: 0, reader };
+  if (status !== 1) throw new RangeError(`Unknown Queue response status: ${status}`);
+  return { status: 1, errorMessage: reader.readString() };
+}
 
 export const QueueCodec = {
   /**
@@ -51,29 +78,37 @@ export const QueueCodec = {
    * Payload: [status: u8][message_id: u64]
    */
   decodeEnqueueResponse(payload: Uint8Array): QueueEnqueueResponse {
-    const reader = createBufferReader(payload);
-    const status = reader.readU8();
-    if (status !== 0) {
-      return { status, ...this.decodeErrorResponse(reader) };
+    const response = parseQueueResponse(payload);
+    if (response.status !== 0) {
+      return response;
     }
+    const { reader } = response;
 
     let messageId: bigint | undefined;
     if (reader.remainingBytes() >= 8) {
       messageId = reader.readU64BE();
     }
-    return { status, messageId };
+    return { status: 0, messageId };
   },
 
   /**
    * Encode RESERVE request.
    * Payload: [route: string][lease_seconds: u64][has_batch_size: u8][batch_size: u32]
+   * [has_wait_seconds: u8][wait_seconds: u64]
    *
-   * Long polling is handled client-side by QueueClient.reserve().
    */
-  encodeReserve(route: string, leaseSeconds: number, batchSize?: number): Uint8Array {
+  encodeReserve(
+    route: string,
+    leaseSeconds: number,
+    batchSize?: number,
+    waitSeconds?: number,
+  ): Uint8Array {
     const routeBytes = getRouteEncoding(route);
     const hasBatchSize = batchSize !== undefined && batchSize > 0 ? 1 : 0;
-    const buffer = new Uint8Array(routeBytes.length + 8 + 1 + (hasBatchSize ? 4 : 0));
+    const hasWaitSeconds = waitSeconds !== undefined && waitSeconds > 0 ? 1 : 0;
+    const buffer = new Uint8Array(
+      routeBytes.length + 8 + 1 + (hasBatchSize ? 4 : 0) + 1 + (hasWaitSeconds ? 8 : 0),
+    );
     let offset = 0;
 
     buffer.set(routeBytes, offset);
@@ -81,41 +116,61 @@ export const QueueCodec = {
     offset = writeU64BENumberAt(buffer, offset, leaseSeconds);
     buffer[offset++] = hasBatchSize;
     if (hasBatchSize && batchSize !== undefined) {
-      writeU32BEAt(buffer, offset, batchSize);
+      offset = writeU32BEAt(buffer, offset, batchSize);
     }
+    buffer[offset++] = hasWaitSeconds;
+    if (hasWaitSeconds && waitSeconds !== undefined)
+      writeU64BENumberAt(buffer, offset, waitSeconds);
 
     return buffer;
   },
 
   /**
    * Decode RESERVE response.
-   * Payload: [status: u8][lease_count: u32]([message_id: u64][lease_token: u64][body_len: u32][body: bytes] ...)
+   * Payload: [status: u8][lease_count: u32]([route: string][message_id: u64][lease_token: u64][body_len: u32][body: bytes] ...)
    */
-  decodeReserveResponse(payload: Uint8Array): QueueReserveResponse {
-    const reader = createBufferReader(payload);
-    const status = reader.readU8();
-
-    if (status !== 0) {
-      return { status, ...this.decodeErrorResponse(reader) };
+  decodeReserveResponse(payload: Uint8Array, selector?: string): QueueReserveResponse {
+    const response = parseQueueResponse(payload);
+    if (response.status !== 0) {
+      return response;
     }
+    const { reader } = response;
 
     if (reader.isEOF() || reader.remainingBytes() < 4) {
-      return { status, items: [] };
+      return { status: 0, items: [] };
     }
 
     const leaseCount = reader.readU32BE();
-    const items: Array<{ id: bigint; token: bigint; body: Uint8Array }> = [];
+    const items: Array<{ route: string; id: bigint; token: bigint; body: Uint8Array }> = [];
 
+    const wildcard = selector?.includes("*") === true;
     for (let i = 0; i < leaseCount; i++) {
+      const route = wildcard ? reader.readRoute() : selector;
+      if (!route)
+        throw new QueueError("RESERVE response missing concrete route", "RESERVE_INVALID_RESPONSE");
+      if (!isRouteShape(route, "queue", 3)) {
+        throw new QueueError(
+          `RESERVE response contains invalid concrete queue route: ${route}`,
+          "RESERVE_INVALID_RESPONSE",
+        );
+      }
+      if (wildcard && selector && !routeMatchesPattern(route, selector)) {
+        throw new QueueError(
+          `RESERVE response route does not match selector: ${route}`,
+          "RESERVE_INVALID_RESPONSE",
+        );
+      }
       const id = reader.readU64BE();
       const token = reader.readU64BE();
       const bodyLen = reader.readU32BE();
       const body = reader.readBytes(bodyLen);
 
-      items.push({ id, token, body });
+      items.push({ route, id, token, body });
     }
 
-    return { status, items };
+    if (!reader.isEOF())
+      throw new QueueError("RESERVE response has trailing bytes", "RESERVE_INVALID_RESPONSE");
+    return { status: 0, items };
   },
 
   /**
@@ -139,13 +194,12 @@ export const QueueCodec = {
    * Payload: [status: u8]
    */
   decodeCompleteResponse(payload: Uint8Array): QueueCompleteResponse {
-    const reader = createBufferReader(payload);
-    const status = reader.readU8();
-    if (status !== 0) {
-      return { status, ...this.decodeErrorResponse(reader) };
+    const response = parsePlainQueueResponse(payload);
+    if (response.status !== 0) {
+      return response;
     }
 
-    return { status };
+    return { status: 0 };
   },
 
   /**
@@ -175,13 +229,12 @@ export const QueueCodec = {
    * Payload: [status: u8]
    */
   decodeExtendResponse(payload: Uint8Array): QueueExtendResponse {
-    const reader = createBufferReader(payload);
-    const status = reader.readU8();
-    if (status !== 0) {
-      return { status, ...this.decodeErrorResponse(reader) };
+    const response = parsePlainQueueResponse(payload);
+    if (response.status !== 0) {
+      return response;
     }
 
-    return { status };
+    return { status: 0 };
   },
 
   /**
@@ -197,28 +250,17 @@ export const QueueCodec = {
    * Payload: [status: u8][sub_id: u64]
    */
   decodeSubscribeResponse(payload: Uint8Array): QueueSubscribeResponse {
-    const reader = createBufferReader(payload);
-    const status = reader.readU8();
-    if (status !== 0) {
-      return { status, ...this.decodeErrorResponse(reader) };
+    const response = parsePlainQueueResponse(payload);
+    if (response.status !== 0) {
+      return response;
     }
+    const { reader } = response;
 
-    if (reader.remainingBytes() === 8) {
-      return { status, subId: reader.readU64BE() };
-    }
-
-    if (reader.remainingBytes() >= 9) {
-      const hasSubId = reader.readU8();
-      if (hasSubId === 1 && reader.remainingBytes() >= 8) {
-        return { status, subId: reader.readU64BE() };
-      }
-    }
-
-    if (reader.isEOF()) {
-      return { status };
-    }
-
-    return { status };
+    const hasSubId = reader.readU8();
+    if (hasSubId !== 1) throw new RangeError("Queue SUBSCRIBE response is missing subscription id");
+    const subId = reader.readU64BE();
+    if (!reader.isEOF()) throw new RangeError("Queue SUBSCRIBE response has trailing bytes");
+    return { status: 0, subId };
   },
 
   /**
@@ -234,13 +276,12 @@ export const QueueCodec = {
    * Payload: [status: u8]
    */
   decodeUnsubscribeResponse(payload: Uint8Array): QueueUnsubscribeResponse {
-    const reader = createBufferReader(payload);
-    const status = reader.readU8();
-    if (status !== 0) {
-      return { status, ...this.decodeErrorResponse(reader) };
+    const response = parsePlainQueueResponse(payload);
+    if (response.status !== 0) {
+      return response;
     }
 
-    return { status };
+    return { status: 0 };
   },
 
   /**
@@ -250,31 +291,20 @@ export const QueueCodec = {
   decodeNotification(payload: Uint8Array): {
     subId: bigint;
     route: string;
+    readyMessages: bigint;
+    delayedMessages: bigint;
+    inflightMessages: bigint;
   } {
     const reader = createBufferReader(payload);
     const subId = reader.readU64BE();
     const route = reader.readRoute();
-
-    return { subId, route };
-  },
-
-  decodeErrorResponse(reader: BufferReader): {
-    errorCode?: number;
-    errorMessage?: string;
-  } {
-    if (reader.remainingBytes() === 1) {
-      return { errorCode: reader.readU8() };
+    const readyMessages = reader.readU64BE();
+    const delayedMessages = reader.readU64BE();
+    const inflightMessages = reader.readU64BE();
+    if (!reader.isEOF()) {
+      throw new RangeError("Queue notification has trailing bytes");
     }
 
-    if (reader.remainingBytes() >= 4) {
-      const messageLength = reader.readU32BE();
-      if (messageLength <= reader.remainingBytes()) {
-        return {
-          errorMessage: utf8Decoder.decode(reader.readBytes(messageLength)),
-        };
-      }
-    }
-
-    return {};
+    return { subId, route, readyMessages, delayedMessages, inflightMessages };
   },
 };

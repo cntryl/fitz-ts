@@ -7,7 +7,6 @@ import type { DisconnectListenerPort, RequestPort } from "../base";
 import { QueueCodec } from "./codec";
 import { QueueError } from "../../core/errors";
 import { MSG_QUEUE_EXTEND, MSG_QUEUE_COMPLETE } from "../../frame/types";
-import { formatStatusName } from "../internal/status";
 
 /**
  * Queue item represents a reserved queue message.
@@ -42,10 +41,14 @@ export function createQueueItem(
     const decoded = QueueCodec.decodeExtendResponse(response);
 
     if (decoded.status !== QueueStatus.Ok) {
-      const errorCode = decoded.errorCode ?? decoded.status;
-      const statusName = formatStatusName(errorCode, QueueStatusNames);
-      const reason = decoded.errorMessage ?? statusName;
-      throw new QueueError(`EXTEND failed: ${reason}`, statusName, errorCode);
+      // EXTEND never carries a real numeric domain error code on the wire
+      // (decodeExtendResponse's errorCode is always undefined) — falling
+      // back to `decoded.status` here would collide with the small
+      // domain-status enum (status 1 === QueueStatus.QueueNotFound) and
+      // mislabel every failure as "QueueNotFound" regardless of the real
+      // cause (e.g. an expired lease). Use a generic, honest code instead.
+      const reason = decoded.errorMessage ?? "EXTEND_FAILED";
+      throw new QueueError(`EXTEND failed: ${reason}`, "EXTEND_FAILED", decoded.errorCode);
     }
   };
 
@@ -56,10 +59,10 @@ export function createQueueItem(
     const decoded = QueueCodec.decodeCompleteResponse(response);
 
     if (decoded.status !== QueueStatus.Ok) {
-      const errorCode = decoded.errorCode ?? decoded.status;
-      const statusName = formatStatusName(errorCode, QueueStatusNames);
-      const reason = decoded.errorMessage ?? statusName;
-      throw new QueueError(`COMPLETE failed: ${reason}`, statusName, errorCode);
+      // Same reasoning as extend() above: COMPLETE's plain response never
+      // carries a real domain error code either.
+      const reason = decoded.errorMessage ?? "COMPLETE_FAILED";
+      throw new QueueError(`COMPLETE failed: ${reason}`, "COMPLETE_FAILED", decoded.errorCode);
     }
 
     closed = true;
@@ -67,6 +70,7 @@ export function createQueueItem(
   };
 
   return {
+    route,
     body,
     extend,
     complete,
@@ -78,6 +82,9 @@ export function createQueueItem(
  */
 export interface AvailabilityNotification {
   route: string;
+  readyMessages: bigint;
+  delayedMessages: bigint;
+  inflightMessages: bigint;
 }
 
 /**
@@ -91,16 +98,18 @@ export type AvailabilityHandler = (notification: AvailabilityNotification) => vo
 export type QueueSubscription = ReturnType<typeof createQueueSubscription>;
 
 export function createQueueSubscription(
-  subId: bigint,
+  getSubId: () => bigint,
   pattern: string,
-  unsubscribeFn: (subId: bigint) => Promise<void>,
+  unsubscribeFn: () => Promise<void>,
 ) {
   const unsubscribe = async (): Promise<void> => {
-    await unsubscribeFn(subId);
+    await unsubscribeFn();
   };
 
   return {
-    subId,
+    get subId(): bigint {
+      return getSubId();
+    },
     pattern,
     unsubscribe,
   };
@@ -118,20 +127,22 @@ export enum QueueStatus {
   InvalidDelay = 5,
 }
 
-const QueueStatusNames: Record<number, string> = {
-  [QueueStatus.QueueNotFound]: "QueueNotFound",
-  [QueueStatus.MessageNotFound]: "MessageNotFound",
-  [QueueStatus.InvalidToken]: "InvalidToken",
-  [QueueStatus.QueueFull]: "QueueFull",
-  [QueueStatus.InvalidDelay]: "InvalidDelay",
-};
-
 /**
  * Options for enqueue operations.
  */
 export interface EnqueueOptions {
+  /**
+   * @deprecated Not yet wire-supported — the ENQUEUE frame has no byte
+   * range for priority. Setting this throws synchronously rather than
+   * silently being ignored.
+   */
   priority?: number;
   delayMs?: number;
+  /**
+   * @deprecated Not yet wire-supported — the ENQUEUE frame has no byte
+   * range for a TTL. Setting this throws synchronously rather than
+   * silently being ignored.
+   */
   ttlMs?: number;
 }
 
@@ -148,6 +159,7 @@ export interface QueueEnqueueResponse {
 export interface QueueReserveResponse {
   status: number;
   items?: Array<{
+    route: string;
     id: bigint;
     token: bigint;
     body: Uint8Array;

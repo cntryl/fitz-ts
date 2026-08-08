@@ -210,7 +210,7 @@ describe(`Fitz conformance — fitz-ts [transport=${TRANSPORT}, auth=${AUTH_MODE
         expect(connected).toBe(true);
 
         const route = uniqueRoute("kv");
-        const tx = await client.kv().begin(route, { durability: "Sync" });
+        const tx = await client.kv.begin(route, { durability: "Sync" });
         await tx.put(b("cs001-key"), b("cs001-value"));
         await tx.commit();
         evidence.push("first domain request (kv) succeeded");
@@ -251,7 +251,7 @@ describe(`Fitz conformance — fitz-ts [transport=${TRANSPORT}, auth=${AUTH_MODE
           }
           // If still connected but domain ops fail, that's partial
           try {
-            await client.kv().begin(uniqueRoute("kv"), {
+            await client.kv.begin(uniqueRoute("kv"), {
               durability: "Sync",
             });
             evidence.push("domain request unexpectedly succeeded — verdict partial");
@@ -310,12 +310,12 @@ describe(`Fitz conformance — fitz-ts [transport=${TRANSPORT}, auth=${AUTH_MODE
       await withClient({}, async (client) => {
         const route = uniqueRoute("kv");
 
-        const tx = await client.kv().begin(route, { durability: "Sync" });
+        const tx = await client.kv.begin(route, { durability: "Sync" });
         await tx.put(b("user:1"), b("Alice"));
         await tx.commit();
         evidence.push("kv begin/put/commit succeeded");
 
-        const rtx = await client.kv().begin(route, { mode: "ReadOnly", durability: "Sync" });
+        const rtx = await client.kv.begin(route, { mode: "ReadOnly", durability: "Sync" });
         const result = await rtx.get(b("user:1"));
         expect(result.type).toBe("found");
         if (result.type === "found") {
@@ -339,13 +339,13 @@ describe(`Fitz conformance — fitz-ts [transport=${TRANSPORT}, auth=${AUTH_MODE
 
       await withClient({}, async (client) => {
         const noWorkerRoute = uniqueRoute("rpc");
-        const iterator = await client.rpc().call(noWorkerRoute, b("ping"), { timeoutMs: 500 });
+        const iterator = await client.rpc.call(noWorkerRoute, b("ping"), { timeoutMs: 500 });
         const caught = await expectRpcIteratorFailure(iterator);
         evidence.push(`rpc to unregistered route threw: ${(caught as Error).constructor.name}`);
 
         // Client must still be usable
         const route = uniqueRoute("kv");
-        const tx = await client.kv().begin(route, { durability: "Sync" });
+        const tx = await client.kv.begin(route, { durability: "Sync" });
         await tx.put(b("k"), b("v"));
         await tx.commit();
         evidence.push("client remains usable after unknown-route error");
@@ -367,13 +367,13 @@ describe(`Fitz conformance — fitz-ts [transport=${TRANSPORT}, auth=${AUTH_MODE
         const route = uniqueRoute("kv");
 
         // Write key once
-        const tx1 = await client.kv().begin(route, { durability: "Sync" });
+        const tx1 = await client.kv.begin(route, { durability: "Sync" });
         await tx1.insert(b("dup-key"), b("first"));
         await tx1.commit();
         evidence.push("first insert succeeded");
 
         // Attempting insert on an existing key is a server-rejected operation
-        const tx2 = await client.kv().begin(route, { durability: "Sync" });
+        const tx2 = await client.kv.begin(route, { durability: "Sync" });
         let caught: unknown;
         try {
           await tx2.insert(b("dup-key"), b("second"));
@@ -386,7 +386,7 @@ describe(`Fitz conformance — fitz-ts [transport=${TRANSPORT}, auth=${AUTH_MODE
         evidence.push(`duplicate insert threw: ${(caught as Error).constructor.name}`);
 
         // Client must remain usable
-        const rtx = await client.kv().begin(route, { mode: "ReadOnly", durability: "Sync" });
+        const rtx = await client.kv.begin(route, { mode: "ReadOnly", durability: "Sync" });
         const val = await rtx.get(b("dup-key"));
         expect(val.type).toBe("found");
         evidence.push("client remains usable after server-rejected operation");
@@ -409,7 +409,7 @@ describe(`Fitz conformance — fitz-ts [transport=${TRANSPORT}, auth=${AUTH_MODE
 
         // No worker registered — server returns RPC_ERR_NO_WORKER (retryable or
         // domain error, code should be accessible on the thrown error)
-        const iterator = await client.rpc().call(route, b("ping"), { timeoutMs: 500 });
+        const iterator = await client.rpc.call(route, b("ping"), { timeoutMs: 500 });
         const caught = await expectRpcIteratorFailure(iterator);
         const err = caught as Error & { code?: string; domainCode?: number };
         evidence.push(`error class: ${err.constructor.name}`);
@@ -422,11 +422,11 @@ describe(`Fitz conformance — fitz-ts [transport=${TRANSPORT}, auth=${AUTH_MODE
 
         // Also verify that kv insert conflict carries a domainCode
         const kvRoute = uniqueRoute("kv");
-        const tx = await client.kv().begin(kvRoute, { durability: "Sync" });
+        const tx = await client.kv.begin(kvRoute, { durability: "Sync" });
         await tx.insert(b("x"), b("1"));
         await tx.commit();
 
-        const tx2 = await client.kv().begin(kvRoute, { durability: "Sync" });
+        const tx2 = await client.kv.begin(kvRoute, { durability: "Sync" });
         let kvErr: unknown;
         try {
           await tx2.insert(b("x"), b("2"));
@@ -472,12 +472,12 @@ describe(`Fitz conformance — fitz-ts [transport=${TRANSPORT}, auth=${AUTH_MODE
         await callerClient.connect();
 
         const route = uniqueRoute("rpc");
-        const sub = await workerClient.rpc().registerWorker(route, async () => {
+        const sub = await workerClient.rpc.registerWorker(route, async () => {
           await new Promise<void>((resolve) => setTimeout(resolve, 2000));
         });
 
         const start = Date.now();
-        const iterator = await callerClient.rpc().call(route, b("nobody"), { timeoutMs: 250 });
+        const iterator = await callerClient.rpc.call(route, b("nobody"), { timeoutMs: 250 });
         const caught = await expectRpcIteratorFailure(iterator);
         const elapsed = Date.now() - start;
         evidence.push(`rpc threw after ~${elapsed}ms`);
@@ -493,7 +493,7 @@ describe(`Fitz conformance — fitz-ts [transport=${TRANSPORT}, auth=${AUTH_MODE
 
         // Connection still healthy
         const kvRoute = uniqueRoute("kv");
-        const tx = await callerClient.kv().begin(kvRoute, { durability: "Sync" });
+        const tx = await callerClient.kv.begin(kvRoute, { durability: "Sync" });
         await tx.put(b("post-timeout"), b("ok"));
         await tx.commit();
         evidence.push("connection healthy after timeout");
@@ -535,15 +535,16 @@ describe(`Fitz conformance — fitz-ts [transport=${TRANSPORT}, auth=${AUTH_MODE
         await callerClient.connect();
 
         const route = uniqueRoute("rpc");
-        const sub = await workerClient
-          .rpc()
-          .registerWorker(route, async (_req: InboundRequest, writer: ResponseWriter) => {
+        const sub = await workerClient.rpc.registerWorker(
+          route,
+          async (_req: InboundRequest, writer: ResponseWriter) => {
             await new Promise<void>((resolve) => setTimeout(resolve, 2000));
             await writer.send(b("late"), true);
-          });
+          },
+        );
 
         const controller = new AbortController();
-        const iterator = await callerClient.rpc().call(route, b("block"), {
+        const iterator = await callerClient.rpc.call(route, b("block"), {
           timeoutMs: 30000,
           signal: controller.signal,
         });
@@ -570,7 +571,7 @@ describe(`Fitz conformance — fitz-ts [transport=${TRANSPORT}, auth=${AUTH_MODE
 
         // Subsequent request should succeed
         const kvRoute = uniqueRoute("kv");
-        const tx = await callerClient.kv().begin(kvRoute, { durability: "Sync" });
+        const tx = await callerClient.kv.begin(kvRoute, { durability: "Sync" });
         await tx.put(b("after-cancel"), b("ok"));
         await tx.commit();
         evidence.push("subsequent request succeeded after cancellation");
@@ -610,15 +611,16 @@ describe(`Fitz conformance — fitz-ts [transport=${TRANSPORT}, auth=${AUTH_MODE
         await callerClient.connect();
 
         const route = uniqueRoute("rpc");
-        await workerClient
-          .rpc()
-          .registerWorker(route, async (_req: InboundRequest, writer: ResponseWriter) => {
+        await workerClient.rpc.registerWorker(
+          route,
+          async (_req: InboundRequest, writer: ResponseWriter) => {
             await new Promise<void>((resolve) => setTimeout(resolve, 3000));
             await writer.send(b("late"), true);
-          });
+          },
+        );
 
         const controller = new AbortController();
-        const iterator = await callerClient.rpc().call(route, b("block"), {
+        const iterator = await callerClient.rpc.call(route, b("block"), {
           timeoutMs: 30000,
           signal: controller.signal,
         });
@@ -684,7 +686,7 @@ describe(`Fitz conformance — fitz-ts [transport=${TRANSPORT}, auth=${AUTH_MODE
         });
         await client2.connect();
         const route = uniqueRoute("kv");
-        const tx = await client2.kv().begin(route, { durability: "Sync" });
+        const tx = await client2.kv.begin(route, { durability: "Sync" });
         await tx.put(b("after-reconnect"), b("ok"));
         await tx.commit();
         evidence.push("new requests succeed after reconnect (new client)");
@@ -720,14 +722,14 @@ describe(`Fitz conformance — fitz-ts [transport=${TRANSPORT}, auth=${AUTH_MODE
       try {
         await withClient({}, async (client) => {
           const route = uniqueRoute("stream");
-          const session = await client.stream().begin(route);
+          const session = await client.stream.begin(route);
           await session.append(0n, Uint8Array.of(10));
           await session.append(1n, Uint8Array.of(20));
           await session.append(2n, Uint8Array.of(30));
           await session.commit("Sync");
           evidence.push("stream session appended 3 records");
 
-          const records = await client.stream().read(route, 0n, 10);
+          const records = await client.stream.read(route, 0n, 10);
           if (records.length < 3) {
             verdict = "partial";
             evidence.push(`expected >=3 stream records, got ${records.length}`);
@@ -769,14 +771,14 @@ describe(`Fitz conformance — fitz-ts [transport=${TRANSPORT}, auth=${AUTH_MODE
 
       await withClient({}, async (client) => {
         const route = uniqueRoute("stream");
-        const session = await client.stream().begin(route);
+        const session = await client.stream.begin(route);
         await session.append(0n, b("first"));
         await session.append(1n, b("last"));
         await session.commit("Sync");
         evidence.push("stream session committed");
 
         // stream.read() should return and not block forever
-        const records = await client.stream().read(route, 0n, 100);
+        const records = await client.stream.read(route, 0n, 100);
         if (records.length < 2) {
           verdict = "partial";
           evidence.push(`expected >=2 records after commit, got ${records.length}`);
@@ -802,7 +804,7 @@ describe(`Fitz conformance — fitz-ts [transport=${TRANSPORT}, auth=${AUTH_MODE
         const route = uniqueRoute("stream");
 
         // append() with a wrong expected offset → server rejects it
-        const session = await client.stream().begin(route);
+        const session = await client.stream.begin(route);
         await session.append(0n, b("record-1"));
         await session.commit("Sync");
         evidence.push("written first record at offset 0");
@@ -810,7 +812,7 @@ describe(`Fitz conformance — fitz-ts [transport=${TRANSPORT}, auth=${AUTH_MODE
         let caught: unknown;
         try {
           // Expected offset 0 again, but stream is now at >0 — should fail
-          const wrongSession = await client.stream().begin(route);
+          const wrongSession = await client.stream.begin(route);
           await wrongSession.append(0n, b("record-2"));
         } catch (err) {
           caught = err;
@@ -822,7 +824,7 @@ describe(`Fitz conformance — fitz-ts [transport=${TRANSPORT}, auth=${AUTH_MODE
 
         // Client must remain usable (no resource leak)
         const kvRoute = uniqueRoute("kv");
-        const tx = await client.kv().begin(kvRoute, { durability: "Sync" });
+        const tx = await client.kv.begin(kvRoute, { durability: "Sync" });
         await tx.put(b("after-stream-error"), b("ok"));
         await tx.commit();
         evidence.push("client still usable after stream error");
@@ -845,10 +847,10 @@ describe(`Fitz conformance — fitz-ts [transport=${TRANSPORT}, auth=${AUTH_MODE
         const routes = [uniqueRoute("kv"), uniqueRoute("kv"), uniqueRoute("kv")];
 
         const tasks = routes.map(async (route, i) => {
-          const tx = await client.kv().begin(route, { durability: "Sync" });
+          const tx = await client.kv.begin(route, { durability: "Sync" });
           await tx.put(b(`key-${i}`), b(`value-${i}`));
           await tx.commit();
-          const rtx = await client.kv().begin(route, { mode: "ReadOnly", durability: "Sync" });
+          const rtx = await client.kv.begin(route, { mode: "ReadOnly", durability: "Sync" });
           return rtx.get(b(`key-${i}`));
         });
 
@@ -892,7 +894,7 @@ describe(`Fitz conformance — fitz-ts [transport=${TRANSPORT}, auth=${AUTH_MODE
 
         // Start an async KV operation, close the client mid-flight
         const route = uniqueRoute("kv");
-        const kvBeginPromise = client.kv().begin(route, { durability: "Sync" });
+        const kvBeginPromise = client.kv.begin(route, { durability: "Sync" });
         // Prevent vitest unhandled rejection warnings before explicit await below.
         kvBeginPromise.catch(() => undefined);
 
@@ -939,7 +941,7 @@ describe(`Fitz conformance — fitz-ts [transport=${TRANSPORT}, auth=${AUTH_MODE
 
       await withClient({}, async (client) => {
         const route = uniqueRoute("stream");
-        const session = await client.stream().begin(route);
+        const session = await client.stream.begin(route);
         const firstOffset = await session.append(0n, b("alpha"), {
           discriminator: "proj.alpha",
         });
@@ -953,13 +955,13 @@ describe(`Fitz conformance — fitz-ts [transport=${TRANSPORT}, auth=${AUTH_MODE
           clauses: [{ kind: "Equals" as const, value: "proj.alpha" }],
         };
 
-        const records = await client.stream().read(route, 0n, 10, { filter });
+        const records = await client.stream.read(route, 0n, 10, { filter });
         expect(records).toHaveLength(1);
         expect(records[0].offset).toBe(firstOffset);
         expect(Buffer.from(records[0].body).toString()).toBe("alpha");
-        evidence.push("compatibility read returned only the matching discriminator record");
+        evidence.push("event-only read returned only the matching discriminator record");
 
-        const page = await client.stream().readPage(route, 0n, 10, { filter });
+        const page = await client.stream.readPage(route, 0n, 10, { filter });
         expect(page.items).toHaveLength(2);
         expect(page.items[0].kind).toBe("event");
         if (page.items[0].kind !== "event") {
@@ -969,6 +971,7 @@ describe(`Fitz conformance — fitz-ts [transport=${TRANSPORT}, auth=${AUTH_MODE
         expect(Buffer.from(page.items[0].record.body).toString()).toBe("alpha");
         expect(page.items[1]).toEqual({
           kind: "filtered",
+          route,
           offset: secondOffset,
           reason: "server_filter",
         });
@@ -1011,18 +1014,18 @@ describe(`Fitz conformance — fitz-ts [transport=${TRANSPORT}, auth=${AUTH_MODE
 
           try {
             await workerClient.connect();
-            const sub = await workerClient.rpc().registerWorker(route, async (req, writer) => {
+            const sub = await workerClient.rpc.registerWorker(route, async (req, writer) => {
               await pause(500);
               await writer.send(req.body, true);
             });
 
             const responseTimeoutMs = 1500;
-            const firstCall = client.rpc().call(route, b("first"), {
+            const firstCall = client.rpc.call(route, b("first"), {
               timeoutMs: responseTimeoutMs,
             });
             firstCall.catch(() => undefined);
 
-            const secondCall = client.rpc().call(route, b("second"), {
+            const secondCall = client.rpc.call(route, b("second"), {
               timeoutMs: responseTimeoutMs,
             });
             secondCall.catch(() => undefined);

@@ -43,12 +43,16 @@ export {
   ErrKvOperationNotAllowed,
   ErrCodeKvIsolationConflict,
   ErrCodeKvBackendError,
+  ErrCodeKvInvalidSubscription,
+  ErrCodeKvSubscriptionLimit,
   ErrQueueNotFound,
   ErrQueueMessageNotFound,
   ErrQueueInvalidToken,
   ErrQueueFull,
   ErrQueueInvalidDelay,
   ErrCodeQueueFull,
+  ErrCodeQueueInvalidSubscription,
+  ErrCodeQueueSubscriptionLimit,
   ErrCodeRpcTimeout,
   ErrCodeRpcWorkerNotFound,
   ErrCodeRpcBackpressure,
@@ -59,11 +63,17 @@ export {
   ErrCodeRpcWrongWorker,
   ErrCodeRpcUnauthorized,
   ErrCodeRpcBackendError,
+  ErrCodeRpcInvalidSubscription,
+  ErrCodeRpcSubscriptionLimit,
   ErrLeaseHeld,
   ErrLeaseNotFound,
   ErrLeaseInvalidToken,
   ErrCodeLeaseHeld,
+  ErrCodeLeaseBadRequest,
+  ErrCodeLeaseInvalidSubscriptionRoute,
   ErrNoticeGeneral,
+  ErrCodeNoticeInvalidPattern,
+  ErrCodeNoticeSubscriptionLimit,
   ErrStreamNotFound,
   ErrStreamOffsetOutOfRange,
   ErrStreamInvalidOffset,
@@ -71,12 +81,16 @@ export {
   ErrStreamSessionNotFound,
   ErrStreamSessionClosed,
   ErrStreamExpectedOffsetMismatch,
+  ErrCodeStreamInvalidSubscription,
+  ErrCodeStreamSubscriptionLimit,
   ErrScheduleNotFound,
   ErrScheduleTaskNotFound,
   ErrScheduleInvalidCron,
   ErrScheduleInvalidDelay,
   ErrScheduleInvalidTimestamp,
   ErrCodeScheduleInvalidDeliveryMode,
+  ErrCodeScheduleInvalidSubscription,
+  ErrCodeScheduleSubscriptionLimit,
   FitzError,
   TransportError,
   ConnectionError,
@@ -104,18 +118,21 @@ export type {
 } from "./core/task-group";
 
 // Domain clients
-export { KvClient } from "./domains/kv/client";
+export type { KvClient } from "./domains/kv/client";
 export type { KvTransaction } from "./domains/kv/client";
 export type {
   TxMode,
   DurabilityMode,
   KvBeginOptions,
   KvGetResult,
+  KvHandler,
+  KvNotification,
   KvScanPage,
   KvScanOptions,
+  KvSubscription,
 } from "./domains/kv/types";
 
-export { QueueClient } from "./domains/queue/client";
+export type { QueueClient } from "./domains/queue/client";
 export type {
   EnqueueOptions,
   AvailabilityHandler,
@@ -124,7 +141,7 @@ export type {
   QueueSubscription,
   QueueStatus,
 } from "./domains/queue/types";
-export { RpcClient } from "./domains/rpc/client";
+export type { RpcClient } from "./domains/rpc/client";
 export type {
   RequestOptions as RpcRequestOptions,
   ResponseFrame,
@@ -135,7 +152,7 @@ export type {
   RpcSubscription,
   RpcStatus,
 } from "./domains/rpc/types";
-export { LeaseClient } from "./domains/lease/client";
+export type { LeaseClient } from "./domains/lease/client";
 export type {
   LeaseInfo,
   Lease,
@@ -146,14 +163,14 @@ export type {
   LeaseLifecycleError,
   WithLeaseOptions,
 } from "./domains/lease/types";
-export { NoticeClient } from "./domains/notice/client";
+export type { NoticeClient } from "./domains/notice/client";
 export type {
   NoticeMsg,
   NoticeHandler,
   NoticeSubscription,
   NoticeStatus,
 } from "./domains/notice/types";
-export { StreamClient } from "./domains/stream/client";
+export type { StreamClient } from "./domains/stream/client";
 export type {
   StreamRecord,
   StreamMetadata,
@@ -176,7 +193,7 @@ export type {
   StreamCommitMode,
   StreamStatus,
 } from "./domains/stream/types";
-export { ScheduleClient } from "./domains/schedule/client";
+export type { ScheduleClient } from "./domains/schedule/client";
 export type {
   ScheduleEntry,
   ScheduleDeliveryMode,
@@ -184,4 +201,5 @@ export type {
   ScheduleHandler,
   ScheduleSubscription,
   ScheduleStatus,
+  ScheduleListPage,
 } from "./domains/schedule/types";

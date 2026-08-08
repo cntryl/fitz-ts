@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import { ProtocolError } from "../../../src/core/errors";
-import { assertSuccess, parseStandardResponse } from "../../../src/protocol/response";
+import {
+  assertPlainSuccess,
+  assertSuccess,
+  parsePlainResponse,
+  parseStandardResponse,
+} from "../../../src/protocol/response";
 
 describe("response helpers", () => {
   it("returns success payloads", () => {
@@ -60,5 +65,20 @@ describe("response helpers", () => {
       error: "future broker error",
       errorCode: 4_000_000_000,
     });
+  });
+
+  it("decodes string-only domain errors without inventing a numeric code", () => {
+    const message = new TextEncoder().encode("lease wait timed out");
+    const payload = new Uint8Array(5 + message.length);
+    payload[0] = 1;
+    new DataView(payload.buffer).setUint32(1, message.length, false);
+    payload.set(message, 5);
+
+    expect(parsePlainResponse(payload)).toEqual({
+      success: false,
+      data: new Uint8Array(0),
+      error: "lease wait timed out",
+    });
+    expect(() => assertPlainSuccess(payload, "LEASE_ACQUIRE")).toThrow("lease wait timed out");
   });
 });

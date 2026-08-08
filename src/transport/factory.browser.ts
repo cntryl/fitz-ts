@@ -4,21 +4,10 @@
 
 import { Transport, TransportOptions } from "./types";
 import { createWebSocketTransport } from "./websocket.browser";
+import { normalizeWebSocketUrl } from "./url";
 import { TransportError } from "../core/errors";
 
 export type BrowserTransportType = "ws" | "auto";
-
-function normalizeWebSocketUrl(url: string): string {
-  if (url.startsWith("https://")) {
-    return url.replace(/^https:\/\//, "wss://");
-  }
-
-  if (url.startsWith("http://")) {
-    return url.replace(/^http:\/\//, "ws://");
-  }
-
-  return url;
-}
 
 export function createBrowserTransport(
   url: string,

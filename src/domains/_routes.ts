@@ -1,5 +1,4 @@
 export type RouteShapeOptions = { allowBareRoute?: boolean };
-export type SelectorRouteShapeOptions = { allowRealmWildcard?: boolean };
 
 const maxWireBytes = 65_535;
 
@@ -18,21 +17,17 @@ export function isConcreteRouteShape(route: string, scheme: string): boolean {
   return start >= 0 && scanConcrete(route, start, 0);
 }
 
-export function isSelectorRouteShape(
+export function isRegistrationPatternShape(
   route: string,
   scheme: string,
-  segmentCount: number,
-  options?: SelectorRouteShapeOptions,
+  requiredSegments = 0,
 ): boolean {
   const start = pathStart(route, scheme, false);
-  if (start < 0) return false;
+  if (start < 0 || requiredSegments < 0) return false;
 
-  let count = 0;
-  let firstWildcard = -1;
-  let hasDoubleWildcard = false;
-  let wildcardSuffix = true;
+  let segmentCount = 0;
+  let doubleWildcardCount = 0;
   let segmentStart = start;
-
   for (let index = start; index <= route.length; index++) {
     if (index !== route.length && route.charCodeAt(index) !== 47) continue;
     const length = index - segmentStart;
@@ -42,31 +37,83 @@ export function isSelectorRouteShape(
       length === 2 &&
       route.charCodeAt(segmentStart) === 42 &&
       route.charCodeAt(segmentStart + 1) === 42;
-    if (single || double) {
-      if (firstWildcard < 0) firstWildcard = count;
-      hasDoubleWildcard ||= double;
-    } else {
-      if (containsAsterisk(route, segmentStart, index)) return false;
-      if (firstWildcard >= 0) wildcardSuffix = false;
-    }
-    count++;
+    if (!single && !double && containsAsterisk(route, segmentStart, index)) return false;
+    if (double) doubleWildcardCount++;
+    segmentCount++;
     segmentStart = index + 1;
   }
 
+  if (requiredSegments === 0) return true;
+  if (doubleWildcardCount === 0) return segmentCount === requiredSegments;
+  return segmentCount - doubleWildcardCount <= requiredSegments;
+}
+
+export function isStreamSelectorShape(route: string): boolean {
+  const start = pathStart(route, "stream", false);
+  if (start < 0) return false;
+  if (new TextEncoder().encode(route).length > 512) return false;
+  if (route === "stream://**") return true;
+  const segments = route.slice(start).split("/");
   if (
-    options?.allowRealmWildcard === true &&
-    count === 2 &&
-    firstWildcard === 1 &&
-    hasDoubleWildcard
+    segments.length === 2 &&
+    segments[1] === "**" &&
+    segments[0] !== undefined &&
+    segments[0] !== "*" &&
+    !segments[0].includes("*")
   )
     return true;
-  if (count !== segmentCount || firstWildcard === 0) return false;
-  if (firstWildcard < 0) return true;
-  if (hasDoubleWildcard || !wildcardSuffix) return false;
-  return (
-    firstWildcard === segmentCount - 1 ||
-    (options?.allowRealmWildcard === true && firstWildcard === 1)
-  );
+  if (segments.length !== 3 || segments.some((segment) => segment.length === 0)) return false;
+  const realm = segments[0]!;
+  const area = segments[1]!;
+  const resource = segments[2]!;
+  const literal = (s: string) => !s.includes("*");
+  const wild = (s: string) => s === "*";
+  // Every segment may be a whole-segment wildcard.  The broker supports the
+  // complete selector matrix, including wildcard realms (for example
+  // stream://*/orders/created and stream://*/*/created).
+  return [realm, area, resource].every((segment) => literal(segment) || wild(segment));
+}
+
+export function routeMatchesPattern(route: string, pattern: string): boolean {
+  const routeMarker = route.indexOf("://");
+  const patternMarker = pattern.indexOf("://");
+  if (
+    routeMarker < 1 ||
+    patternMarker < 1 ||
+    route.slice(0, routeMarker) !== pattern.slice(0, patternMarker)
+  )
+    return false;
+  const routeSegments = routeSegmentsOf(route);
+  const patternSegments = routeSegmentsOf(pattern);
+  if (!routeSegments || !patternSegments) return false;
+
+  let routeIndex = 0;
+  let patternIndex = 0;
+  let lastDoubleWildcard = -1;
+  let lastDoubleMatch = 0;
+  while (routeIndex < routeSegments.length) {
+    const segment = patternSegments[patternIndex];
+    if (segment === "*" || segment === routeSegments[routeIndex]) {
+      routeIndex++;
+      patternIndex++;
+      continue;
+    }
+    if (segment === "**") {
+      lastDoubleWildcard = patternIndex++;
+      lastDoubleMatch = routeIndex;
+      continue;
+    }
+    if (lastDoubleWildcard < 0) return false;
+    routeIndex = ++lastDoubleMatch;
+    patternIndex = lastDoubleWildcard + 1;
+  }
+  while (patternSegments[patternIndex] === "**") patternIndex++;
+  return patternIndex === patternSegments.length;
+}
+
+function routeSegmentsOf(route: string): string[] | undefined {
+  const marker = route.indexOf("://");
+  return marker < 1 ? undefined : route.slice(marker + 3).split("/");
 }
 
 function pathStart(route: string, scheme: string, allowBare: boolean): number {

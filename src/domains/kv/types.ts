@@ -20,8 +20,31 @@ export interface KvScanOptions {
 export type KvGetResult = { type: "found"; value: Uint8Array } | { type: "not-found" };
 
 export interface KvScanPage {
-  keys: Uint8Array[];
+  entries: Array<{ key: Uint8Array; value: Uint8Array }>;
   hasMore: boolean;
+}
+
+export interface KvNotification {
+  route: string;
+  mutationCount: bigint;
+}
+
+export type KvHandler = (notification: KvNotification) => void | Promise<void>;
+
+export type KvSubscription = ReturnType<typeof createKvSubscription>;
+
+export function createKvSubscription(
+  getSubId: () => bigint,
+  pattern: string,
+  unsubscribeFn: () => Promise<void>,
+) {
+  return {
+    get subId(): bigint {
+      return getSubId();
+    },
+    pattern,
+    unsubscribe: unsubscribeFn,
+  };
 }
 
 export interface KvBeginResponse {
@@ -31,18 +54,21 @@ export interface KvBeginResponse {
 
 export interface KvStatusResponse {
   status: number;
+  errorMessage?: string;
 }
 
 export interface KvGetResponse {
   status: number;
   found: boolean;
   value?: Uint8Array;
+  errorMessage?: string;
 }
 
 export interface KvScanResponse {
   status: number;
-  keys: Uint8Array[];
+  entries: Array<{ key: Uint8Array; value: Uint8Array }>;
   hasMore: boolean;
+  errorMessage?: string;
 }
 
 export enum KvStatus {
@@ -53,3 +79,11 @@ export enum KvStatus {
   KeyNotFound = 4,
   OperationNotAllowed = 5,
 }
+
+export const KvStatusNames: Record<number, string> = {
+  [KvStatus.TransactionAborted]: "TransactionAborted",
+  [KvStatus.LeaseExpired]: "LeaseExpired",
+  [KvStatus.ConflictingWrite]: "ConflictingWrite",
+  [KvStatus.KeyNotFound]: "KeyNotFound",
+  [KvStatus.OperationNotAllowed]: "OperationNotAllowed",
+};

@@ -4,7 +4,49 @@ All notable changes to this project will be documented in this file.
 
 The format is based on Keep a Changelog and the project follows Semantic Versioning.
 
-## [0.1.0] - 2026-03-25
+## [Unreleased]
+
+### Changed
+
+- Breaking: Schedule listing now uses canonical message 702 with offset/limit pages and `totalCount`.
+- Breaking: KV scans return key/value pairs and `hasMore` instead of keys alone.
+- Lease acquisition accepts `waitSeconds` and completes broker-managed queued acquisition instead of polling.
+- Stream selectors accept the full documented wildcard matrix and global records expose `globalOffset`.
+- Domain errors preserve broker codes and messages; reconnect, unsubscribe, close, and request cancellation bookkeeping is transactional.
+
+## [0.0.15] - 2026-08-05
+
+- Breaking: removed legacy stream continuation fields and the offset-based Schedule list call. Use `schedule.listPage()` and its continuation token.
+- Breaking: callable capitalized client aliases were removed; use `createClient` and the domain `create*` factories.
+- Breaking: Queue reserve, Stream read, and Stream last responses now require a concrete route for every returned item. `QueueItem`, `StreamReadItem`, and `StreamRecord` expose that route.
+
+## [0.0.14] - 2026-08-03
+
+### Added
+
+- Abort-aware async iterator subscription APIs for KV, Lease, Notice, and Schedule that unsubscribe when iteration ends.
+- Async disposal for KV transactions and Stream sessions, with automatic rollback of open work.
+
+### Changed
+
+- Breaking: `ScheduleDeliveryMode` now uses `"Broadcast" | "Single"`. The wire values remain `0` and `1`; callers should replace lowercase mode literals with the PascalCase forms.
+- Reconnect listener failures are reported through observability and isolated so one domain restore failure does not prevent the reconnected session from becoming usable.
+
+### Fixed
+
+- Reconnect established sessions after transport loss instead of inferring an authentication rejection before the next server frame.
+- Retry replayable reads after local request-queue backpressure.
+- Keep Notice subscription IDs synchronized after broker re-registration.
+
+## [0.0.13] - 2026-08-01
+
+### Changed
+
+- Breaking: domain accessors are readonly lazy properties (`client.kv`, `client.queue`, `client.rpc`, `client.lease`, `client.notice`, `client.stream`, and `client.schedule`) instead of methods.
+- Public client and domain declarations now use named interfaces rather than factory `ReturnType` aliases.
+- Concurrent subscriptions for the same KV, Queue, Notice, Lease, Stream, or Schedule pattern now share one broker registration; failed registration attempts remain retryable and the final local handle owns wire unsubscription.
+
+## [0.0.1] - 2026-03-25
 
 ### Added
 

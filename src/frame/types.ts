@@ -23,6 +23,9 @@ export const MSG_KV_INSERT = 105;
 export const MSG_KV_DELETE = 106;
 export const MSG_KV_DELETE_RANGE = 107;
 export const MSG_KV_SCAN = 108;
+export const MSG_KV_SUBSCRIBE = 109;
+export const MSG_KV_UNSUBSCRIBE = 110;
+export const MSG_KV_NOTIFY = 111;
 
 // Queue Domain (200-299)
 // Note: 201 = ENQUEUE_BATCH is reserved per CLIENT_SPEC; do not use
@@ -71,7 +74,9 @@ export const MSG_STREAM_NOTIFY = 609; // Server -> Client only
 // Schedule Domain (700-799)
 export const MSG_SCHEDULE_CREATE = 700;
 export const MSG_SCHEDULE_CANCEL = 701;
-export const MSG_SCHEDULE_LIST = 702;
+// Schedule LIST is the canonical 702 operation. 707 was never assigned by
+// the wire registry and is rejected by conforming brokers.
+export const MSG_SCHEDULE_LIST_PAGE = 702;
 export const MSG_SCHEDULE_SUBSCRIBE = 703;
 export const MSG_SCHEDULE_UNSUBSCRIBE = 704;
 export const MSG_SCHEDULE_NOTIFY = 705; // Server -> Client only
@@ -95,6 +100,7 @@ export function routeDomain(msgType: number): string {
  * Notification message types (server -> client push)
  */
 export const NOTIFICATION_TYPES = new Set([
+  MSG_KV_NOTIFY,
   MSG_QUEUE_NOTIFY,
   MSG_LEASE_NOTIFY,
   MSG_NOTICE_NOTIFY,

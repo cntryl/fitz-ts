@@ -4,6 +4,7 @@
 
 import { Transport, TransportOptions } from "./types";
 import { TransportError, TimeoutError } from "../core/errors";
+import { abortError } from "../core/abort";
 
 type NodeLikeProcess = {
   versions?: {
@@ -22,6 +23,7 @@ type TcpSocket = {
   on(event: "close", listener: () => void): void;
   on(event: "timeout", listener: () => void): void;
   once(event: "drain", listener: () => void): void;
+  removeListener(event: "drain", listener: () => void): void;
   write(data: Uint8Array, callback: (err?: Error | null) => void): boolean;
   setNoDelay(noDelay?: boolean): void;
   setTimeout(timeout: number): void;
@@ -50,12 +52,6 @@ if (isNode()) {
   netModule = require("net") as NetModule;
 }
 
-function abortError(): Error {
-  const error = new Error("The operation was aborted");
-  error.name = "AbortError";
-  return error;
-}
-
 export function createTcpTransport(url: string, options: TransportOptions = {}): Transport {
   if (!isNode()) {
     throw new Error("TCP transport is only available in Node.js");
@@ -70,7 +66,7 @@ export function createTcpTransport(url: string, options: TransportOptions = {}):
   } | null = null;
   let terminalError: Error | null = null;
   const timeout = options.timeout ?? 30000;
-  const maxFrameSize = options.maxFrameSize ?? 65535;
+  const maxFrameSize = options.maxFrameSize ?? 65540;
   const receiveTimeoutEnabled = options.receiveTimeout ?? true;
   let lengthBuffer = new Uint8Array(4);
   let lengthOffset = 0;
@@ -143,7 +139,14 @@ export function createTcpTransport(url: string, options: TransportOptions = {}):
   };
 
   const failReceive = (error: Error): void => {
-    terminalError = error;
+    // First error wins. `close()` on an idle socket, the 'error' listener
+    // re-firing after `destroy(error)` re-emits it, and a live receive-loop
+    // timeout can all call this for the same underlying failure — without
+    // this guard, a later, less-specific re-wrap (e.g. a generic
+    // TransportError from the 'error' listener) would silently overwrite a
+    // more specific one already recorded (e.g. a TimeoutError from the
+    // 'timeout' listener), breaking downstream `instanceof` classification.
+    terminalError ??= error;
     if (receiver) {
       receiver.reject(error);
       receiver = null;
@@ -275,29 +278,45 @@ export function createTcpTransport(url: string, options: TransportOptions = {}):
       fullMessage.set(data, lengthBuffer.length);
 
       let settled = false;
-      const timeoutId = setTimeout(() => {
-        settled = true;
-        reject(new TimeoutError(`TCP send timeout after ${timeout}ms`));
-      }, timeout);
+      let drainListener: (() => void) | null = null;
 
       const activeSocket = socket;
       if (!activeSocket) {
-        clearTimeout(timeoutId);
         reject(new TransportError("TCP socket is not connected"));
         return;
       }
 
-      let writeCompleted = false;
-      let drainCompleted = true;
-      const settle = (error?: Error | null): void => {
+      const finish = (error: Error | null): void => {
         if (settled) {
           return;
         }
-
+        settled = true;
+        clearTimeout(timeoutId);
+        // A send that hasn't drained yet by the time we settle (via timeout
+        // or a write error) must not leave its 'drain' listener dangling —
+        // it would otherwise linger until an eventual drain event, or
+        // accumulate one more listener per timed-out retry on the same
+        // still-backpressured socket.
+        if (drainListener) {
+          activeSocket.removeListener("drain", drainListener);
+          drainListener = null;
+        }
         if (error) {
-          settled = true;
-          clearTimeout(timeoutId);
-          reject(new TransportError(`TCP send failed: ${error.message}`));
+          reject(error);
+        } else {
+          resolve();
+        }
+      };
+
+      const timeoutId = setTimeout(() => {
+        finish(new TimeoutError(`TCP send timeout after ${timeout}ms`));
+      }, timeout);
+
+      let writeCompleted = false;
+      let drainCompleted = true;
+      const settle = (error?: Error | null): void => {
+        if (error) {
+          finish(new TransportError(`TCP send failed: ${error.message}`));
           return;
         }
 
@@ -305,9 +324,7 @@ export function createTcpTransport(url: string, options: TransportOptions = {}):
           return;
         }
 
-        settled = true;
-        clearTimeout(timeoutId);
-        resolve();
+        finish(null);
       };
 
       const accepted = activeSocket.write(fullMessage, (err?: Error | null) => {
@@ -317,10 +334,11 @@ export function createTcpTransport(url: string, options: TransportOptions = {}):
 
       if (!accepted) {
         drainCompleted = false;
-        activeSocket.once("drain", () => {
+        drainListener = () => {
           drainCompleted = true;
           settle();
-        });
+        };
+        activeSocket.once("drain", drainListener);
       }
     });
   };

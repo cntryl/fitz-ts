@@ -97,6 +97,12 @@ describe("connection internals", () => {
       expect(errors[0]).toBeInstanceOf(Error);
       expect((errors[0] as Error).message).toContain("Async handler timeout");
 
+      // The timeout is reported immediately, but asyncHandlers.maxConcurrency
+      // is a hard bound — the concurrency slot must stay held until the
+      // still-hanging handler actually finishes, so "second" must not start
+      // ahead of "first:end".
+      expect(events).toEqual(["first:start"]);
+
       releaseFirst();
       await dispatcher.drain();
       expect(events).toEqual(["first:start", "first:end", "second"]);
@@ -105,7 +111,48 @@ describe("connection internals", () => {
     }
   });
 
-  it("bounds queued async handlers and reports saturation without freeing active slots", async () => {
+  it("keeps a hung handler's concurrency slot occupied after its timeout is reported, instead of exceeding the configured bound", async () => {
+    vi.useFakeTimers();
+    try {
+      const errors: unknown[] = [];
+      const dispatcher = createAsyncHandlerDispatcher(1, 25, (error) => {
+        errors.push(error);
+      });
+      const events: string[] = [];
+
+      // This handler hangs forever — it never resolves or rejects.
+      dispatcher.dispatch(async () => {
+        events.push("first:start");
+        await new Promise<void>(() => undefined);
+      });
+
+      await Promise.resolve();
+      expect(events).toEqual(["first:start"]);
+      expect(dispatcher.getMetrics().activeCount).toBe(1);
+
+      await vi.advanceTimersByTimeAsync(25);
+      expect(errors).toHaveLength(1);
+      expect((errors[0] as Error).message).toContain("Async handler timeout");
+
+      // asyncHandlers.maxConcurrency is a hard bound (per
+      // PUBLIC_CONTRACT.md's "Async handler fan-out is bounded by..."), so
+      // the slot must stay occupied while the real handler invocation is
+      // still running, even though it was already reported as timed out —
+      // otherwise repeated hung handlers could run unboundedly past the
+      // configured limit.
+      expect(dispatcher.getMetrics().activeCount).toBe(1);
+      dispatcher.dispatch(() => {
+        events.push("second");
+      });
+      await Promise.resolve();
+      expect(events).toEqual(["first:start"]);
+      expect(dispatcher.getMetrics()).toMatchObject({ activeCount: 1, queuedCount: 1 });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("bounds queued async handlers, reports saturation, and only starts the queued handler once the active one actually finishes", async () => {
     vi.useFakeTimers();
     try {
       const errors: unknown[] = [];
@@ -160,7 +207,10 @@ describe("connection internals", () => {
       await vi.advanceTimersByTimeAsync(25);
 
       expect(errors).toHaveLength(1);
+      // The timeout is reported, but the slot stays held — the queued
+      // "second" handler must not start ahead of "first" actually finishing.
       expect(events).toEqual(["first:start"]);
+      expect(dispatcher.getMetrics()).toMatchObject({ activeCount: 1, queuedCount: 1 });
 
       releaseFirst();
       await dispatcher.drain();

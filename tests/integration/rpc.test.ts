@@ -27,14 +27,11 @@ describe("RPC integration", () => {
       await caller.connectOrFail();
 
       const route = worker.uniqueRoute("rpc");
-      const sub = await worker
-        .client()
-        .rpc()
-        .registerWorker(route, async (req, writer) => {
-          await writer.send(req.body, true);
-        });
+      const sub = await worker.client().rpc.registerWorker(route, async (req, writer) => {
+        await writer.send(req.body, true);
+      });
 
-      const iterator = await caller.client().rpc().call(route, b("ping"), {
+      const iterator = await caller.client().rpc.call(route, b("ping"), {
         timeoutMs: 5000,
       });
       const frames = await collectResponses(iterator);
@@ -50,17 +47,14 @@ describe("RPC integration", () => {
       await caller.connectOrFail();
 
       const route = worker.uniqueRoute("rpc");
-      const sub = await worker
-        .client()
-        .rpc()
-        .registerWorker(route, async (_req, writer) => {
-          await writer.send(Uint8Array.of(0), false);
-          await writer.send(Uint8Array.of(1), false);
-          await writer.send(Uint8Array.of(2), false);
-          await writer.send(new Uint8Array(), true);
-        });
+      const sub = await worker.client().rpc.registerWorker(route, async (_req, writer) => {
+        await writer.send(Uint8Array.of(0), false);
+        await writer.send(Uint8Array.of(1), false);
+        await writer.send(Uint8Array.of(2), false);
+        await writer.send(new Uint8Array(), true);
+      });
 
-      const iterator = await caller.client().rpc().call(route, b("stream-me"), {
+      const iterator = await caller.client().rpc.call(route, b("stream-me"), {
         timeoutMs: 5000,
       });
       const frames = await collectResponses(iterator);
@@ -74,7 +68,7 @@ describe("RPC integration", () => {
       const f = new TestFixture(transport, authMode);
       await f.connectOrFail();
 
-      const iterator = await f.client().rpc().call(f.uniqueRoute("rpc"), b("nobody-home"), {
+      const iterator = await f.client().rpc.call(f.uniqueRoute("rpc"), b("nobody-home"), {
         timeoutMs: 500,
       });
 
@@ -92,23 +86,17 @@ describe("RPC integration", () => {
       const route = worker1.uniqueRoute("rpc");
       const seen: Record<string, number> = { w1: 0, w2: 0 };
 
-      const sub1 = await worker1
-        .client()
-        .rpc()
-        .registerWorker(route, async (req, writer) => {
-          seen.w1 += 1;
-          await writer.send(req.body, true);
-        });
-      const sub2 = await worker2
-        .client()
-        .rpc()
-        .registerWorker(route, async (req, writer) => {
-          seen.w2 += 1;
-          await writer.send(req.body, true);
-        });
+      const sub1 = await worker1.client().rpc.registerWorker(route, async (req, writer) => {
+        seen.w1 += 1;
+        await writer.send(req.body, true);
+      });
+      const sub2 = await worker2.client().rpc.registerWorker(route, async (req, writer) => {
+        seen.w2 += 1;
+        await writer.send(req.body, true);
+      });
 
       for (let i = 0; i < 4; i += 1) {
-        const iterator = await caller.client().rpc().call(route, b("req"), {
+        const iterator = await caller.client().rpc.call(route, b("req"), {
           timeoutMs: 5000,
         });
         await collectResponses(iterator);
@@ -126,16 +114,13 @@ describe("RPC integration", () => {
       await caller.connectOrFail();
 
       const route = worker.uniqueRoute("rpc");
-      const sub = await worker
-        .client()
-        .rpc()
-        .registerWorker(route, async (req, writer) => {
-          await writer.send(req.body, true);
-        });
+      const sub = await worker.client().rpc.registerWorker(route, async (req, writer) => {
+        await writer.send(req.body, true);
+      });
 
       const [framesA, framesB] = await Promise.all([
-        caller.client().rpc().call(route, b("req-A"), { timeoutMs: 5000 }).then(collectResponses),
-        caller.client().rpc().call(route, b("req-B"), { timeoutMs: 5000 }).then(collectResponses),
+        caller.client().rpc.call(route, b("req-A"), { timeoutMs: 5000 }).then(collectResponses),
+        caller.client().rpc.call(route, b("req-B"), { timeoutMs: 5000 }).then(collectResponses),
       ]);
 
       expect(framesA[0]?.body).toBe("req-A");
@@ -150,21 +135,18 @@ describe("RPC integration", () => {
       await caller.connectOrFail();
 
       const route = worker.uniqueRoute("rpc");
-      const sub = await worker
-        .client()
-        .rpc()
-        .registerWorker(route, async (req, writer) => {
-          await writer.send(req.body, true);
-        });
+      const sub = await worker.client().rpc.registerWorker(route, async (req, writer) => {
+        await writer.send(req.body, true);
+      });
 
-      const first = await caller.client().rpc().call(route, b("alive"), {
+      const first = await caller.client().rpc.call(route, b("alive"), {
         timeoutMs: 5000,
       });
       await collectResponses(first);
 
       await sub.unsubscribe();
 
-      const dead = await caller.client().rpc().call(route, b("dead"), {
+      const dead = await caller.client().rpc.call(route, b("dead"), {
         timeoutMs: 500,
       });
 

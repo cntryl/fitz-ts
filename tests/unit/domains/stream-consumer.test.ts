@@ -17,13 +17,19 @@ class FakeStreamConsumerConnection {
   readonly reconnectListeners = new Set<() => void | Promise<void>>();
   readResponses: Uint8Array[] = [];
   unsubscribeCount = 0;
+  subscribeSubIds: bigint[] = [];
+  unsubscribeGate: Promise<void> | null = null;
 
   async request(messageType: number, payload: Uint8Array): Promise<Uint8Array> {
     this.requests.push({ messageType, payload });
     if (messageType === MSG_STREAM_SUBSCRIBE) {
-      return encodeStreamSubscribeResponse(9n);
+      const subId = this.subscribeSubIds.shift() ?? 9n;
+      return encodeStreamSubscribeResponse(subId);
     }
     if (messageType === MSG_STREAM_UNSUBSCRIBE) {
+      if (this.unsubscribeGate) {
+        await this.unsubscribeGate;
+      }
       this.unsubscribeCount += 1;
       return new Uint8Array([0]);
     }
@@ -52,9 +58,9 @@ class FakeStreamConsumerConnection {
     return () => undefined;
   }
 
-  notify(): void {
+  notify(subId = 9n): void {
     this.handlers.get(MSG_STREAM_NOTIFY)?.(
-      encodeStreamNotification(9n, "stream://realm/area/resource"),
+      encodeStreamNotification(subId, "stream://realm/area/resource"),
     );
   }
 
@@ -175,6 +181,134 @@ describe("StreamClient readWhenCommitted", () => {
     await expect(pending).rejects.toMatchObject({ name: "AbortError" });
     expect(connection.unsubscribeCount).toBe(1);
   });
+
+  it("advances past a zero-item hasMore page instead of tight-looping forever", async () => {
+    const connection = new FakeStreamConsumerConnection();
+    connection.readResponses.push(
+      encodeWrappedReadResponse([], 5n, true),
+      encodeWrappedReadResponse([encodeReadEvent(6n, new Uint8Array([9]))], 6n, false),
+    );
+    const client = createStreamClient(connection);
+
+    const result = await client
+      .readWhenCommitted("stream://realm/area/resource", { offset: 4n })
+      [Symbol.asyncIterator]()
+      .next();
+
+    expect(result.done).toBe(false);
+    expect(result.value?.map((record: { offset: bigint }) => record.offset)).toEqual([6n]);
+    expect(readOffsets(connection)).toEqual([4n, 6n]);
+  }, 2000);
+
+  it("advances by the realm offset for the {realm}/** continuous-read alias", async () => {
+    const connection = new FakeStreamConsumerConnection();
+    connection.readResponses.push(
+      encodeRealmReadResponse([encodeReadFiltered(5n)], 5n, 50n, true),
+      encodeWrappedReadResponse([encodeReadEvent(51n, new Uint8Array([1]))], 51n, false),
+    );
+    const client = createStreamClient(connection);
+
+    const result = await client
+      .readWhenCommitted("stream://realm/**", { offset: 4n })
+      [Symbol.asyncIterator]()
+      .next();
+
+    expect(result.done).toBe(false);
+    expect(result.value?.map((record: { offset: bigint }) => record.offset)).toEqual([51n]);
+    // The second READ must resume from lastRealmOffset + 1 (51n), not from
+    // lastResourceOffset + 1 (6n) — the bug this regression test guards
+    // against silently re-requested the same resource-offset window
+    // forever on realm-scoped continuous reads.
+    expect(readOffsets(connection)).toEqual([4n, 51n]);
+  });
+});
+
+describe("StreamClient subscription lineage", () => {
+  it("issues a fresh wire subscribe for a concurrent subscribe() that lands while an unsubscribe() is still in flight", async () => {
+    const connection = new FakeStreamConsumerConnection();
+    connection.subscribeSubIds = [9n, 77n];
+    let releaseUnsubscribe: () => void = () => undefined;
+    connection.unsubscribeGate = new Promise((resolve) => {
+      releaseUnsubscribe = resolve;
+    });
+    const client = createStreamClient(connection);
+    const received: unknown[] = [];
+
+    const first = await client.subscribe("stream://realm/area/resource", () => undefined);
+    const unsubscribing = first.unsubscribe();
+    await vi.waitFor(() => {
+      expect(connection.requests.some((call) => call.messageType === MSG_STREAM_UNSUBSCRIBE)).toBe(
+        true,
+      );
+    });
+
+    // A subscribe() racing the in-flight unsubscribe must wait it out
+    // rather than reuse the not-yet-deleted shared state — reusing it
+    // would register the new handler locally with no corresponding broker
+    // subscription.
+    const subscribingSecond = client.subscribe("stream://realm/area/resource", (notification) => {
+      received.push(notification);
+    });
+    await Promise.resolve();
+    expect(
+      connection.requests.filter((call) => call.messageType === MSG_STREAM_SUBSCRIBE),
+    ).toHaveLength(1);
+
+    releaseUnsubscribe();
+    await unsubscribing;
+    const second = await subscribingSecond;
+
+    // The second subscribe() only resolved once the unsubscribe settled,
+    // and it sent its own fresh wire SUBSCRIBE — a genuinely new subId,
+    // not a reuse of the first subscription's now-torn-down state.
+    expect(second.subId).toBe(77n);
+    expect(
+      connection.requests.filter((call) => call.messageType === MSG_STREAM_SUBSCRIBE),
+    ).toHaveLength(2);
+
+    connection.notify(77n);
+    await vi.waitFor(() => {
+      expect(received).toHaveLength(1);
+    });
+  });
+
+  it("keeps a subscription handle's subId current across reconnect", async () => {
+    const connection = new FakeStreamConsumerConnection();
+    connection.subscribeSubIds = [9n, 42n];
+    const client = createStreamClient(connection);
+
+    const subscription = await client.subscribe("stream://realm/area/resource", () => undefined);
+    expect(subscription.subId).toBe(9n);
+
+    await connection.reconnect();
+
+    expect(subscription.subId).toBe(42n);
+  });
+});
+
+describe("StreamClient subscribeIterator", () => {
+  it("yields commit notifications as they arrive", async () => {
+    const connection = new FakeStreamConsumerConnection();
+    const client = createStreamClient(connection);
+    const iterator = client
+      .subscribeIterator("stream://realm/area/resource")
+      [Symbol.asyncIterator]();
+
+    const pending = iterator.next();
+    await vi.waitFor(() => {
+      expect(connection.requests.some((call) => call.messageType === MSG_STREAM_SUBSCRIBE)).toBe(
+        true,
+      );
+    });
+    connection.notify();
+
+    const result = await pending;
+    expect(result.done).toBe(false);
+    expect(result.value?.route).toBe("stream://realm/area/resource");
+
+    await iterator.return?.();
+    expect(connection.unsubscribeCount).toBe(1);
+  });
 });
 
 function readOffsets(connection: FakeStreamConsumerConnection): bigint[] {
@@ -203,6 +337,7 @@ function encodeWrappedReadResponse(
   const data = createBufferWriter(128);
   data.writeU32BE(items.length);
   for (const item of items) {
+    data.writeRoute("stream://realm/area/resource");
     data.writeBytes(item);
   }
   data.writeU64BE(lastOffset);
@@ -213,8 +348,36 @@ function encodeWrappedReadResponse(
   const writer = createBufferWriter(160);
   writer.writeU8(0);
   writer.writeU8(0);
-  writer.writeU32BE(data.getLength());
-  writer.writeBytes(data.getBuffer());
+  const payload = data.getBuffer();
+  writer.writeU32BE(payload.length);
+  writer.writeBytes(payload);
+  return writer.getBuffer();
+}
+
+function encodeRealmReadResponse(
+  items: Uint8Array[],
+  resourceOffset: bigint,
+  realmOffset: bigint,
+  hasMore: boolean,
+): Uint8Array {
+  const data = createBufferWriter(128);
+  data.writeU32BE(items.length);
+  for (const item of items) {
+    data.writeRoute("stream://realm/area/resource");
+    data.writeBytes(item);
+  }
+  data.writeU64BE(resourceOffset);
+  data.writeU8(0); // no area offset
+  data.writeU8(1); // has realm offset
+  data.writeU64BE(realmOffset);
+  data.writeU8(hasMore ? 1 : 0);
+
+  const writer = createBufferWriter(160);
+  writer.writeU8(0);
+  writer.writeU8(0);
+  const payload = data.getBuffer();
+  writer.writeU32BE(payload.length);
+  writer.writeBytes(payload);
   return writer.getBuffer();
 }
 

@@ -6,6 +6,8 @@ export const ErrKvOperationNotAllowed = 5;
 
 export const ErrCodeKvIsolationConflict = 1004;
 export const ErrCodeKvBackendError = 1009;
+export const ErrCodeKvInvalidSubscription = 1012;
+export const ErrCodeKvSubscriptionLimit = 1013;
 
 export const ErrQueueNotFound = 1;
 export const ErrQueueMessageNotFound = 2;
@@ -14,6 +16,8 @@ export const ErrQueueFull = 4;
 export const ErrQueueInvalidDelay = 5;
 
 export const ErrCodeQueueFull = 4005;
+export const ErrCodeQueueInvalidSubscription = 4010;
+export const ErrCodeQueueSubscriptionLimit = 4011;
 
 export const ErrCodeRpcTimeout = 6001;
 export const ErrCodeRpcWorkerNotFound = 6002;
@@ -25,12 +29,16 @@ export const ErrCodeRpcDuplicateCorrelation = 6007;
 export const ErrCodeRpcWrongWorker = 6008;
 export const ErrCodeRpcUnauthorized = 6009;
 export const ErrCodeRpcBackendError = 6010;
+export const ErrCodeRpcInvalidSubscription = 6012;
+export const ErrCodeRpcSubscriptionLimit = 6013;
 
 export const ErrLeaseHeld = 1;
 export const ErrLeaseNotFound = 2;
 export const ErrLeaseInvalidToken = 3;
 
 export const ErrCodeLeaseHeld = 5001;
+export const ErrCodeLeaseBadRequest = 5008;
+export const ErrCodeLeaseInvalidSubscriptionRoute = 5010;
 
 export const ErrNoticeGeneral = 1;
 
@@ -48,6 +56,12 @@ export const ErrScheduleInvalidCron = 3;
 export const ErrScheduleInvalidDelay = 4;
 export const ErrScheduleInvalidTimestamp = 5;
 export const ErrCodeScheduleInvalidDeliveryMode = 7008;
+export const ErrCodeStreamInvalidSubscription = 2010;
+export const ErrCodeStreamSubscriptionLimit = 2011;
+export const ErrCodeNoticeInvalidPattern = 3002;
+export const ErrCodeNoticeSubscriptionLimit = 3003;
+export const ErrCodeScheduleInvalidSubscription = 7006;
+export const ErrCodeScheduleSubscriptionLimit = 7007;
 
 const retryableErrorCodes = new Set([
   "KV_3",

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 
 import { createConnection } from "../../../src/client/connection";
+import { shouldRetryOperation } from "../../../src/client/resilience";
 import { ConnectionError, RequestQueueFullError } from "../../../src/core/errors";
 import { Frame, FrameCodec } from "../../../src/frame/codec";
 import { MSG_LEASE_QUERY, MSG_QUEUE_ENQUEUE } from "../../../src/frame/types";
@@ -116,20 +117,20 @@ function encodeQueueSuccess(messageId: bigint): Uint8Array {
   return payload;
 }
 
-function encodeQueueErrorMessage(message: string): Uint8Array {
+function encodeQueueError(errorCode: number, message: string): Uint8Array {
   const messageBytes = new TextEncoder().encode(message);
-  const payload = new Uint8Array(5 + messageBytes.length);
+  const payload = new Uint8Array(9 + messageBytes.length);
   payload[0] = 1;
-  payload[1] = (messageBytes.length >> 24) & 0xff;
-  payload[2] = (messageBytes.length >> 16) & 0xff;
-  payload[3] = (messageBytes.length >> 8) & 0xff;
-  payload[4] = messageBytes.length & 0xff;
-  payload.set(messageBytes, 5);
+  payload[1] = (errorCode >> 24) & 0xff;
+  payload[2] = (errorCode >> 16) & 0xff;
+  payload[3] = (errorCode >> 8) & 0xff;
+  payload[4] = errorCode & 0xff;
+  payload[5] = (messageBytes.length >> 24) & 0xff;
+  payload[6] = (messageBytes.length >> 16) & 0xff;
+  payload[7] = (messageBytes.length >> 8) & 0xff;
+  payload[8] = messageBytes.length & 0xff;
+  payload.set(messageBytes, 9);
   return payload;
-}
-
-function encodeQueueErrorCode(errorCode: number): Uint8Array {
-  return Uint8Array.of(1, errorCode);
 }
 
 function encodeLeaseQueryFree(): Uint8Array {
@@ -271,6 +272,21 @@ describe("Connection resilience", () => {
     await connection.close();
   });
 
+  it("should retry replayable reads after local request queue backpressure", () => {
+    expect(shouldRetryOperation("replayable_read", new RequestQueueFullError())).toBe(true);
+  });
+
+  it("should throw on an unrecognized RetryClass instead of silently disabling retry", () => {
+    // shouldRetryOperation's switch is meant to be exhaustive over
+    // RetryClass — a future member added without an explicit case must
+    // fail loudly (and fail to compile), not fall through a catch-all
+    // default that quietly returns false.
+    const unknownRetryClass = "not_a_real_retry_class" as unknown as Parameters<
+      typeof shouldRetryOperation
+    >[0];
+    expect(() => shouldRetryOperation(unknownRetryClass, new Error("boom"))).toThrow();
+  });
+
   it("retries a replayable read after transient transport loss", async () => {
     const first = new ScriptedTransport();
     const second = new ScriptedTransport();
@@ -330,7 +346,8 @@ describe("Connection resilience", () => {
         activeTransport.pushRead(
           FrameCodec.encodeFrame(
             MSG_QUEUE_ENQUEUE,
-            encodeQueueErrorMessage(
+            encodeQueueError(
+              4,
               'Failed to commit transaction: WriteStall("Memory budget exceeded")',
             ),
           ),
@@ -371,7 +388,7 @@ describe("Connection resilience", () => {
     transport.onFrame = async (frame, activeTransport) => {
       if (frame.messageType === MSG_QUEUE_ENQUEUE) {
         activeTransport.pushRead(
-          FrameCodec.encodeFrame(MSG_QUEUE_ENQUEUE, encodeQueueErrorCode(3)),
+          FrameCodec.encodeFrame(MSG_QUEUE_ENQUEUE, encodeQueueError(3, "invalid lease token")),
         );
       }
     };

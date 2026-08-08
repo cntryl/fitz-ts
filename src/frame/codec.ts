@@ -320,5 +320,3 @@ export function createFrameParser() {
     reset,
   };
 }
-
-export const FrameParser = createFrameParser;

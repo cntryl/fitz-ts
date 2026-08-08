@@ -2,6 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import { createBufferWriter, utf8Decoder, utf8Encoder } from "../../../src/core/buffer";
 import { createLeaseClient } from "../../../src/domains/lease/client";
+import { createKvClient } from "../../../src/domains/kv/client";
 import { createNoticeClient } from "../../../src/domains/notice/client";
 import { createQueueClient } from "../../../src/domains/queue/client";
 import { createScheduleClient } from "../../../src/domains/schedule/client";
@@ -10,6 +11,8 @@ import {
   MSG_LEASE_NOTIFY,
   MSG_LEASE_SUBSCRIBE,
   MSG_LEASE_UNSUBSCRIBE,
+  MSG_KV_SUBSCRIBE,
+  MSG_KV_UNSUBSCRIBE,
   MSG_NOTICE_NOTIFY,
   MSG_NOTICE_SUBSCRIBE,
   MSG_NOTICE_UNSUBSCRIBE,
@@ -125,6 +128,14 @@ function encodeOptionalSubIdResponse(subId: bigint): Uint8Array {
 function encodeQueueSubIdResponse(subId: bigint): Uint8Array {
   const writer = createBufferWriter(16);
   writer.writeU8(0);
+  writer.writeU8(1);
+  writer.writeU64BE(subId);
+  return writer.getBuffer();
+}
+
+function encodeKvSubIdResponse(subId: bigint): Uint8Array {
+  const writer = createBufferWriter(16);
+  writer.writeU8(0);
   writer.writeU64BE(subId);
   return writer.getBuffer();
 }
@@ -140,6 +151,14 @@ function encodeStatusOnlyResponse(): Uint8Array {
   return new Uint8Array([0]);
 }
 
+function encodePlainErrorResponse(message: string): Uint8Array {
+  const writer = createBufferWriter(64);
+  writer.writeU8(1);
+  writer.writeU32BE(1);
+  writer.writeString(message);
+  return writer.getBuffer();
+}
+
 function encodeNoticeNotification(subId: bigint, route: string, body: Uint8Array): Uint8Array {
   const writer = createBufferWriter(128);
   writer.writeU64BE(subId);
@@ -153,6 +172,9 @@ function encodeQueueNotification(subId: bigint, route: string): Uint8Array {
   const writer = createBufferWriter(128);
   writer.writeU64BE(subId);
   writer.writeString(route);
+  writer.writeU64BE(3n);
+  writer.writeU64BE(2n);
+  writer.writeU64BE(1n);
   return writer.getBuffer();
 }
 
@@ -160,12 +182,14 @@ function encodeLeaseNotification(subId: bigint, route: string): Uint8Array {
   const writer = createBufferWriter(128);
   writer.writeU64BE(subId);
   writer.writeString(route);
+  writer.writeU32BE(0);
   return writer.getBuffer();
 }
 
-function encodeScheduleNotification(subId: bigint, payload: Uint8Array): Uint8Array {
+function encodeScheduleNotification(subId: bigint, route: string, payload: Uint8Array): Uint8Array {
   const writer = createBufferWriter(128);
   writer.writeU64BE(subId);
+  writer.writeString(route);
   writer.writeU32BE(payload.length);
   writer.writeBytes(payload);
   return writer.getBuffer();
@@ -181,6 +205,69 @@ function encodeStreamNotification(subId: bigint, route: string, payload: Uint8Ar
 }
 
 describe("Subscription Multiplexing", () => {
+  it("retains Notice bookkeeping until a failed wire unsubscribe can be retried", async () => {
+    const connection = new FakeSubscriptionConnection([
+      [MSG_NOTICE_SUBSCRIBE, encodeOptionalSubIdResponse(11n)],
+      [MSG_NOTICE_UNSUBSCRIBE, encodePlainErrorResponse("try again")],
+      [MSG_NOTICE_UNSUBSCRIBE, encodeStatusOnlyResponse()],
+    ]);
+    const client = createNoticeClient(connection);
+    const subscription = await client.subscribe("notice://realm/area/*", async () => undefined);
+
+    await expect(subscription.unsubscribe()).rejects.toThrow("try again");
+    await subscription.unsubscribe();
+
+    expect(connection.countRequests(MSG_NOTICE_UNSUBSCRIBE)).toBe(2);
+  });
+
+  it("retains KV bookkeeping until a failed wire unsubscribe can be retried", async () => {
+    const connection = new FakeSubscriptionConnection([
+      [MSG_KV_SUBSCRIBE, encodeKvSubIdResponse(12n)],
+      [MSG_KV_UNSUBSCRIBE, encodePlainErrorResponse("try again")],
+      [MSG_KV_UNSUBSCRIBE, encodeStatusOnlyResponse()],
+    ]);
+    const client = createKvClient(connection);
+    const subscription = await client.subscribe("kv://realm/area/resource", async () => undefined);
+
+    await expect(subscription.unsubscribe()).rejects.toThrow("try again");
+    await subscription.unsubscribe();
+
+    expect(connection.countRequests(MSG_KV_UNSUBSCRIBE)).toBe(2);
+  });
+
+  it("should single-flight concurrent KV subscriptions and retry after failure", async () => {
+    const connection = new FakeSubscriptionConnection([
+      [MSG_KV_SUBSCRIBE, encodeStatusOnlyResponse()],
+      [MSG_KV_SUBSCRIBE, encodeKvSubIdResponse(7n)],
+      [MSG_KV_SUBSCRIBE, encodeKvSubIdResponse(8n)],
+      [MSG_KV_UNSUBSCRIBE, encodeStatusOnlyResponse()],
+    ]);
+    const client = createKvClient(connection);
+    const pattern = "kv://realm/area/resource";
+
+    const failed = await Promise.allSettled([
+      client.subscribe(pattern, async () => undefined),
+      client.subscribe(pattern, async () => undefined),
+    ]);
+    expect(failed.every((result) => result.status === "rejected")).toBe(true);
+    expect(connection.countRequests(MSG_KV_SUBSCRIBE)).toBe(1);
+
+    const [first, second] = await Promise.all([
+      client.subscribe(pattern, async () => undefined),
+      client.subscribe(pattern, async () => undefined),
+    ]);
+    expect(first.subId).toBe(7n);
+    expect(second.subId).toBe(7n);
+    expect(connection.countRequests(MSG_KV_SUBSCRIBE)).toBe(2);
+    await connection.reconnect();
+    expect(first.subId).toBe(8n);
+    expect(second.subId).toBe(8n);
+    await first.unsubscribe();
+    expect(connection.countRequests(MSG_KV_UNSUBSCRIBE)).toBe(0);
+    await second.unsubscribe();
+    expect(connection.countRequests(MSG_KV_UNSUBSCRIBE)).toBe(1);
+  });
+
   it("should restore notice subscriptions given reconnect when the application still wants them active", async () => {
     const connection = new FakeSubscriptionConnection([
       [MSG_NOTICE_SUBSCRIBE, encodeOptionalSubIdResponse(11n)],
@@ -192,12 +279,13 @@ describe("Subscription Multiplexing", () => {
     const secondRoutes: string[] = [];
     const pattern = "notice://realm/area/resource";
 
-    const first = await client.subscribe(pattern, async (msg) => {
+    const firstPromise = client.subscribe(pattern, async (msg) => {
       firstRoutes.push(msg.route);
     });
-    const second = await client.subscribe(pattern, async (msg) => {
+    const secondPromise = client.subscribe(pattern, async (msg) => {
       secondRoutes.push(msg.route);
     });
+    const [first, second] = await Promise.all([firstPromise, secondPromise]);
 
     expect(first.subId).toBe(11n);
     expect(second.subId).toBe(11n);
@@ -224,6 +312,7 @@ describe("Subscription Multiplexing", () => {
 
     await connection.reconnect();
     expect(connection.countRequests(MSG_NOTICE_SUBSCRIBE)).toBe(2);
+    expect(second.subId).toBe(12n);
 
     connection.emitNotification(
       MSG_NOTICE_NOTIFY,
@@ -280,12 +369,13 @@ describe("Subscription Multiplexing", () => {
     const secondRoutes: string[] = [];
     const pattern = "queue://realm/area/resource";
 
-    const first = await client.subscribe(pattern, async (notification) => {
+    const firstPromise = client.subscribe(pattern, async (notification) => {
       firstRoutes.push(notification.route);
     });
-    const second = await client.subscribe(pattern, async (notification) => {
+    const secondPromise = client.subscribe(pattern, async (notification) => {
       secondRoutes.push(notification.route);
     });
+    const [first, second] = await Promise.all([firstPromise, secondPromise]);
 
     expect(first.subId).toBe(21n);
     expect(second.subId).toBe(21n);
@@ -307,12 +397,12 @@ describe("Subscription Multiplexing", () => {
     await connection.reconnect();
     expect(connection.countRequests(MSG_QUEUE_SUBSCRIBE)).toBe(2);
 
-    connection.emitNotification(MSG_QUEUE_NOTIFY, encodeQueueNotification(21n, `${pattern}/ready`));
+    connection.emitNotification(MSG_QUEUE_NOTIFY, encodeQueueNotification(21n, pattern));
     await connection.flushHandlers();
     expect(firstRoutes).toEqual([pattern]);
     expect(secondRoutes).toEqual([pattern, pattern]);
 
-    connection.emitNotification(MSG_QUEUE_NOTIFY, encodeQueueNotification(22n, `${pattern}/ready`));
+    connection.emitNotification(MSG_QUEUE_NOTIFY, encodeQueueNotification(22n, pattern));
     await connection.flushHandlers();
     expect(firstRoutes).toEqual([pattern]);
     expect(secondRoutes).toEqual([pattern, pattern, pattern]);
@@ -330,39 +420,42 @@ describe("Subscription Multiplexing", () => {
     const client = createLeaseClient(connection);
     const firstRoutes: string[] = [];
     const secondRoutes: string[] = [];
-    const pattern = "lease://realm/area/resource";
+    const route = "lease://realm/area/resource";
 
-    const first = await client.subscribe(pattern, async (notification) => {
+    const firstPromise = client.subscribe(route, async (notification) => {
       firstRoutes.push(notification.route);
     });
-    const second = await client.subscribe(pattern, async (notification) => {
+    const secondPromise = client.subscribe(route, async (notification) => {
       secondRoutes.push(notification.route);
     });
+    const [first, second] = await Promise.all([firstPromise, secondPromise]);
 
     expect(first.subId).toBe(31n);
     expect(second.subId).toBe(31n);
     expect(connection.countRequests(MSG_LEASE_SUBSCRIBE)).toBe(1);
 
-    connection.emitNotification(MSG_LEASE_NOTIFY, encodeLeaseNotification(31n, pattern));
+    connection.emitNotification(MSG_LEASE_NOTIFY, encodeLeaseNotification(31n, route));
     await connection.flushHandlers();
-    expect(firstRoutes).toEqual([pattern]);
-    expect(secondRoutes).toEqual([pattern]);
+    expect(firstRoutes).toEqual([route]);
+    expect(secondRoutes).toEqual([route]);
 
     await first.unsubscribe();
     expect(connection.countRequests(MSG_LEASE_UNSUBSCRIBE)).toBe(0);
 
-    connection.emitNotification(MSG_LEASE_NOTIFY, encodeLeaseNotification(31n, pattern));
+    connection.emitNotification(MSG_LEASE_NOTIFY, encodeLeaseNotification(31n, route));
     await connection.flushHandlers();
-    expect(firstRoutes).toEqual([pattern]);
-    expect(secondRoutes).toEqual([pattern, pattern]);
+    expect(firstRoutes).toEqual([route]);
+    expect(secondRoutes).toEqual([route, route]);
 
     await connection.reconnect();
     expect(connection.countRequests(MSG_LEASE_SUBSCRIBE)).toBe(2);
+    expect(first.subId).toBe(32n);
+    expect(second.subId).toBe(32n);
 
-    connection.emitNotification(MSG_LEASE_NOTIFY, encodeLeaseNotification(32n, pattern));
+    connection.emitNotification(MSG_LEASE_NOTIFY, encodeLeaseNotification(32n, route));
     await connection.flushHandlers();
-    expect(firstRoutes).toEqual([pattern]);
-    expect(secondRoutes).toEqual([pattern, pattern, pattern]);
+    expect(firstRoutes).toEqual([route]);
+    expect(secondRoutes).toEqual([route, route, route]);
 
     await second.unsubscribe();
     expect(connection.countRequests(MSG_LEASE_UNSUBSCRIBE)).toBe(1);
@@ -379,12 +472,13 @@ describe("Subscription Multiplexing", () => {
     const secondPayloads: string[] = [];
     const pattern = "schedule://realm/area/resource/run";
 
-    const first = await client.subscribe(pattern, async (notification) => {
+    const firstPromise = client.subscribe(pattern, async (notification) => {
       firstPayloads.push(utf8Decoder.decode(notification.payload));
     });
-    const second = await client.subscribe(pattern, async (notification) => {
+    const secondPromise = client.subscribe(pattern, async (notification) => {
       secondPayloads.push(utf8Decoder.decode(notification.payload));
     });
+    const [first, second] = await Promise.all([firstPromise, secondPromise]);
 
     expect(first.subId).toBe(41n);
     expect(second.subId).toBe(41n);
@@ -392,7 +486,7 @@ describe("Subscription Multiplexing", () => {
 
     connection.emitNotification(
       MSG_SCHEDULE_NOTIFY,
-      encodeScheduleNotification(41n, utf8Encoder.encode("first")),
+      encodeScheduleNotification(41n, pattern, utf8Encoder.encode("first")),
     );
     await connection.flushHandlers();
     expect(firstPayloads).toEqual(["first"]);
@@ -403,7 +497,7 @@ describe("Subscription Multiplexing", () => {
 
     connection.emitNotification(
       MSG_SCHEDULE_NOTIFY,
-      encodeScheduleNotification(41n, utf8Encoder.encode("second")),
+      encodeScheduleNotification(41n, pattern, utf8Encoder.encode("second")),
     );
     await connection.flushHandlers();
     expect(firstPayloads).toEqual(["first"]);
@@ -411,10 +505,12 @@ describe("Subscription Multiplexing", () => {
 
     await connection.reconnect();
     expect(connection.countRequests(MSG_SCHEDULE_SUBSCRIBE)).toBe(2);
+    expect(first.subId).toBe(42n);
+    expect(second.subId).toBe(42n);
 
     connection.emitNotification(
       MSG_SCHEDULE_NOTIFY,
-      encodeScheduleNotification(41n, utf8Encoder.encode("stale")),
+      encodeScheduleNotification(41n, pattern, utf8Encoder.encode("stale")),
     );
     await connection.flushHandlers();
     expect(firstPayloads).toEqual(["first"]);
@@ -422,7 +518,7 @@ describe("Subscription Multiplexing", () => {
 
     connection.emitNotification(
       MSG_SCHEDULE_NOTIFY,
-      encodeScheduleNotification(42n, utf8Encoder.encode("after")),
+      encodeScheduleNotification(42n, pattern, utf8Encoder.encode("after")),
     );
     await connection.flushHandlers();
     expect(firstPayloads).toEqual(["first"]);
@@ -450,7 +546,7 @@ describe("Subscription Multiplexing", () => {
     const secondRoutes: string[] = [];
     const pattern = "stream://realm/area/resource";
 
-    const first = await client.subscribe(pattern, async (notification) => {
+    const firstPromise = client.subscribe(pattern, async (notification) => {
       firstNotifications.push({
         route: notification.route,
         event: notification.event,
@@ -460,9 +556,10 @@ describe("Subscription Multiplexing", () => {
         batchSize: notification.batchSize,
       });
     });
-    const second = await client.subscribe(pattern, async (notification) => {
+    const secondPromise = client.subscribe(pattern, async (notification) => {
       secondRoutes.push(notification.route);
     });
+    const [first, second] = await Promise.all([firstPromise, secondPromise]);
 
     expect(first.subId).toBe(51n);
     expect(second.subId).toBe(51n);

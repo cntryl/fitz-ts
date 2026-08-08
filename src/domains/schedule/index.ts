@@ -2,7 +2,7 @@
  * Schedule domain exports
  */
 
-export { ScheduleClient } from "./client";
+export type { ScheduleClient } from "./client";
 export { ScheduleCodec } from "./codec";
 export type {
   ScheduleEntry,
@@ -10,7 +10,7 @@ export type {
   ScheduleHandler,
   ScheduleCreateResponse,
   ScheduleCancelResponse,
-  ScheduleListResponse,
+  ScheduleListPage,
   ScheduleSubscribeResponse,
   ScheduleUnsubscribeResponse,
   ScheduleSubscription,

@@ -13,9 +13,9 @@ npm install @cntryl/fitz
 ## Quick Start
 
 ```typescript
-import { Client } from "@cntryl/fitz";
+import { createClient } from "@cntryl/fitz";
 
-const client = Client({
+const client = createClient({
   url: "ws://localhost:4090/ws",
   tokenProvider: async () => "your-jwt-token",
   asyncHandlers: {
@@ -26,7 +26,7 @@ const client = Client({
 
 await client.connect();
 
-const tx = await client.kv().begin("kv://realm/area/users", "ReadWrite");
+const tx = await client.kv.begin("kv://realm/area/users", { durability: "Sync" });
 await tx.put(new TextEncoder().encode("user-1"), new TextEncoder().encode('{"name":"Alice"}'));
 await tx.commit();
 
@@ -58,9 +58,9 @@ failures are not retried.
 `fitz-ts` now supports additive observability hooks through `ClientConfig.observability`.
 
 ```typescript
-import { Client } from "@cntryl/fitz";
+import { createClient } from "@cntryl/fitz";
 
-const client = Client({
+const client = createClient({
   url: "ws://localhost:4090/ws",
   observability: {
     logger: {
@@ -110,17 +110,17 @@ const filter: StreamFilterSet = {
   clauses: [{ kind: "Equals", value: "proj.alpha" }],
 };
 
-const records = await client.stream().read("stream://realm/app/events", 0n, 100, {
+const records = await client.stream.read("stream://realm/app/events", 0n, 100, {
   filter,
   maxBytes: 64_000n,
 });
 
-const page = await client.stream().readPage("stream://realm/app/events", 0n, 100, {
+const page = await client.stream.readPage("stream://realm/app/events", 0n, 100, {
   filter,
   maxBytes: 64_000n,
 });
 
-// read() keeps the compatibility projection and returns event records only.
+// read() is the event-only projection of readPage().
 // readPage() exposes synthetic filtered markers and cursor metadata.
 void records;
 void page.cursor.lastResourceOffset;
@@ -145,7 +145,7 @@ a normal HTTP client. Add or override Node-only upgrade headers with
 `ClientConfig.webSocket.headers`:
 
 ```typescript
-const client = Client({
+const client = createClient({
   url: "wss://fitz.example.com/ws",
   webSocket: {
     headers: {
@@ -246,7 +246,7 @@ Broker-backed connection hardening coverage now includes automatic reconnect sub
 
 ## Managed leases
 
-`client.lease().withLease(route, ttlSecs, async signal => { ... })` acquires, renews, and
+`client.lease.withLease(route, ttlSecs, async signal => { ... })` acquires, renews, and
 releases a lease around a callback. Pass `{ waitForAvailability: true, signal }` to wait
 through typed contention and link caller cancellation. Callback code must stop promptly
 when `signal` aborts. Low-level `acquire`, `extend`, and `release` remain available; each

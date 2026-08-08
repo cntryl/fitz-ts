@@ -13,10 +13,10 @@ describe("Queue integration", () => {
       await f.connectOrFail();
 
       const route = f.uniqueRoute("queue");
-      const messageId = await f.client().queue().enqueue(route, b("task-payload"));
+      const messageId = await f.client().queue.enqueue(route, b("task-payload"));
       expect(messageId).toBeGreaterThan(0n);
 
-      const items = await f.client().queue().reserve(route, 30, 1);
+      const items = await f.client().queue.reserve(route, 30, 1);
       expect(items).toHaveLength(1);
       expect(Buffer.from(items[0].body).toString()).toBe("task-payload");
 
@@ -28,14 +28,14 @@ describe("Queue integration", () => {
       await f.connectOrFail();
 
       const route = f.uniqueRoute("queue");
-      await f.client().queue().enqueue(route, b("expire-me"));
+      await f.client().queue.enqueue(route, b("expire-me"));
 
-      const firstReserve = await f.client().queue().reserve(route, 1, 1);
+      const firstReserve = await f.client().queue.reserve(route, 1, 1);
       expect(firstReserve).toHaveLength(1);
 
       await waitFor(
         async () => {
-          const secondReserve = await f.client().queue().reserve(route, 30, 1);
+          const secondReserve = await f.client().queue.reserve(route, 30, 1);
           if (secondReserve.length === 0) {
             return false;
           }
@@ -54,8 +54,8 @@ describe("Queue integration", () => {
       await f.connectOrFail();
 
       const route = f.uniqueRoute("queue");
-      await f.client().queue().enqueue(route, b("extend-me"));
-      const items = await f.client().queue().reserve(route, 5, 1);
+      await f.client().queue.enqueue(route, b("extend-me"));
+      const items = await f.client().queue.reserve(route, 5, 1);
 
       expect(items).toHaveLength(1);
       await expect(items[0].extend(60)).resolves.toBeUndefined();
@@ -66,13 +66,13 @@ describe("Queue integration", () => {
       await f.connectOrFail();
 
       const route = f.uniqueRoute("queue");
-      await f.client().queue().enqueue(route, b("token-check"));
-      const staleItems = await f.client().queue().reserve(route, 1, 1);
+      await f.client().queue.enqueue(route, b("token-check"));
+      const staleItems = await f.client().queue.reserve(route, 1, 1);
 
       expect(staleItems).toHaveLength(1);
       await waitFor(
         async () => {
-          const refreshedItems = await f.client().queue().reserve(route, 30, 1);
+          const refreshedItems = await f.client().queue.reserve(route, 30, 1);
           if (refreshedItems.length === 0) {
             return false;
           }
@@ -94,13 +94,10 @@ describe("Queue integration", () => {
 
       const route = f.uniqueRoute("queue");
       for (let i = 0; i < 5; i += 1) {
-        await f
-          .client()
-          .queue()
-          .enqueue(route, b(`batch-${i}`));
+        await f.client().queue.enqueue(route, b(`batch-${i}`));
       }
 
-      const items = await f.client().queue().reserve(route, 30, 3);
+      const items = await f.client().queue.reserve(route, 30, 3);
       expect(items.length).toBeGreaterThanOrEqual(1);
       expect(items.length).toBeLessThanOrEqual(3);
     });
@@ -112,12 +109,12 @@ describe("Queue integration", () => {
       await f2.connectOrFail();
 
       const route = f1.uniqueRoute("queue");
-      await f1.client().queue().enqueue(route, b("one"));
-      await f1.client().queue().enqueue(route, b("two"));
+      await f1.client().queue.enqueue(route, b("one"));
+      await f1.client().queue.enqueue(route, b("two"));
 
       const [items1, items2] = await Promise.all([
-        f1.client().queue().reserve(route, 30, 1),
-        f2.client().queue().reserve(route, 30, 1),
+        f1.client().queue.reserve(route, 30, 1),
+        f2.client().queue.reserve(route, 30, 1),
       ]);
 
       expect(items1.length + items2.length).toBe(2);
@@ -130,10 +127,10 @@ describe("Queue integration", () => {
       await producer.connectOrFail();
 
       const route = consumer.uniqueRoute("queue");
-      const pendingReserve = consumer.client().queue().reserve(route, 30, 1, 2);
+      const pendingReserve = consumer.client().queue.reserve(route, 30, 1, 2);
 
       await sleep(250);
-      await producer.client().queue().enqueue(route, b("late-msg"));
+      await producer.client().queue.enqueue(route, b("late-msg"));
 
       const items = await pendingReserve;
       expect(items).toHaveLength(1);
@@ -145,7 +142,7 @@ describe("Queue integration", () => {
       await f.connectOrFail();
 
       const route = f.uniqueRoute("queue");
-      const reserve = f.client().queue().reserve(route, 30, 0);
+      const reserve = f.client().queue.reserve(route, 30, 0);
 
       try {
         const items = await reserve;
@@ -160,14 +157,14 @@ describe("Queue integration", () => {
       await f.connectOrFail();
 
       const route = f.uniqueRoute("queue");
-      await f.client().queue().enqueue(route, b("expire-then-complete"));
-      const staleLeaseItems = await f.client().queue().reserve(route, 1, 1);
+      await f.client().queue.enqueue(route, b("expire-then-complete"));
+      const staleLeaseItems = await f.client().queue.reserve(route, 1, 1);
 
       expect(staleLeaseItems).toHaveLength(1);
       let refreshedLeaseItem: (typeof staleLeaseItems)[number] | null = null;
       await waitFor(
         async () => {
-          const items = await f.client().queue().reserve(route, 30, 1);
+          const items = await f.client().queue.reserve(route, 30, 1);
           if (items.length === 0) {
             return false;
           }
@@ -195,7 +192,7 @@ describe("Queue integration", () => {
       const f = new TestFixture(transport, authMode);
       await f.connectOrFail();
 
-      const items = await f.client().queue().reserve(f.uniqueRoute("queue"), 30, 1);
+      const items = await f.client().queue.reserve(f.uniqueRoute("queue"), 30, 1);
       expect(items).toEqual([]);
     });
 
@@ -204,9 +201,9 @@ describe("Queue integration", () => {
       await f.connectOrFail();
 
       const route = f.uniqueRoute("queue");
-      await f.client().queue().enqueue(route, b("later"), { delayMs: 2_000 });
+      await f.client().queue.enqueue(route, b("later"), { delayMs: 2_000 });
 
-      const items = await f.client().queue().reserve(route, 30, 1);
+      const items = await f.client().queue.reserve(route, 30, 1);
 
       expect(items).toEqual([]);
     });
@@ -218,11 +215,11 @@ describe("Queue integration", () => {
       await consumer.connectOrFail();
 
       const route = producer.uniqueRoute("queue");
-      await producer.client().queue().enqueue(route, b("later"), { delayMs: 1_000 });
+      await producer.client().queue.enqueue(route, b("later"), { delayMs: 1_000 });
 
       await waitFor(
         async () => {
-          const items = await consumer.client().queue().reserve(route, 30, 1);
+          const items = await consumer.client().queue.reserve(route, 30, 1);
           return items.length === 1 && Buffer.from(items[0].body).toString() === "later";
         },
         {
@@ -239,19 +236,16 @@ describe("Queue integration", () => {
 
       const route = f.uniqueRoute("queue");
       const notifications: string[] = [];
-      const sub = await f
-        .client()
-        .queue()
-        .subscribe(route, async (notif) => {
-          notifications.push(notif.route);
-        });
+      const sub = await f.client().queue.subscribe(route, async (notif) => {
+        notifications.push(notif.route);
+      });
 
-      await f.client().queue().enqueue(route, b("notify-me"));
+      await f.client().queue.enqueue(route, b("notify-me"));
       await sleep(500);
       expect(notifications).toContain(route);
 
       await sub.unsubscribe();
-      await f.client().queue().enqueue(route, b("no-notify"));
+      await f.client().queue.enqueue(route, b("no-notify"));
       await sleep(500);
 
       expect(notifications).toHaveLength(1);
@@ -265,7 +259,7 @@ describe("Queue integration", () => {
       await f.connectOrFail();
 
       await expect(
-        f.client().queue().enqueue(f.uniqueRoute("queue"), b("forbidden")),
+        f.client().queue.enqueue(f.uniqueRoute("queue"), b("forbidden")),
       ).rejects.toBeTruthy();
     });
   });

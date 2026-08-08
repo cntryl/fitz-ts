@@ -5,6 +5,7 @@
 import { Transport, TransportOptions } from "./types";
 import { createWebSocketTransport } from "./websocket.node";
 import { createTcpTransport } from "./tcp";
+import { normalizeWebSocketUrl } from "./url";
 import { TransportError } from "../core/errors";
 
 export function createNodeTransport(
@@ -21,11 +22,7 @@ export function createNodeTransport(
       return createTcpTransport(url, options);
     }
     if (url.startsWith("http://") || url.startsWith("https://")) {
-      // Convert HTTP to WebSocket
-      const wsUrl = url.replace(/^https?:\/\//, (match) => {
-        return match === "https://" ? "wss://" : "ws://";
-      });
-      return createWebSocketTransport(wsUrl, options);
+      return createWebSocketTransport(normalizeWebSocketUrl(url), options);
     }
 
     // Default to WebSocket

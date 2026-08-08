@@ -5,7 +5,7 @@
 import { describe, it, expect } from "vite-plus/test";
 import { LeaseCodec } from "../../../src/domains/lease/codec";
 import { createBufferWriter } from "../../../src/core/buffer";
-import { ProtocolError } from "../../../src/core/errors";
+import { LeaseError, ProtocolError } from "../../../src/core/errors";
 import { testData as _testData } from "../helpers/test-utils";
 
 describe("LeaseCodec", () => {
@@ -33,6 +33,22 @@ describe("LeaseCodec", () => {
   });
 
   describe("ACQUIRE decoding", () => {
+    it("should preserve domain code given typed error when decoding acquire", () => {
+      const writer = createBufferWriter(64);
+      writer.writeU8(1);
+      writer.writeU32BE(5001);
+      writer.writeString("lease held by another owner");
+
+      try {
+        LeaseCodec.decodeAcquireResponse(writer.getBuffer());
+        throw new Error("expected ACQUIRE decoding to fail");
+      } catch (error) {
+        expect(error).toBeInstanceOf(LeaseError);
+        expect((error as LeaseError).domainCode).toBe(5001);
+        expect((error as LeaseError).message).toContain("lease held by another owner");
+      }
+    });
+
     it("should_decode_acquire_response_with_token", () => {
       // Arrange
       const writer = createBufferWriter(32);
@@ -55,19 +71,20 @@ describe("LeaseCodec", () => {
       );
     });
 
-    it.each([
-      [2, "LEASE_QUEUED"],
-      [3, "LEASE_ALREADY_QUEUED"],
-    ])("returns typed contention for response type %i", (responseType, code) => {
-      const writer = createBufferWriter(16);
-      writer.writeU8(0);
-      writer.writeU8(responseType);
-      writer.writeU64BE(0n);
+    it.each([2, 3] as const)(
+      "decodes queued response type %i for deferred completion",
+      (responseType) => {
+        const writer = createBufferWriter(16);
+        writer.writeU8(0);
+        writer.writeU8(responseType);
+        writer.writeU64BE(0n);
 
-      expect(() => LeaseCodec.decodeAcquireResponse(writer.getBuffer())).toThrowError(
-        expect.objectContaining({ code }),
-      );
-    });
+        expect(LeaseCodec.decodeAcquireResponse(writer.getBuffer())).toEqual({
+          responseType,
+          token: 0n,
+        });
+      },
+    );
   });
 
   describe("RENEW encoding", () => {
@@ -102,36 +119,13 @@ describe("LeaseCodec", () => {
   describe("SUBSCRIBE encoding", () => {
     it("should_encode_subscribe_with_pattern", () => {
       // Arrange
-      const pattern = "lease://acme/resources/*";
+      const route = "lease://acme/resources/database";
 
       // Act
-      const encoded = LeaseCodec.encodeSubscribe(pattern);
+      const encoded = LeaseCodec.encodeSubscribe(route);
 
       // Assert
       expect(encoded).toBeInstanceOf(Uint8Array);
-    });
-  });
-
-  describe("SUBSCRIBE decoding", () => {
-    it("should_decode_subscribe_response_with_sub_id", () => {
-      // Arrange
-      const writer = createBufferWriter(16);
-      writer.writeU8(0); // status = success
-      writer.writeU64BE(222n); // subId
-      const response = writer.getBuffer();
-
-      // Act
-      const decoded = LeaseCodec.decodeSubscribeResponse(response);
-
-      // Assert
-      expect(decoded.status).toBe(0);
-      expect(decoded.subId).toBe(222n);
-    });
-
-    it("throws ProtocolError for short subscribe responses", () => {
-      expect(() => LeaseCodec.decodeSubscribeResponse(new Uint8Array([0]))).toThrowError(
-        ProtocolError,
-      );
     });
   });
 
@@ -163,6 +157,7 @@ describe("LeaseCodec", () => {
       const writer = createBufferWriter(32);
       writer.writeU64BE(222n); // subId
       writer.writeString("lease://acme/resources/db_connection");
+      writer.writeU32BE(0);
       const payload = writer.getBuffer();
 
       // Act

@@ -6,6 +6,7 @@
 
 import { describe, it, expect } from "vite-plus/test";
 import { StreamCodec } from "../../../src/domains/stream/codec";
+import { StreamError } from "../../../src/core/errors";
 import {
   createBufferReader,
   createBufferWriter,
@@ -64,12 +65,17 @@ function encodeReadResponse(
     lastResourceOffset: bigint;
     lastAreaOffset?: bigint;
     lastRealmOffset?: bigint;
+    lastGlobalOffset?: bigint;
+    cursorFingerprint?: bigint;
+    capturedWatermark?: bigint;
+    global?: boolean;
     hasMore: boolean;
   },
 ): Uint8Array {
   const data = createBufferWriter(512);
   data.writeU32BE(items.length);
   for (const item of items) {
+    data.writeRoute(item.route);
     switch (item.kind) {
       case "event":
         data.writeU8(0);
@@ -91,13 +97,19 @@ function encodeReadResponse(
   data.writeU64BE(cursor.lastResourceOffset);
   writeOptionalU64(data, cursor.lastAreaOffset);
   writeOptionalU64(data, cursor.lastRealmOffset);
+  if (cursor.global) writeOptionalU64(data, cursor.lastGlobalOffset);
   data.writeU8(cursor.hasMore ? 1 : 0);
+  if (cursor.global) {
+    writeOptionalU64(data, cursor.cursorFingerprint);
+    writeOptionalU64(data, cursor.capturedWatermark);
+  }
 
   const writer = createBufferWriter(560);
   writer.writeU8(0);
   writer.writeU8(0);
-  writer.writeU32BE(data.getLength());
-  writer.writeBytes(data.getBuffer());
+  const payload = data.getBuffer();
+  writer.writeU32BE(payload.length);
+  writer.writeBytes(payload);
   return writer.getBuffer();
 }
 
@@ -124,8 +136,6 @@ function writeFilteredReason(
 function encodeLastResponse(record: Uint8Array): Uint8Array {
   const writer = createBufferWriter(320);
   writer.writeU8(0);
-  writer.writeU8(0);
-  writer.writeU32BE(record.length);
   writer.writeBytes(record);
   return writer.getBuffer();
 }
@@ -152,8 +162,6 @@ function encodeMetadataResponse(metadata: {
 
   const writer = createBufferWriter(320);
   writer.writeU8(0);
-  writer.writeU8(0);
-  writer.writeU32BE(data.getLength());
   writer.writeBytes(data.getBuffer());
   return writer.getBuffer();
 }
@@ -275,9 +283,8 @@ describe("StreamCodec", () => {
       // Arrange
       const writer = createBufferWriter(24);
       writer.writeU8(0); // status = success
-      writer.writeU8(1); // has_session_id = 1
       writer.writeU64BE(456n); // sessionId
-      writer.writeU32BE(0); // empty data
+      writer.writeU32BE(0); // opaque data length
       const response = writer.getBuffer();
 
       // Act
@@ -290,27 +297,39 @@ describe("StreamCodec", () => {
 
     it("should_decode_begin_response_error", () => {
       // Arrange
-      const response = new Uint8Array([1]); // error status
+      const writer = createBufferWriter(32);
+      writer.writeU8(1);
+      writer.writeString("session already active");
 
       // Act
-      const decoded = StreamCodec.decodeBeginResponse(response);
+      const decoded = StreamCodec.decodeBeginResponse(writer.getBuffer());
 
       // Assert
       expect(decoded.status).toBe(1);
+      expect(decoded.errorMessage).toBe("session already active");
     });
 
-    it("should_reject_wrapped_response_with_trailing_bytes", () => {
+    it("accepts the canonical unwrapped success response", () => {
       const writer = createBufferWriter(16);
       writer.writeU8(0);
-      writer.writeU8(0);
-      writer.writeU32BE(0);
-      writer.writeU8(0xff);
+      writer.writeU64BE(99n);
 
-      expect(() => StreamCodec.decodeBeginResponse(writer.getBuffer())).toThrow("trailing bytes");
+      expect(StreamCodec.decodeBeginResponse(writer.getBuffer()).sessionId).toBe(99n);
     });
   });
 
   describe("APPEND encoding", () => {
+    it("should_decode_canonical_length_prefixed_append_offset", () => {
+      const writer = createBufferWriter(16);
+      writer.writeU8(0);
+      writer.writeU32BE(8);
+      writer.writeU64BE(42n);
+
+      const decoded = StreamCodec.decodeAppendResponse(writer.getBuffer());
+
+      expect(decoded.offset).toBe(42n);
+    });
+
     it("should_encode_append_with_records", () => {
       // Arrange
       const sessionId = 456n;
@@ -403,6 +422,8 @@ describe("StreamCodec", () => {
       expect(reader.readU64BE()).toBe(25n);
       expect(reader.readU8()).toBe(0);
       expect(reader.readU8()).toBe(0);
+      expect(reader.readU8()).toBe(0);
+      expect(reader.readU8()).toBe(0);
       expect(reader.isEOF()).toBe(true);
     });
 
@@ -418,6 +439,8 @@ describe("StreamCodec", () => {
       expect(reader.readU8()).toBe(1);
       expect(reader.readU64BE()).toBe(1024n);
       expect(reader.readU8()).toBe(0);
+      expect(reader.readU8()).toBe(0);
+      expect(reader.readU8()).toBe(0);
       expect(reader.isEOF()).toBe(true);
     });
 
@@ -426,7 +449,9 @@ describe("StreamCodec", () => {
         clauses: [{ kind: "Equals", value: "proj.alpha" }],
       };
 
-      const encoded = StreamCodec.encodeRead("stream://test/events", 0n, 10, { filter });
+      const encoded = StreamCodec.encodeRead("stream://test/events", 0n, 10, {
+        filter,
+      });
       const reader = createBufferReader(encoded);
 
       expect(reader.readRoute()).toBe("stream://test/events");
@@ -437,6 +462,25 @@ describe("StreamCodec", () => {
       const filterLength = reader.readU32BE();
       const filterBytes = reader.readBytes(filterLength);
       expect(decodeStreamFilterSet(filterBytes)).toEqual(filter);
+      expect(reader.readU8()).toBe(0);
+      expect(reader.readU8()).toBe(0);
+      expect(reader.isEOF()).toBe(true);
+    });
+
+    it("should_encode_global_read_cursor_options", () => {
+      const encoded = StreamCodec.encodeRead("stream://**", 42n, 10, {
+        cursorFingerprint: 7n,
+        capturedWatermark: 9n,
+      });
+      const reader = createBufferReader(encoded);
+
+      expect(reader.readRoute()).toBe("stream://**");
+      expect(reader.readU64BE()).toBe(42n);
+      expect(reader.readU64BE()).toBe(10n);
+      expect(reader.readU8()).toBe(0);
+      expect(reader.readU8()).toBe(0);
+      expect(reader.readOptionalU64()).toBe(7n);
+      expect(reader.readOptionalU64()).toBe(9n);
       expect(reader.isEOF()).toBe(true);
     });
   });
@@ -448,7 +492,9 @@ describe("StreamCodec", () => {
         [
           {
             kind: "event",
+            route: "stream://prod/app/record-1",
             record: {
+              route: "stream://prod/app/record-1",
               offset: 100n,
               areaOffset: 200n,
               realmOffset: 300n,
@@ -459,7 +505,9 @@ describe("StreamCodec", () => {
           },
           {
             kind: "event",
+            route: "stream://prod/app/record-2",
             record: {
+              route: "stream://prod/app/record-2",
               offset: 101n,
               areaOffset: 201n,
               realmOffset: 301n,
@@ -478,7 +526,7 @@ describe("StreamCodec", () => {
       );
 
       // Act
-      const decoded = StreamCodec.decodeReadResponse(response);
+      const decoded = StreamCodec.decodeReadResponse(response, "stream://prod/app/*");
 
       // Assert
       expect(decoded.status).toBe(0);
@@ -511,7 +559,7 @@ describe("StreamCodec", () => {
       });
 
       // Act
-      const decoded = StreamCodec.decodeReadResponse(response);
+      const decoded = StreamCodec.decodeReadResponse(response, "stream://prod/app/*");
 
       // Assert
       expect(decoded.items).toHaveLength(0);
@@ -526,11 +574,13 @@ describe("StreamCodec", () => {
         [
           {
             kind: "filtered",
+            route: "stream://prod/app/record-1",
             offset: 44n,
             reason: "server_filter",
           },
           {
             kind: "filtered_range",
+            route: "stream://prod/app/record-2",
             fromOffset: 45n,
             toOffset: 48n,
             reason: "server_filter",
@@ -542,16 +592,18 @@ describe("StreamCodec", () => {
         },
       );
 
-      const decoded = StreamCodec.decodeReadResponse(response);
+      const decoded = StreamCodec.decodeReadResponse(response, "stream://prod/app/*");
 
       expect(decoded.items).toHaveLength(2);
       expect(decoded.items[0]).toEqual({
         kind: "filtered",
+        route: "stream://prod/app/record-1",
         offset: 44n,
         reason: "server_filter",
       });
       expect(decoded.items[1]).toEqual({
         kind: "filtered_range",
+        route: "stream://prod/app/record-2",
         fromOffset: 45n,
         toOffset: 48n,
         reason: "server_filter",
@@ -560,6 +612,28 @@ describe("StreamCodec", () => {
         lastResourceOffset: 48n,
         hasMore: true,
       });
+    });
+
+    it("should_reject_wildcard_route_in_read_response", () => {
+      const response = encodeReadResponse(
+        [
+          {
+            kind: "filtered",
+            route: "stream://*/app/*",
+            offset: 44n,
+            reason: "server_filter",
+          },
+        ],
+        { lastResourceOffset: 44n, hasMore: false },
+      );
+
+      try {
+        StreamCodec.decodeReadResponse(response, "stream://prod/app/*");
+        throw new Error("expected decode to fail");
+      } catch (error) {
+        expect(error).toBeInstanceOf(StreamError);
+        expect((error as StreamError).code).toBe("STREAM_READ_INVALID_RESPONSE");
+      }
     });
   });
 
@@ -578,13 +652,30 @@ describe("StreamCodec", () => {
       );
 
       // Act
-      const decoded = StreamCodec.decodeLastResponse(response);
+      const decoded = StreamCodec.decodeLastResponse(response, "stream://prod/app/events");
 
       // Assert
       expect(decoded.status).toBe(0);
+      expect(decoded.record?.route).toBe("stream://prod/app/events");
       expect(decoded.record?.offset).toBe(500n);
       expect(decoded.record?.timestamp).toBe(999n);
       expect(Buffer.from(decoded.record?.body ?? new Uint8Array()).toString()).toBe("last-record");
+    });
+
+    it("should_reject_trailing_bytes_in_last_response", () => {
+      const response = encodeLastResponse(
+        encodeStreamRecord({
+          offset: 1n,
+          body: testData("invalid"),
+          timestamp: 2n,
+        }),
+      );
+      const malformed = new Uint8Array(response.length + 1);
+      malformed.set(response);
+
+      expect(() =>
+        StreamCodec.decodeLastResponse(malformed, "stream://prod/app/events"),
+      ).toThrowError(expect.objectContaining({ code: "STREAM_LAST_INVALID_RESPONSE" }));
     });
   });
 

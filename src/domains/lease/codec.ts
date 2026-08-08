@@ -8,26 +8,29 @@ import {
   getRouteEncoding,
   writeU64BEAt,
   writeU64BENumberAt,
+  writeU32BEAt,
 } from "../../core/buffer";
 import { LeaseError, ProtocolError } from "../../core/errors";
-import { AcquireResponse, QueryResponse, SubscribeResponse, UnsubscribeResponse } from "./types";
+import { parseStandardResponse } from "../../protocol/response";
+import { AcquireResponse, QueryResponse } from "./types";
 
 export const LeaseCodec = {
   /**
    * Encode ACQUIRE request
-   * Payload: [string route][string client_id (empty)][u64 ttl_seconds]
+   * Payload: [string route][string client_id (empty)][u64 ttl_seconds][u32 wait_seconds]
    */
-  encodeAcquire(route: string, ttlSecs: number): Uint8Array {
+  encodeAcquire(route: string, ttlSecs: number, waitSeconds = 0): Uint8Array {
     const routeBytes = getRouteEncoding(route);
     const emptyClientIdBytes = getRouteEncoding("");
-    const buffer = new Uint8Array(routeBytes.length + emptyClientIdBytes.length + 8);
+    const buffer = new Uint8Array(routeBytes.length + emptyClientIdBytes.length + 12);
     let offset = 0;
 
     buffer.set(routeBytes, offset);
     offset += routeBytes.length;
     buffer.set(emptyClientIdBytes, offset);
     offset += emptyClientIdBytes.length;
-    writeU64BENumberAt(buffer, offset, ttlSecs);
+    offset = writeU64BENumberAt(buffer, offset, ttlSecs);
+    writeU32BEAt(buffer, offset, waitSeconds);
     return buffer;
   },
 
@@ -37,36 +40,37 @@ export const LeaseCodec = {
    * response_type: 0=Acquired, 1=AlreadyHeld (idempotent)
    */
   decodeAcquireResponse(payload: Uint8Array): AcquireResponse {
-    if (payload.length < 10) {
-      throw new ProtocolError(
-        `ACQUIRE response too short: got ${payload.length} bytes, expected >= 10`,
-        undefined,
-        { operation: "LEASE_ACQUIRE", payloadLength: payload.length },
-      );
-    }
-
-    const reader = createBufferReader(payload);
-    const status = reader.readU8();
-    if (status !== 0) {
-      throw new ProtocolError(`ACQUIRE failed with status ${status}`, status, {
+    if (payload.length === 0) {
+      throw new ProtocolError("ACQUIRE response too short: got 0 bytes", undefined, {
         operation: "LEASE_ACQUIRE",
-        status,
+        payloadLength: 0,
       });
     }
-    const responseType = reader.readU8();
-    if (responseType === 2 || responseType === 3) {
+    const parsed = parseStandardResponse(payload);
+    if (!parsed.success) {
       throw new LeaseError(
-        responseType === 2 ? "Lease acquisition queued" : "Lease acquisition already queued",
-        responseType === 2 ? "QUEUED" : "ALREADY_QUEUED",
+        `ACQUIRE failed: ${parsed.error ?? "unknown error"}`,
+        "ACQUIRE_FAILED",
+        parsed.errorCode,
       );
     }
-    if (responseType !== 0 && responseType !== 1) {
+    const reader = createBufferReader(parsed.data);
+    if (reader.remainingBytes() < 9)
+      throw new ProtocolError("ACQUIRE success response is truncated", undefined, {
+        operation: "LEASE_ACQUIRE",
+      });
+    const responseType = reader.readU8();
+    if (responseType !== 0 && responseType !== 1 && responseType !== 2 && responseType !== 3) {
       throw new ProtocolError(`Unknown ACQUIRE response type ${responseType}`, undefined, {
         operation: "LEASE_ACQUIRE",
         responseType,
       });
     }
     const fencingToken = reader.readU64BE();
+    if (!reader.isEOF())
+      throw new ProtocolError("ACQUIRE success response has trailing data", undefined, {
+        operation: "LEASE_ACQUIRE",
+      });
 
     // response_type: 0=Acquired, 1=AlreadyHeld
     // For now, treat both as success
@@ -128,16 +132,18 @@ export const LeaseCodec = {
    * Held: [u8 has_holder=1][string owner_id][u64 ttl_remaining_secs][u32 pending_waiters]
    */
   decodeQueryResponse(payload: Uint8Array): QueryResponse {
-    const reader = createBufferReader(payload);
-    const status = reader.readU8();
-    if (status !== 0) {
-      return { status };
+    const parsed = parseStandardResponse(payload);
+    if (!parsed.success) {
+      return { status: 1, errorMessage: parsed.error, errorCode: parsed.errorCode };
     }
+    const status = 0;
+    const reader = createBufferReader(parsed.data);
     const hasHolder = reader.readU8();
 
     if (hasHolder === 0) {
       // Free
       const pendingWaiters = reader.readU32BE();
+      if (!reader.isEOF()) throw new ProtocolError("QUERY response has trailing data");
       return { status, isHeld: false, pendingWaiters };
     }
 
@@ -145,6 +151,7 @@ export const LeaseCodec = {
     const owner = reader.readRoute();
     const ttlRemainingSecs = reader.readU64BE();
     const pendingWaiters = reader.readU32BE();
+    if (!reader.isEOF()) throw new ProtocolError("QUERY response has trailing data");
 
     // Note: token not returned in QUERY response
     return {
@@ -159,54 +166,30 @@ export const LeaseCodec = {
 
   /**
    * Encode SUBSCRIBE request
-   * Payload: [string pattern]
+   * Payload: [string route]
    */
-  encodeSubscribe(pattern: string): Uint8Array {
-    return getRouteEncoding(pattern).slice();
-  },
-
-  /**
-   * Decode SUBSCRIBE response
-   * Standard response: [u8 status=0][u64 subscription_id]
-   */
-  decodeSubscribeResponse(payload: Uint8Array): SubscribeResponse {
-    if (payload.length < 9) {
-      throw new ProtocolError(
-        `SUBSCRIBE response too short: got ${payload.length} bytes, expected >= 9`,
-        undefined,
-        { operation: "LEASE_SUBSCRIBE", payloadLength: payload.length },
-      );
-    }
-
-    const reader = createBufferReader(payload);
-    const status = reader.readU8();
-    if (status !== 0) {
-      return { status };
-    }
-    const subId = reader.readU64BE();
-
-    return { status, subId };
+  encodeSubscribe(route: string): Uint8Array {
+    return getRouteEncoding(route).slice();
   },
 
   /**
    * Encode UNSUBSCRIBE request
-   * Payload: [string pattern]
+   * Payload: [string route]
    */
-  encodeUnsubscribe(pattern: string): Uint8Array {
-    return getRouteEncoding(pattern).slice();
+  encodeUnsubscribe(route: string): Uint8Array {
+    return getRouteEncoding(route).slice();
   },
 
-  /**
-   * Decode UNSUBSCRIBE response
-   * Standard response: [u8 status=0]
-   */
-  decodeUnsubscribeResponse(payload: Uint8Array): UnsubscribeResponse {
-    if (payload.length === 0) {
-      return { status: 0 };
+  decodeSuccessResponse(payload: Uint8Array, operation: string): Uint8Array {
+    const parsed = parseStandardResponse(payload);
+    if (!parsed.success) {
+      throw new LeaseError(
+        `${operation} failed: ${parsed.error ?? "unknown error"}`,
+        `${operation}_FAILED`,
+        parsed.errorCode,
+      );
     }
-
-    const reader = createBufferReader(payload);
-    return { status: reader.readU8() };
+    return parsed.data;
   },
 
   /**
@@ -220,6 +203,12 @@ export const LeaseCodec = {
     const reader = createBufferReader(payload);
     const subId = reader.readU64BE();
     const route = reader.readRoute();
+    const notificationPayload = reader.readBytes(reader.readU32BE());
+    if (notificationPayload.length !== 0 || !reader.isEOF()) {
+      throw new ProtocolError("LEASE_NOTIFY payload must be empty", undefined, {
+        operation: "LEASE_NOTIFY",
+      });
+    }
 
     return { subId, route };
   },

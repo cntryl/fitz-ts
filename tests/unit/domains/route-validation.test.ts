@@ -21,6 +21,7 @@ import { createRpcClient } from "../../../src/domains/rpc/client";
 import { createScheduleClient } from "../../../src/domains/schedule/client";
 import { ScheduleError } from "../../../src/core/errors";
 import { createStreamClient } from "../../../src/domains/stream/client";
+import { isRegistrationPatternShape, routeMatchesPattern } from "../../../src/domains/_routes";
 
 class FakeConnection {
   public lastRequest: { messageType: number; payload: Uint8Array } | null = null;
@@ -114,6 +115,40 @@ async function expectRouteValidationFailure(
 }
 
 describe("route validation", () => {
+  it("accepts exact, recursive, and wildcard-realm registration patterns", () => {
+    const patterns = [
+      "queue://realm/area/resource",
+      "queue://realm/area/*",
+      "queue://realm/**",
+      "queue://*/area/resource",
+      "queue://**/resource",
+      "queue://realm/**/**",
+    ];
+
+    expect(patterns.every((pattern) => isRegistrationPatternShape(pattern, "queue", 3))).toBe(true);
+  });
+
+  it("rejects registration patterns that cannot match the domain route depth", () => {
+    const patterns = [
+      "stream://realm/area/resource",
+      "queue://realm//resource",
+      "queue://realm/area/res*",
+      "queue://realm/area",
+      "queue://realm/area/resource/extra/**",
+    ];
+
+    expect(patterns.every((pattern) => !isRegistrationPatternShape(pattern, "queue", 3))).toBe(
+      true,
+    );
+  });
+
+  it("matches middle and repeated double wildcards without crossing schemes", () => {
+    expect(routeMatchesPattern("rpc://acme/orders/v1/create", "rpc://*/orders/**")).toBe(true);
+    expect(routeMatchesPattern("rpc://acme/orders/create", "rpc://acme/**/**")).toBe(true);
+    expect(routeMatchesPattern("rpc://acme/create", "rpc://acme/**/orders")).toBe(false);
+    expect(routeMatchesPattern("queue://acme/app/jobs", "stream://**")).toBe(false);
+  });
+
   it("rejects invalid lease acquire routes before sending", async () => {
     const connection = new FakeConnection(new Uint8Array([0, 1, ...u64Bytes(42n)]));
     const client = createLeaseClient(connection as unknown as Connection);
@@ -145,10 +180,10 @@ describe("route validation", () => {
     const client = createQueueClient(connection as unknown as Connection);
 
     await expectRouteValidationFailure(
-      client.reserve("queue://example/area/**", 30),
+      client.reserve("queue://example/area/bad*", 30),
       QueueError,
       "QUEUE_INVALID_ROUTE",
-      "expected queue://",
+      "whole-segment pattern",
     );
     expect(connection.lastRequest).toBeNull();
   });
@@ -199,17 +234,14 @@ describe("route validation", () => {
     expect(connection.lastRequest).toBeNull();
   });
 
-  it("rejects invalid rpc worker routes before sending", async () => {
-    const connection = new FakeConnection(new Uint8Array([0]));
+  it("accepts flexible-depth rpc worker patterns", async () => {
+    const connection = new FakeConnection(new Uint8Array([0, 1]));
     const client = createRpcClient(connection as unknown as Connection);
 
-    await expectRouteValidationFailure(
-      client.registerWorker("rpc://example/**", async () => undefined),
-      RpcError,
-      "RPC_INVALID_ROUTE",
-      "expected rpc://",
-    );
-    expect(connection.lastRequest).toBeNull();
+    const worker = await client.registerWorker("rpc://*/orders/**/**", async () => undefined);
+
+    expect(worker.route).toBe("rpc://*/orders/**/**");
+    expect(connection.lastRequest).not.toBeNull();
   });
 
   it("rejects invalid stream begin routes before sending", async () => {
@@ -225,30 +257,27 @@ describe("route validation", () => {
     expect(connection.lastRequest).toBeNull();
   });
 
-  it("rejects invalid stream subscription patterns before sending", async () => {
+  it("accepts stream area subscription selectors", async () => {
     const connection = new FakeConnection(new Uint8Array([0, 1, ...u64Bytes(7n)]));
     const client = createStreamClient(connection as unknown as Connection);
 
-    await expectRouteValidationFailure(
-      client.subscribe("stream://example/area/**", async () => undefined),
-      StreamError,
-      "STREAM_INVALID_ROUTE",
-      "expected stream://",
-    );
-    expect(connection.lastRequest).toBeNull();
+    const subscription = await client.subscribe("stream://example/area/*", async () => undefined);
+
+    expect(subscription.subId).toBe(7n);
+    expect(connection.lastRequest).not.toBeNull();
   });
 
-  it("accepts stream realm wildcard selectors", async () => {
+  it("accepts stream realm read selectors", async () => {
     const connection = new FakeConnection(new Uint8Array([0]));
     const client = createStreamClient(connection as unknown as Connection);
 
-    const records = await client.read("stream://example/**", 0n);
+    const records = await client.read("stream://example/*/*", 0n);
 
     expect(records).toEqual([]);
     expect(connection.lastRequest?.messageType).toBe(MSG_STREAM_READ);
   });
 
-  it("rejects invalid lease subscription patterns before sending", async () => {
+  it("rejects wildcard lease subscription routes before sending", async () => {
     const connection = new FakeConnection(new Uint8Array([0, ...u64Bytes(7n)]));
     const client = createLeaseClient(connection as unknown as Connection);
 
@@ -266,7 +295,7 @@ describe("route validation", () => {
     const client = createScheduleClient(connection as unknown as Connection);
 
     await expectRouteValidationFailure(
-      client.create("queue://example/app/jobs/run", "0 0 * * *", "broadcast"),
+      client.create("queue://example/app/jobs/run", "0 0 * * *", "Broadcast"),
       ScheduleError,
       "SCHEDULE_INVALID_ROUTE",
       "expected schedule://",
@@ -274,12 +303,12 @@ describe("route validation", () => {
     expect(connection.lastRequest).toBeNull();
   });
 
-  it("should reject legacy schedule route arity given a three-segment route when validation runs", async () => {
+  it("should reject obsolete schedule route arity given a three-segment route when validation runs", async () => {
     const connection = new FakeConnection(new Uint8Array([0]));
     const client = createScheduleClient(connection as unknown as Connection);
 
     await expectRouteValidationFailure(
-      client.create("schedule://example/jobs/nightly", "0 0 * * *", "broadcast"),
+      client.create("schedule://example/jobs/nightly", "0 0 * * *", "Broadcast"),
       ScheduleError,
       "SCHEDULE_INVALID_ROUTE",
       "expected schedule://",

@@ -129,13 +129,13 @@ describe("Transport integration", () => {
       const f = new TestFixture(transport, authMode);
       await f.connectOrFail();
 
-      expect(f.client().notice()).toBeTruthy();
-      expect(f.client().stream()).toBeTruthy();
-      expect(f.client().queue()).toBeTruthy();
-      expect(f.client().rpc()).toBeTruthy();
-      expect(f.client().kv()).toBeTruthy();
-      expect(f.client().lease()).toBeTruthy();
-      expect(f.client().schedule()).toBeTruthy();
+      expect(f.client().notice).toBeTruthy();
+      expect(f.client().stream).toBeTruthy();
+      expect(f.client().queue).toBeTruthy();
+      expect(f.client().rpc).toBeTruthy();
+      expect(f.client().kv).toBeTruthy();
+      expect(f.client().lease).toBeTruthy();
+      expect(f.client().schedule).toBeTruthy();
     });
 
     it("should reconnect by creating a new client after close", async () => {
@@ -160,15 +160,12 @@ describe("Transport integration", () => {
       const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
 
       try {
-        await subscriber
-          .client()
-          .notice()
-          .subscribe(route, async (msg) => {
-            received.push(Buffer.from(msg.body).toString());
-          });
+        await subscriber.client().notice.subscribe(route, async (msg) => {
+          received.push(Buffer.from(msg.body).toString());
+        });
         await sleep(150);
 
-        await publisher.client().notice().publish(route, Buffer.from("before-disconnect"));
+        await publisher.client().notice.publish(route, Buffer.from("before-disconnect"));
         await sleep(500);
         expect(received).toEqual(["before-disconnect"]);
 
@@ -177,7 +174,7 @@ describe("Transport integration", () => {
         const reconnected = new TestFixture(transport, authMode);
         await reconnected.connectOrFail();
 
-        await publisher.client().notice().publish(route, Buffer.from("after-disconnect"));
+        await publisher.client().notice.publish(route, Buffer.from("after-disconnect"));
         await sleep(750);
 
         expect(received).toEqual(["before-disconnect"]);
@@ -244,7 +241,7 @@ describe("Transport integration", () => {
       await f.client().close();
 
       await expect(
-        Promise.resolve().then(() => f.client().kv().begin(route, { durability: "Sync" })),
+        Promise.resolve().then(() => f.client().kv.begin(route, { durability: "Sync" })),
       ).rejects.toBeInstanceOf(ConnectionError);
     });
 
@@ -255,19 +252,16 @@ describe("Transport integration", () => {
       await caller.connectOrFail();
 
       const route = worker.uniqueRoute("rpc");
-      const sub = await worker
-        .client()
-        .rpc()
-        .registerWorker(route, async (_req, writer) => {
-          await sleep(250);
-          await writer.send(Buffer.from("late"), true);
-        });
+      const sub = await worker.client().rpc.registerWorker(route, async (_req, writer) => {
+        await sleep(250);
+        await writer.send(Buffer.from("late"), true);
+      });
       const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
       const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
 
       try {
         const controller = new AbortController();
-        const iterator = await caller.client().rpc().call(route, Buffer.from("block"), {
+        const iterator = await caller.client().rpc.call(route, Buffer.from("block"), {
           timeoutMs: 10000,
           signal: controller.signal,
         });
@@ -294,29 +288,28 @@ describe("Transport integration", () => {
       await caller.connectOrFail();
 
       const route = worker.uniqueRoute("rpc");
-      await worker
-        .client()
-        .rpc()
-        .registerWorker(route, async (_req, writer) => {
-          await sleep(200);
-          await writer.send(Buffer.from("too-late"), true);
-        });
+      await worker.client().rpc.registerWorker(route, async (_req, writer) => {
+        await sleep(200);
+        await writer.send(Buffer.from("too-late"), true);
+      });
       const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
       const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
 
       try {
         const controller = new AbortController();
-        const iterator = await caller.client().rpc().call(route, Buffer.from("block"), {
+        const iterator = await caller.client().rpc.call(route, Buffer.from("block"), {
           timeoutMs: 10000,
           signal: controller.signal,
         });
         const nextPromise = iterator.next();
 
         await sleep(100);
-        await worker.client().close();
+        const nextResult = expect(nextPromise).rejects.toHaveProperty("name", "AbortError");
+        const closePromise = worker.client().close();
         controller.abort();
+        await closePromise;
 
-        await expect(nextPromise).rejects.toHaveProperty("name", "AbortError");
+        await nextResult;
         await sleep(300);
         expect(warn).not.toHaveBeenCalled();
         expect(error).not.toHaveBeenCalled();

@@ -63,19 +63,48 @@ function resolveBackoffOption(value: number | undefined, fallback: number): numb
   return Math.max(1, resolveWaitOption(value, fallback));
 }
 
+// Deliberately separate from resolveWaitOption: connectWhenReady's timeoutMs
+// is the one option where `Infinity` is a meaningful, documented value
+// ("wait with no deadline until the signal aborts"), so it must pass
+// through instead of being treated as "not finite, fall back to default".
+// backoffMs/maxBackoffMs correctly keep rejecting Infinity via
+// resolveWaitOption/resolveBackoffOption above — don't loosen those.
+function resolveConnectWhenReadyTimeout(value: number | undefined, fallback: number): number {
+  if (value === undefined) {
+    return fallback;
+  }
+
+  if (value === Infinity) {
+    return Infinity;
+  }
+
+  if (!Number.isFinite(value)) {
+    return fallback;
+  }
+
+  return Math.max(0, value);
+}
+
 function createConnectWhenReadyDeadline(timeoutMs: number, callerSignal?: AbortSignal) {
   const controller = new AbortController();
-  const deadlineMs = Date.now() + timeoutMs;
+  const noDeadline = timeoutMs === Infinity;
+  const deadlineMs = noDeadline ? Infinity : Date.now() + timeoutMs;
   let timedOut = false;
 
   const onCallerAbort = (): void => {
     controller.abort();
   };
 
-  const timeoutId = setTimeout(() => {
-    timedOut = true;
-    controller.abort();
-  }, timeoutMs);
+  // setTimeout(fn, Infinity) is a well-known footgun: the delay gets
+  // ToInt32-coerced and the timer fires almost immediately instead of never.
+  // Skip scheduling it entirely when there's no deadline — hasExpired()
+  // then only ever reflects the (never-true) Date.now() >= Infinity check.
+  const timeoutId = noDeadline
+    ? undefined
+    : setTimeout(() => {
+        timedOut = true;
+        controller.abort();
+      }, timeoutMs);
 
   if (callerSignal?.aborted) {
     controller.abort();
@@ -119,13 +148,13 @@ export type Client<TConfig extends ClientConfig = ClientConfig> = {
   connectWhenReady: (options?: ConnectWhenReadyOptions) => Promise<void>;
   close: () => Promise<void>;
   isConnected: () => boolean;
-  kv: () => KvClient;
-  queue: () => QueueClient;
-  rpc: () => RpcClient;
-  lease: () => LeaseClient;
-  notice: () => NoticeClient;
-  stream: () => StreamClient;
-  schedule: () => ScheduleClient;
+  readonly kv: KvClient;
+  readonly queue: QueueClient;
+  readonly rpc: RpcClient;
+  readonly lease: LeaseClient;
+  readonly notice: NoticeClient;
+  readonly stream: StreamClient;
+  readonly schedule: ScheduleClient;
   getUrl: () => string;
   getState: () => ConnectionState;
 };
@@ -158,14 +187,22 @@ export function createClientWithTransport<TConfig extends ClientConfig>(
   transportFactory: ClientTransportFactory,
 ): Client<TConfig> {
   const observability = config.observability;
+  // IMPORTANT: `...config` must come FIRST here. Per-field defaults below use
+  // `config.field ?? default` (scalars) or `{...defaults, ...config.field}`
+  // (nested option bags) so they always win over the spread regardless of
+  // property order — but the reverse (spreading `config` last) would clobber
+  // every nested merge with the caller's raw, un-merged sub-object.
   const resolvedConfig = {
-    timeout: 30000,
-    transport: "auto",
-    webSocket: {},
-    maxFrameSize: 65535,
-    authSettleDelayMs: 100,
-    maxInFlightRequests: 256,
-    maxRequestQueueSize: 1024,
+    ...config,
+    timeout: config.timeout ?? 30000,
+    transport: config.transport ?? "auto",
+    webSocket: config.webSocket ?? {},
+    // maxFrameSize applies to the complete TLV frame, whose 5-byte header is
+    // in addition to the spec's 65535-byte maximum value.
+    maxFrameSize: config.maxFrameSize ?? 65540,
+    authSettleDelayMs: config.authSettleDelayMs ?? 1000,
+    maxInFlightRequests: config.maxInFlightRequests ?? 256,
+    maxRequestQueueSize: config.maxRequestQueueSize ?? 1024,
     observability: config.observability ?? {},
     reconnect: {
       enabled: true,
@@ -192,7 +229,6 @@ export function createClientWithTransport<TConfig extends ClientConfig>(
       timeoutMs: 30000,
       ...config.asyncHandlers,
     },
-    ...config,
   } as unknown as ResolvedClientConfig<TConfig>;
 
   if (!resolvedConfig.url) {
@@ -203,6 +239,7 @@ export function createClientWithTransport<TConfig extends ClientConfig>(
   const domainCache = new Map<DomainKey, DomainClients[DomainKey]>();
   let clientClosed = false;
   let pendingConnectPromise: Promise<void> | null = null;
+  let closePromise: Promise<void> | null = null;
 
   const domainFactories: {
     [K in DomainKey]: (connection: Connection) => DomainClients[K];
@@ -332,7 +369,7 @@ export function createClientWithTransport<TConfig extends ClientConfig>(
       throw clientClosedError();
     }
 
-    const timeoutMs = resolveWaitOption(options.timeoutMs, resolvedConfig.timeout);
+    const timeoutMs = resolveConnectWhenReadyTimeout(options.timeoutMs, resolvedConfig.timeout);
     const maxBackoffMs = resolveBackoffOption(
       options.maxBackoffMs,
       DEFAULT_CONNECT_WHEN_READY_MAX_BACKOFF_MS,
@@ -390,7 +427,7 @@ export function createClientWithTransport<TConfig extends ClientConfig>(
     }
   };
 
-  const close = async (): Promise<void> => {
+  const runClose = async (): Promise<void> => {
     if (clientClosed && !connection) {
       domainCache.clear();
       return;
@@ -412,6 +449,12 @@ export function createClientWithTransport<TConfig extends ClientConfig>(
     domainCache.clear();
   };
 
+  const close = (): Promise<void> => {
+    if (closePromise) return closePromise;
+    closePromise = runClose();
+    return closePromise;
+  };
+
   const isConnected = (): boolean => {
     return !clientClosed && (connection?.isConnected() ?? false);
   };
@@ -426,34 +469,6 @@ export function createClientWithTransport<TConfig extends ClientConfig>(
     const created = domainFactories[key](activeConnection);
     domainCache.set(key, created);
     return created;
-  };
-
-  const kv = (): KvClient => {
-    return getDomain("kv");
-  };
-
-  const queue = (): QueueClient => {
-    return getDomain("queue");
-  };
-
-  const rpc = (): RpcClient => {
-    return getDomain("rpc");
-  };
-
-  const lease = (): LeaseClient => {
-    return getDomain("lease");
-  };
-
-  const notice = (): NoticeClient => {
-    return getDomain("notice");
-  };
-
-  const stream = (): StreamClient => {
-    return getDomain("stream");
-  };
-
-  const schedule = (): ScheduleClient => {
-    return getDomain("schedule");
   };
 
   const getUrl = (): string => {
@@ -479,13 +494,27 @@ export function createClientWithTransport<TConfig extends ClientConfig>(
     connectWhenReady,
     close,
     isConnected,
-    kv,
-    queue,
-    rpc,
-    lease,
-    notice,
-    stream,
-    schedule,
+    get kv() {
+      return getDomain("kv");
+    },
+    get queue() {
+      return getDomain("queue");
+    },
+    get rpc() {
+      return getDomain("rpc");
+    },
+    get lease() {
+      return getDomain("lease");
+    },
+    get notice() {
+      return getDomain("notice");
+    },
+    get stream() {
+      return getDomain("stream");
+    },
+    get schedule() {
+      return getDomain("schedule");
+    },
     getUrl,
     getState,
   } satisfies Client<TConfig>;

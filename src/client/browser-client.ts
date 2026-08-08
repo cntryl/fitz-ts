@@ -38,5 +38,3 @@ export type BrowserClient = ValidateBrowserClient<CoreClient<BrowserClientConfig
 export function createClient(config: BrowserClientConfig): BrowserClient {
   return createClientWithTransport(config, createBrowserTransport);
 }
-
-export const Client = createClient;

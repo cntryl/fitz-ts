@@ -62,7 +62,10 @@ export const KvCodec = {
 
   decodeStatusResponse(payload: Uint8Array): KvStatusResponse {
     const reader = createBufferReader(payload);
-    return { status: reader.readU8() };
+    const status = reader.readU8();
+    return status === 0 || reader.remainingBytes() < 4
+      ? { status }
+      : { status, errorMessage: reader.readString() };
   },
 
   decodePutResponse(payload: Uint8Array): KvStatusResponse {
@@ -85,6 +88,12 @@ export const KvCodec = {
   decodeGetResponse(payload: Uint8Array): KvGetResponse {
     const reader = createBufferReader(payload);
     const status = reader.readU8();
+    if (status !== 0)
+      return {
+        status,
+        found: false,
+        errorMessage: reader.remainingBytes() >= 4 ? reader.readString() : undefined,
+      };
     const found = !reader.isEOF() && reader.readU8() === 1;
 
     if (!found || reader.isEOF()) {
@@ -174,24 +183,46 @@ export const KvCodec = {
   decodeScanResponse(payload: Uint8Array): KvScanResponse {
     const reader = createBufferReader(payload);
     const status = reader.readU8();
-
-    if (reader.isEOF()) {
-      return { status, keys: [], hasMore: false };
-    }
+    if (status !== 0)
+      return { status, entries: [], hasMore: false, errorMessage: reader.readString() };
+    if (reader.isEOF()) return { status, entries: [], hasMore: false };
 
     const count = reader.readU32BE();
-    const keys: Uint8Array[] = [];
+    const entries: Array<{ key: Uint8Array; value: Uint8Array }> = [];
     for (let i = 0; i < count; i += 1) {
       const keyLen = reader.readU32BE();
-      keys.push(reader.readBytes(keyLen));
-
+      const key = reader.readBytes(keyLen);
       const valueLen = reader.readU32BE();
-      reader.readBytes(valueLen);
+      const value = reader.readBytes(valueLen);
+      entries.push({ key, value });
     }
 
     const hasMore = !reader.isEOF() && reader.readU8() === 1;
 
-    return { status, keys, hasMore };
+    return { status, entries, hasMore };
+  },
+
+  encodeSubscribe(pattern: string): Uint8Array {
+    return getRouteEncoding(pattern).slice();
+  },
+
+  encodeUnsubscribe(pattern: string): Uint8Array {
+    return getRouteEncoding(pattern).slice();
+  },
+
+  decodeNotification(payload: Uint8Array): {
+    subId: bigint;
+    route: string;
+    mutationCount: bigint;
+  } {
+    const reader = createBufferReader(payload);
+    const subId = reader.readU64BE();
+    const route = reader.readRoute();
+    const mutationCount = reader.readU64BE();
+    if (!reader.isEOF()) {
+      throw new CodecError("KV_NOTIFY payload has trailing bytes");
+    }
+    return { subId, route, mutationCount };
   },
 
   encodeDurability(durability: DurabilityMode): number {

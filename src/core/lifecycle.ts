@@ -57,7 +57,13 @@ export function createScope(name: string, parent?: Scope) {
   >(
     resource: T,
   ): T => {
-    if (disposed) {
+    // `disposing` flips true synchronously at the start of dispose(), but
+    // `disposed` doesn't flip true until after the (possibly async)
+    // disposal loop finishes. Guarding on `disposed` alone would let a
+    // resource added during that window land in an already-snapshotted
+    // (and cleared) `resources` array — silently orphaned, never disposed
+    // by this call or any future one.
+    if (disposed || disposing) {
       throw new Error(`Cannot add resource to disposed scope ${name}`);
     }
     resources.push(resource);

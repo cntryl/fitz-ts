@@ -6,15 +6,19 @@
  * 3. Commit() or Rollback() to finalize
  */
 
+import "../../core/async-dispose";
+
 /**
  * Stream record with offset, timestamp, and payload
  */
 export interface StreamRecord {
+  route: string;
   offset: bigint;
   timestamp: bigint;
   body: Uint8Array;
   areaOffset?: bigint;
   realmOffset?: bigint;
+  globalOffset?: bigint;
   metadata?: Uint8Array;
 }
 
@@ -53,6 +57,8 @@ export interface StreamAppendOptions {
 export interface StreamReadOptions {
   maxBytes?: bigint;
   filter?: StreamFilterSet;
+  cursorFingerprint?: bigint;
+  capturedWatermark?: bigint;
   signal?: AbortSignal;
 }
 
@@ -60,22 +66,28 @@ export interface StreamReadCursor {
   lastResourceOffset: bigint;
   lastAreaOffset?: bigint;
   lastRealmOffset?: bigint;
+  lastGlobalOffset?: bigint;
+  cursorFingerprint?: bigint;
+  capturedWatermark?: bigint;
   hasMore: boolean;
 }
 
 export interface StreamReadEvent {
   kind: "event";
+  route: string;
   record: StreamRecord;
 }
 
 export interface StreamReadFiltered {
   kind: "filtered";
+  route: string;
   offset: bigint;
   reason?: StreamFilteredReason;
 }
 
 export interface StreamReadFilteredRange {
   kind: "filtered_range";
+  route: string;
   fromOffset: bigint;
   toOffset: bigint;
   reason?: StreamFilteredReason;
@@ -119,7 +131,7 @@ export type StreamCommitHandler = (notification: StreamCommitNotification) => vo
 export type StreamSubscription = ReturnType<typeof createStreamSubscription>;
 
 export function createStreamSubscription(
-  subId: bigint,
+  getSubId: () => bigint,
   pattern: string,
   unsubscribeFn: (pattern: string) => Promise<void>,
 ) {
@@ -128,7 +140,9 @@ export function createStreamSubscription(
   };
 
   return {
-    subId,
+    get subId(): bigint {
+      return getSubId();
+    },
     unsubscribe,
   };
 }
@@ -164,6 +178,7 @@ export interface StreamSession {
    * Check if session is still open
    */
   isOpen(): boolean;
+  [Symbol.asyncDispose](): Promise<void>;
 }
 
 /**
@@ -179,3 +194,13 @@ export enum StreamStatus {
   SessionClosed = 6,
   ExpectedOffsetMismatch = 7,
 }
+
+export const StreamStatusNames: Record<number, string> = {
+  [StreamStatus.StreamNotFound]: "StreamNotFound",
+  [StreamStatus.OffsetOutOfRange]: "OffsetOutOfRange",
+  [StreamStatus.InvalidOffset]: "InvalidOffset",
+  [StreamStatus.StreamFull]: "StreamFull",
+  [StreamStatus.SessionNotFound]: "SessionNotFound",
+  [StreamStatus.SessionClosed]: "SessionClosed",
+  [StreamStatus.ExpectedOffsetMismatch]: "ExpectedOffsetMismatch",
+};

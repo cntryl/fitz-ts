@@ -57,6 +57,28 @@ export function parseStandardResponse(payload: Uint8Array): ParsedResponse {
   });
 }
 
+/** Parse domains whose error envelope omits the numeric domain code. */
+export function parsePlainResponse(payload: Uint8Array): ParsedResponse {
+  if (payload.length === 0) {
+    throw new ProtocolError("Response payload is empty", undefined, { payloadLength: 0 });
+  }
+
+  const reader = createBufferReader(payload);
+  const status = reader.readU8();
+  if (status === 0) {
+    return { success: true, data: reader.remaining() };
+  }
+  if (status !== 1) {
+    throw new ProtocolError(`Unknown response status: ${status}`, status, { status });
+  }
+
+  const error = reader.readString();
+  if (!reader.isEOF()) {
+    throw new ProtocolError("Error response has trailing data", status);
+  }
+  return { success: false, data: new Uint8Array(0), error };
+}
+
 /**
  * Check if response is success, throw error if not
  * Returns remaining data on success
@@ -73,6 +95,17 @@ export function assertSuccess(payload: Uint8Array, operation: string): Uint8Arra
         errorCode: result.errorCode,
       },
     );
+  }
+  return result.data;
+}
+
+export function assertPlainSuccess(payload: Uint8Array, operation: string): Uint8Array {
+  const result = parsePlainResponse(payload);
+  if (!result.success) {
+    throw new ProtocolError(`${operation} failed: ${result.error || "Unknown error"}`, undefined, {
+      operation,
+      error: result.error || "Unknown error",
+    });
   }
   return result.data;
 }

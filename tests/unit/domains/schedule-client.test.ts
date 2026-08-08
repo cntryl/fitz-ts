@@ -29,6 +29,10 @@ class FakeScheduleConnection {
     };
   }
 
+  onDisconnect(): () => void {
+    return () => undefined;
+  }
+
   dispatchAsyncHandler(task: () => void | Promise<void>): void {
     void Promise.resolve().then(task);
   }
@@ -53,17 +57,17 @@ describe("ScheduleClient route validation", () => {
     const client = createScheduleClient(connection);
 
     await expect(
-      client.create("schedule://realm/area/resource/run", "0 0 * * *", "broadcast"),
+      client.create("schedule://realm/area/resource/run", "0 0 * * *", "Broadcast"),
     ).resolves.toBe("schedule://realm/area/resource/run");
     expect(connection.requestCalls).toHaveLength(1);
   });
 
-  it("rejects legacy three-segment routes in create before sending", async () => {
+  it("rejects obsolete three-segment routes in create before sending", async () => {
     const connection = new FakeScheduleConnection();
     const client = createScheduleClient(connection);
 
     await expectScheduleRouteFailure(
-      client.create("schedule://realm/area/resource", "0 0 * * *", "broadcast"),
+      client.create("schedule://realm/area/resource", "0 0 * * *", "Broadcast"),
     );
     expect(connection.requestCalls).toHaveLength(0);
   });
@@ -73,7 +77,7 @@ describe("ScheduleClient route validation", () => {
     const client = createScheduleClient(connection);
 
     await expectScheduleRouteFailure(
-      client.create("queue://realm/area/resource/run", "0 0 * * *", "broadcast"),
+      client.create("queue://realm/area/resource/run", "0 0 * * *", "Broadcast"),
     );
     expect(connection.requestCalls).toHaveLength(0);
   });
@@ -106,13 +110,9 @@ describe("ScheduleClient route validation", () => {
 });
 
 describe("ScheduleClient domain errors", () => {
-  it("should preserve domain identity given typed broker errors when errors are mapped", async () => {
+  it("should preserve the broker message given plain create errors when errors are mapped", async () => {
     const response = new Uint8Array([
       1,
-      0,
-      0,
-      27,
-      96,
       0,
       0,
       0,
@@ -122,10 +122,54 @@ describe("ScheduleClient domain errors", () => {
     const client = createScheduleClient(new FakeScheduleConnection(response));
 
     await expect(
-      client.create("schedule://realm/area/resource/run", "0 0 * * *", "single"),
+      client.create("schedule://realm/area/resource/run", "0 0 * * *", "Single"),
     ).rejects.toMatchObject({
-      domainCode: 7008,
-      code: "SCHEDULE_REQUEST_FAILED",
+      code: "SCHEDULE_CREATE_FAILED",
+      message: "CREATE failed: invalid delivery mode",
+    });
+  });
+
+  it("classifies listPage failures from the real numeric domain code, not by guessing from message text", async () => {
+    // A message that doesn't contain "not found" / "invalid route" / "cron"
+    // — pre-fix, mapErrorCode's substring guess falls through to the
+    // generic "REQUEST_FAILED", discarding the real errorCode (5,
+    // ScheduleStatus.InvalidTimestamp) the broker already sent.
+    const message = "timestamp out of range";
+    const messageBytes = new TextEncoder().encode(message);
+    const response = new Uint8Array(1 + 4 + 4 + messageBytes.length);
+    response[0] = 1; // status: failure
+    new DataView(response.buffer).setUint32(1, 5, false); // errorCode
+    new DataView(response.buffer).setUint32(5, messageBytes.length, false);
+    response.set(messageBytes, 9);
+
+    const client = createScheduleClient(new FakeScheduleConnection(response));
+
+    await expect(client.listPage()).rejects.toMatchObject({
+      code: "SCHEDULE_INVALID_TIMESTAMP",
+      domainCode: 5,
+    });
+  });
+
+  it("classifies a broker domain error code from outside the 1-5 status range, instead of falling through to Unknown(N)", async () => {
+    // Domain error codes like ErrCodeScheduleInvalidSubscription (7006)
+    // live in a different numeric namespace than the small ScheduleStatus
+    // wire enum (0-5) — pre-fix, ScheduleStatusNames only had entries for
+    // that enum, so a standard response reporting one of these fell
+    // through formatStatusName's fallback to a generic "Unknown(7006)"
+    // instead of its real symbolic name.
+    const message = "route already has an active subscription";
+    const messageBytes = new TextEncoder().encode(message);
+    const response = new Uint8Array(1 + 4 + 4 + messageBytes.length);
+    response[0] = 1; // status: failure
+    new DataView(response.buffer).setUint32(1, 7006, false); // errorCode
+    new DataView(response.buffer).setUint32(5, messageBytes.length, false);
+    response.set(messageBytes, 9);
+
+    const client = createScheduleClient(new FakeScheduleConnection(response));
+
+    await expect(client.listPage()).rejects.toMatchObject({
+      code: "SCHEDULE_INVALID_SUBSCRIPTION",
+      domainCode: 7006,
     });
   });
 });

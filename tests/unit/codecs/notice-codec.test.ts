@@ -52,34 +52,6 @@ describe("NoticeCodec", () => {
     });
   });
 
-  describe("SUBSCRIBE decoding", () => {
-    it("should_decode_subscribe_response_with_sub_id", () => {
-      // Arrange
-      const writer = createBufferWriter(16);
-      writer.writeU8(0); // status = success
-      writer.writeU8(1); // has_sub_id = 1
-      writer.writeU64BE(333n); // subId
-      const response = writer.getBuffer();
-
-      // Act
-      const decoded = NoticeCodec.decodeSubscribeResponse(response);
-
-      // Assert
-      expect(decoded.status).toBe(0);
-      expect(decoded.subId).toBe(333n);
-    });
-
-    it("should_decode_subscribe_response_without_sub_id", () => {
-      // Arrange
-      const response = new Uint8Array([0, 0]); // status = success, has_sub_id = 0
-
-      // Act & Assert - should throw error per codec implementation
-      expect(() => NoticeCodec.decodeSubscribeResponse(response)).toThrow(
-        "missing subscription_id",
-      );
-    });
-  });
-
   describe("UNSUBSCRIBE encoding", () => {
     it("should_encode_unsubscribe_with_sub_id", () => {
       // Arrange

@@ -43,7 +43,7 @@ class FakeStreamConnection {
     }
 
     if (messageType === MSG_STREAM_BEGIN) {
-      return new Uint8Array([0, 1, 0, 0, 0, 0, 0, 0, 0, 1]);
+      return new Uint8Array([0, 0, 0, 0, 0, 0, 0, 0, 1]);
     }
 
     const queuedResponse = this.responses.get(messageType)?.shift();
@@ -167,6 +167,20 @@ describe("StreamClient", () => {
     expect(session.isOpen()).toBe(false);
   });
 
+  it("should roll back an open stream session when asynchronously disposed", async () => {
+    // Arrange
+    const connection = new FakeStreamConnection("success");
+    const client = createStreamClient(connection as unknown as Connection);
+    const session = await client.begin("stream://realm/area/resource");
+    connection.respond(MSG_STREAM_ROLLBACK, new Uint8Array([0]));
+
+    // Act
+    await session[Symbol.asyncDispose]();
+
+    // Assert
+    expect(session.isOpen()).toBe(false);
+  });
+
   it("encodes read filter options", async () => {
     const connection = new FakeStreamConnection("success");
     const client = createStreamClient(connection as unknown as Connection);
@@ -187,20 +201,28 @@ describe("StreamClient", () => {
     const filterLength = reader.readU32BE();
     expect(filterLength).toBeGreaterThan(0);
     expect(reader.readBytes(filterLength)).toBeInstanceOf(Uint8Array);
+    expect(reader.readU8()).toBe(0);
+    expect(reader.readU8()).toBe(0);
     expect(reader.isEOF()).toBe(true);
   });
 
-  it("returns read pages with filtered markers and preserves event-only read compatibility", async () => {
+  it("returns read pages with filtered markers and projects event-only reads", async () => {
     const readResponse = encodeWrappedReadResponse(
       [
-        encodeReadEvent({
-          offset: 4n,
-          areaOffset: 8n,
-          realmOffset: 12n,
-          body: new Uint8Array([1, 2, 3]),
-          timestamp: 99n,
-        }),
-        encodeReadFiltered(5n, "server_filter"),
+        {
+          route: "stream://realm/area/resource",
+          item: encodeReadEvent({
+            offset: 4n,
+            areaOffset: 8n,
+            realmOffset: 12n,
+            body: new Uint8Array([1, 2, 3]),
+            timestamp: 99n,
+          }),
+        },
+        {
+          route: "stream://realm/area/resource",
+          item: encodeReadFiltered(5n, "server_filter"),
+        },
       ],
       {
         lastResourceOffset: 5n,
@@ -216,7 +238,9 @@ describe("StreamClient", () => {
     expect(page.items).toHaveLength(2);
     expect(page.items[0]).toEqual({
       kind: "event",
+      route: "stream://realm/area/resource",
       record: {
+        route: "stream://realm/area/resource",
         offset: 4n,
         areaOffset: 8n,
         realmOffset: 12n,
@@ -226,6 +250,7 @@ describe("StreamClient", () => {
     });
     expect(page.items[1]).toEqual({
       kind: "filtered",
+      route: "stream://realm/area/resource",
       offset: 5n,
       reason: "server_filter",
     });
@@ -239,7 +264,116 @@ describe("StreamClient", () => {
     const records = await client.read("stream://realm/area/resource", 4n, 10);
     expect(records).toHaveLength(1);
     expect(records[0].offset).toBe(4n);
-    expect(Buffer.from(records[0].body).toString("hex")).toBe("010203");
+    expect(Array.from(records[0].body)).toEqual([1, 2, 3]);
+  });
+
+  it("returns concrete routes for every wildcard stream read item", async () => {
+    const readResponse = encodeWrappedReadResponse(
+      [
+        {
+          route: "stream://realm/area/orders",
+          item: encodeReadEvent({
+            offset: 0n,
+            body: new Uint8Array([1]),
+            timestamp: 99n,
+          }),
+        },
+        {
+          route: "stream://realm/area/audits",
+          item: encodeReadFiltered(1n, "server_filter"),
+        },
+      ],
+      { lastResourceOffset: 1n, lastAreaOffset: 1n, hasMore: false },
+    );
+    const connection = new FakeStreamConnection("success", readResponse);
+    const client = createStreamClient(connection as unknown as Connection);
+
+    const page = await client.readPage("stream://realm/area/*", 0n, 2);
+
+    expect(page.items[0]).toMatchObject({
+      route: "stream://realm/area/orders",
+      record: { route: "stream://realm/area/orders" },
+    });
+    expect(page.items[1]).toMatchObject({ route: "stream://realm/area/audits" });
+  });
+
+  it("reports the real status name instead of Unknown(N) on a failed operation", async () => {
+    const connection = new FakeStreamConnection("success");
+    const client = createStreamClient(connection as unknown as Connection);
+
+    const session = await client.begin("stream://realm/area/resource");
+    // Status 7 (ExpectedOffsetMismatch) with no broker-supplied errorMessage
+    // — before the fix, client.ts's local checkStatus passed an empty names
+    // map to formatStatusName and always fell back to "Unknown(7)".
+    connection.respond(MSG_STREAM_COMMIT, new Uint8Array([7]));
+
+    await expect(session.commit("Sync")).rejects.toMatchObject({
+      domainCode: 7,
+      message: "COMMIT failed: ExpectedOffsetMismatch",
+    });
+  });
+
+  it("rejects an unbounded consume() that the broker truncated to one page", async () => {
+    const readResponse = encodeWrappedReadResponse(
+      [
+        {
+          route: "stream://realm/area/resource",
+          item: encodeReadEvent({ offset: 0n, body: new Uint8Array([1]), timestamp: 1n }),
+        },
+      ],
+      { lastResourceOffset: 0n, hasMore: true },
+    );
+    const connection = new FakeStreamConnection("success", readResponse);
+    const client = createStreamClient(connection as unknown as Connection);
+
+    await expect(client.consume("stream://realm/area/resource", 0n)).rejects.toMatchObject({
+      code: "STREAM_CONSUME_TRUNCATED",
+    });
+  });
+
+  it("does not treat an explicit limit as truncation in consume()", async () => {
+    const readResponse = encodeWrappedReadResponse(
+      [
+        {
+          route: "stream://realm/area/resource",
+          item: encodeReadEvent({ offset: 0n, body: new Uint8Array([1]), timestamp: 1n }),
+        },
+      ],
+      { lastResourceOffset: 0n, hasMore: true },
+    );
+    const connection = new FakeStreamConnection("success", readResponse);
+    const client = createStreamClient(connection as unknown as Connection);
+
+    const iterable = await client.consume("stream://realm/area/resource", 0n, 1);
+    const records: Array<{ offset: bigint }> = [];
+    for await (const record of iterable) {
+      records.push(record);
+    }
+    expect(records.map((record) => record.offset)).toEqual([0n]);
+  });
+
+  it("matches the server stream selector grammar", async () => {
+    const connection = new FakeStreamConnection(
+      "success",
+      encodeWrappedReadResponse([], {
+        lastResourceOffset: 0n,
+        global: true,
+        hasMore: false,
+      }),
+    );
+    const client = createStreamClient(connection as unknown as Connection);
+    const realmClient = createStreamClient(
+      new FakeStreamConnection(
+        "success",
+        encodeWrappedReadResponse([], { lastResourceOffset: 0n, hasMore: false }),
+      ) as unknown as Connection,
+    );
+
+    await expect(client.readPage("stream://**", 0n, 1)).resolves.toBeDefined();
+    await expect(realmClient.readPage("stream://realm/*/*", 0n, 1)).resolves.toBeDefined();
+    await expect(client.readPage("stream://*/area/*", 0n, 1)).rejects.not.toMatchObject({
+      code: "STREAM_INVALID_ROUTE",
+    });
   });
 });
 
@@ -298,18 +432,23 @@ function encodeReadFiltered(
 }
 
 function encodeWrappedReadResponse(
-  items: Uint8Array[],
+  items: Array<{ route: string; item: Uint8Array }>,
   cursor: {
     lastResourceOffset: bigint;
     lastAreaOffset?: bigint;
     lastRealmOffset?: bigint;
+    lastGlobalOffset?: bigint;
+    cursorFingerprint?: bigint;
+    capturedWatermark?: bigint;
+    global?: boolean;
     hasMore: boolean;
   },
 ): Uint8Array {
   const data = createBufferWriter(256);
   data.writeU32BE(items.length);
   for (const item of items) {
-    data.writeBytes(item);
+    data.writeRoute(item.route);
+    data.writeBytes(item.item);
   }
   data.writeU64BE(cursor.lastResourceOffset);
   data.writeU8(cursor.lastAreaOffset === undefined ? 0 : 1);
@@ -320,12 +459,18 @@ function encodeWrappedReadResponse(
   if (cursor.lastRealmOffset !== undefined) {
     data.writeU64BE(cursor.lastRealmOffset);
   }
+  if (cursor.global) writeOptionalU64(data, cursor.lastGlobalOffset);
   data.writeU8(cursor.hasMore ? 1 : 0);
+  if (cursor.global) {
+    writeOptionalU64(data, cursor.cursorFingerprint);
+    writeOptionalU64(data, cursor.capturedWatermark);
+  }
 
   const writer = createBufferWriter(320);
   writer.writeU8(0);
   writer.writeU8(0);
-  writer.writeU32BE(data.getLength());
-  writer.writeBytes(data.getBuffer());
+  const payload = data.getBuffer();
+  writer.writeU32BE(payload.length);
+  writer.writeBytes(payload);
   return writer.getBuffer();
 }

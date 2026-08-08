@@ -23,6 +23,7 @@ import type { Transport } from "../../../src/transport/types";
 class FakeTransport implements Transport {
   public sent: Uint8Array[] = [];
   public heartbeatCount = 0;
+  public closeCount = 0;
   public connected = false;
   public connectStarted = false;
   public connectGate: Promise<void> | null = null;
@@ -99,6 +100,7 @@ class FakeTransport implements Transport {
   }
 
   async close(): Promise<void> {
+    this.closeCount += 1;
     this.connected = false;
     this.pendingRead?.reject(new Error("closed"));
     this.pendingRead = null;
@@ -394,19 +396,13 @@ describe("Connection", () => {
     await connection.close();
   });
 
-  it("retries reconnect when a restore listener fails", async () => {
+  it("should reject the replacement session given an active loss handler when reconnect authentication loses its transport", async () => {
     const first = new FakeTransport();
-    const second = new FakeTransport();
-    const third = new FakeTransport();
-    const factory = vi
-      .fn<() => Transport>()
-      .mockReturnValueOnce(first)
-      .mockReturnValueOnce(second)
-      .mockReturnValueOnce(third);
-    let restoreAttempts = 0;
-
+    const second = new FakeTransport([new Error("replacement transport failed")]);
+    const factory = vi.fn<() => Transport>().mockReturnValueOnce(first).mockReturnValueOnce(second);
     const connection = createConnection(factory, async () => "jwt-token", {
-      authSettleDelayMs: 0,
+      authSettleDelayMs: 10,
+      heartbeat: { enabled: false },
       reconnect: {
         enabled: true,
         maxAttempts: 2,
@@ -414,12 +410,39 @@ describe("Connection", () => {
         maxBackoffMs: 0,
       },
     });
-    connection.onReconnect(async () => {
-      restoreAttempts += 1;
-      if (restoreAttempts === 1) {
-        throw new Error("restore failed");
-      }
+
+    await connection.connect();
+    await confirmSession(connection, first);
+    first.fail(new Error("initial transport failed"));
+
+    await vi.waitFor(() => {
+      expect(connection.getState()).toBe("CLOSED");
     });
+    expect(connection.isConnected()).toBe(false);
+    expect(second.connected).toBe(false);
+    expect(factory).toHaveBeenCalledTimes(2);
+
+    await connection.close();
+  });
+
+  it("should authenticate the reconnected session when a restore listener fails", async () => {
+    const first = new FakeTransport();
+    const second = new FakeTransport();
+    const factory = vi.fn<() => Transport>().mockReturnValueOnce(first).mockReturnValueOnce(second);
+    const restore = vi.fn(async () => {
+      throw new Error("restore failed");
+    });
+
+    const connection = createConnection(factory, async () => "jwt-token", {
+      authSettleDelayMs: 0,
+      reconnect: {
+        enabled: true,
+        maxAttempts: 1,
+        backoffMs: 0,
+        maxBackoffMs: 0,
+      },
+    });
+    connection.onReconnect(restore);
 
     await connection.connect();
     await confirmSession(connection, first);
@@ -427,8 +450,8 @@ describe("Connection", () => {
 
     await vi.waitFor(() => {
       expect(connection.isConnected()).toBe(true);
-      expect(factory).toHaveBeenCalledTimes(3);
-      expect(restoreAttempts).toBe(2);
+      expect(factory).toHaveBeenCalledTimes(2);
+      expect(restore).toHaveBeenCalledTimes(1);
     });
 
     await connection.close();
@@ -572,7 +595,7 @@ describe("Connection", () => {
     await connection.connect();
 
     const subscriptionPromise = notice.subscribe("notice://realm/area/resource", async (msg) => {
-      received.push(Buffer.from(msg.body).toString());
+      received.push(new TextDecoder().decode(msg.body));
     });
 
     await vi.waitFor(() => {
@@ -607,7 +630,7 @@ describe("Connection", () => {
         encodeNoticeNotification(
           2n,
           "notice://realm/area/resource",
-          Buffer.from("after-reconnect"),
+          new TextEncoder().encode("after-reconnect"),
         ),
       ),
     );
@@ -861,7 +884,113 @@ describe("Connection", () => {
     expect(factory).toHaveBeenCalledTimes(1);
   });
 
-  it("treats a late close before the first server frame as inferred auth rejection", async () => {
+  it("stops the reconnect loop immediately when an attempt is rejected with an AuthenticationError, instead of retrying to maxAttempts", async () => {
+    const first = new FakeTransport();
+    const second = new FakeTransport();
+    const factory = vi
+      .fn<() => Transport>()
+      .mockReturnValueOnce(first)
+      .mockReturnValueOnce(second)
+      .mockReturnValue(second);
+    let tokenCalls = 0;
+    const tokenProvider = async (): Promise<string> => {
+      tokenCalls += 1;
+      if (tokenCalls > 1) {
+        // Every reconnect attempt after the initial connect hits a revoked
+        // token — this is what makes openAndAuthenticate(true) throw an
+        // AuthenticationError directly, the exact case
+        // handleConnectionLossOnce's own authRejected guard doesn't cover
+        // once the reconnect loop is already running.
+        throw new Error("token provider revoked");
+      }
+      return "jwt-token";
+    };
+
+    const connection = createConnection(factory, tokenProvider, {
+      authSettleDelayMs: 0,
+      reconnect: {
+        enabled: true,
+        maxAttempts: 5,
+        backoffMs: 0,
+        maxBackoffMs: 0,
+      },
+    });
+
+    await connection.connect();
+    await confirmSession(connection, first);
+    first.fail(new Error("network lost"));
+
+    await vi.waitFor(() => {
+      expect(connection.getState()).toBe("CLOSED");
+    });
+
+    // 1 call for the initial connect + exactly 1 reconnect attempt — not
+    // retried again up to maxAttempts (5).
+    expect(factory).toHaveBeenCalledTimes(2);
+
+    await connection.close();
+  });
+
+  it("keeps the default auth rejection window open for a delayed broker rejection", async () => {
+    vi.useFakeTimers();
+    const transport = new FakeTransport();
+    const factory = vi.fn<() => Transport>().mockReturnValue(transport);
+    const connection = createConnection(factory, async () => "bad-token");
+    try {
+      const connecting = connection.connect();
+      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(500);
+      transport.fail(new Error("connect failed: invalid jwt"));
+
+      await expect(connecting).rejects.toBeInstanceOf(AuthenticationError);
+      expect(factory).toHaveBeenCalledTimes(1);
+    } finally {
+      await connection.close();
+      vi.useRealTimers();
+    }
+  });
+
+  it("processes an auth-settle-window connection loss exactly once, not twice", async () => {
+    // A connection loss detected while still inside the auth-settle window
+    // is reported to openAndAuthenticate() via `authOutcome.reject(...)`,
+    // which itself lands in openAndAuthenticate's own catch block. Pre-fix,
+    // handleConnectionLossOnce's disconnect fanout (onDisconnect + the
+    // "auth_rejected" lifecycle event) ran once there, and then ran AGAIN
+    // when openAndAuthenticate's catch treated the same failure as fresh —
+    // doubling every onDisconnect call and emitting a second, redundant
+    // "connect_failed"/"reconnect_failed" event for one incident.
+    vi.useFakeTimers();
+    const transport = new FakeTransport();
+    const factory = vi.fn<() => Transport>().mockReturnValue(transport);
+    const events: FitzLifecycleEvent[] = [];
+    const connection = createConnection(factory, async () => "bad-token", {
+      observability: {
+        onLifecycleEvent: (event) => {
+          events.push(event);
+        },
+      },
+    });
+    const onDisconnect = vi.fn();
+    connection.onDisconnect(onDisconnect);
+
+    try {
+      const connecting = connection.connect();
+      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(500);
+      transport.fail(new Error("connect failed: invalid jwt"));
+
+      await expect(connecting).rejects.toBeInstanceOf(AuthenticationError);
+
+      expect(onDisconnect).toHaveBeenCalledTimes(1);
+      expect(events.filter((event) => event.event === "auth_rejected")).toHaveLength(1);
+      expect(events.filter((event) => event.event === "connect_failed")).toHaveLength(0);
+    } finally {
+      await connection.close();
+      vi.useRealTimers();
+    }
+  });
+
+  it("should reconnect after a settled session drops before the first server frame", async () => {
     const first = new FakeTransport();
     const second = new FakeTransport();
     const events: FitzLifecycleEvent[] = [];
@@ -882,18 +1011,17 @@ describe("Connection", () => {
     });
 
     await connection.connect();
-    first.fail(new Error("server closed during silent auth"));
+    first.fail(new Error("network lost after silent auth settled"));
 
     await vi.waitFor(() => {
-      expect(connection.getState()).toBe("CLOSED");
-      expect(factory).toHaveBeenCalledTimes(1);
+      expect(connection.isConnected()).toBe(true);
+      expect(factory).toHaveBeenCalledTimes(2);
     });
 
-    await expect(connection.waitUntilReady(undefined, 1)).rejects.toBeInstanceOf(
-      AuthenticationError,
-    );
-    expect(second.connected).toBe(false);
-    expect(events.some((event) => event.event === "auth_rejected")).toBe(true);
+    expect(second.connected).toBe(true);
+    expect(events.some((event) => event.event === "auth_rejected")).toBe(false);
+
+    await connection.close();
   });
 
   it("returns to DISCONNECTED after a transport dial failure so callers can retry", async () => {
@@ -1353,7 +1481,7 @@ describe("Connection", () => {
     vi.useRealTimers();
   });
 
-  it("keeps timed-out async handlers in the concurrency slot until they finish", async () => {
+  it("reports a timed-out async handler while keeping its concurrency slot held until it actually finishes", async () => {
     vi.useFakeTimers();
     try {
       const transport = new FakeTransport();
@@ -1391,7 +1519,6 @@ describe("Connection", () => {
 
       await vi.advanceTimersByTimeAsync(1000);
       await Promise.resolve();
-      expect(secondStarted).toBe(false);
       expect(log).toHaveBeenCalledWith(
         "warn",
         "fitz.connection.handler_failed",
@@ -1399,6 +1526,11 @@ describe("Connection", () => {
           error: "Async handler timeout after 1000ms",
         }),
       );
+      // asyncHandlers.maxConcurrency is a hard bound — the timeout report
+      // above must not have freed the concurrency slot while the first
+      // handler is still actually running, so the queued second handler
+      // stays starved behind it.
+      expect(secondStarted).toBe(false);
 
       releaseFirst();
       await vi.runAllTimersAsync();
@@ -1424,6 +1556,50 @@ describe("Connection", () => {
     await connection.connect();
     await connection.close();
 
+    expect(onDisconnect).toHaveBeenCalledTimes(1);
+  });
+
+  it("resolves close() even when the underlying transport's close() rejects", async () => {
+    const transport = new FakeTransport();
+    transport.close = async () => {
+      throw new Error("socket already gone");
+    };
+    const connection = createConnection(
+      () => transport,
+      () => "",
+      { authSettleDelayMs: 0 },
+    );
+
+    await connection.connect();
+
+    // close() is documented as idempotent and must always resolve, even if
+    // a custom Transport's own close() rejects — every other measure
+    // (permanentlyClosed, closeRequested, state=Closed) has already
+    // committed by the time transport.close() is reached.
+    await expect(connection.close()).resolves.toBeUndefined();
+    expect(connection.getState()).toBe("CLOSED");
+
+    // A second call must not replay the stale rejection either.
+    await expect(connection.close()).resolves.toBeUndefined();
+  });
+
+  it("shares one teardown given overlapping close calls", async () => {
+    const transport = new FakeTransport();
+    const connection = createConnection(
+      () => transport,
+      () => "",
+      { authSettleDelayMs: 0 },
+    );
+    const onDisconnect = vi.fn();
+    connection.onDisconnect(onDisconnect);
+    await connection.connect();
+
+    const first = connection.close();
+    const second = connection.close();
+    await Promise.all([first, second]);
+
+    expect(first).toBe(second);
+    expect(transport.closeCount).toBe(1);
     expect(onDisconnect).toHaveBeenCalledTimes(1);
   });
 });

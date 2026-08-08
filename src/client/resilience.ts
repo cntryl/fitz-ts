@@ -1,6 +1,7 @@
 import {
   ConnectionError,
   FitzError,
+  RequestQueueFullError,
   TimeoutError,
   TransportError,
   isRetryable,
@@ -72,6 +73,7 @@ export function isTransientRetryError(error: unknown): boolean {
     error instanceof TimeoutError ||
     error instanceof TransportError ||
     error instanceof ConnectionError ||
+    error instanceof RequestQueueFullError ||
     isRetryable(error)
   );
 }
@@ -87,6 +89,13 @@ export function shouldRetryOperation(retryClass: RetryClass, error: unknown): bo
       return meta?.explicitNegative === true && meta.boundary === "post-send" && isRetryable(error);
     }
     default:
-      return false;
+      // Exhaustiveness guard: a future RetryClass member that isn't given
+      // an explicit case above fails to compile here instead of silently
+      // falling through to "don't retry" via a catch-all default.
+      return assertUnreachableRetryClass(retryClass);
   }
+}
+
+function assertUnreachableRetryClass(retryClass: never): never {
+  throw new Error(`Unhandled RetryClass: ${String(retryClass)}`);
 }

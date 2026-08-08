@@ -5,35 +5,17 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, expectTypeOf, it } from "vite-plus/test";
 
-import { Client } from "../../src/client/client";
+import type { Client } from "../../src/client/client";
 import type { ConnectWhenReadyOptions } from "../../src/index";
 import type {
   BrowserClient,
   BrowserTransportType,
   BrowserWebSocketOptions,
 } from "../../src/client/browser-client";
-import { Client as BrowserClientAlias } from "../../src/client/browser-client";
-import { Connection } from "../../src/client/connection";
-import { Multiplexer } from "../../src/client/multiplexer";
-import { BufferReader, BufferWriter } from "../../src/core/buffer";
-import { Deferred } from "../../src/core/types";
-import { FrameParser } from "../../src/frame/codec";
-import { KvClient } from "../../src/domains/kv/client";
-import { LeaseClient } from "../../src/domains/lease/client";
-import { NoticeClient } from "../../src/domains/notice/client";
-import { QueueClient } from "../../src/domains/queue/client";
-import { RpcClient } from "../../src/domains/rpc/client";
-import { ScheduleClient } from "../../src/domains/schedule/client";
-import { StreamClient } from "../../src/domains/stream/client";
 import type {
   Client as BrowserFacadeClient,
   ConnectWhenReadyOptions as BrowserConnectWhenReadyOptions,
 } from "../../src/index.browser";
-
-type IsCallable<T> = T extends (...args: never[]) => unknown ? true : false;
-type IsNewable<T> = T extends abstract new (...args: never[]) => unknown ? true : false;
-type IsCallableFactoryAlias<T> =
-  IsCallable<T> extends true ? (IsNewable<T> extends false ? true : false) : false;
 
 function collectExportNames(source: string): string[] {
   const names: string[] = [];
@@ -73,8 +55,8 @@ describe("public surface", () => {
   it("keeps the root export inventory stable", () => {
     const source = readSource("../../src/index.ts");
     expect(collectExportNames(source)).toEqual([
-      "Client",
       "createClient",
+      "Client",
       "AsyncHandlerOptions",
       "ClientConfig",
       "ClientConnectOptions",
@@ -103,12 +85,16 @@ describe("public surface", () => {
       "ErrKvOperationNotAllowed",
       "ErrCodeKvIsolationConflict",
       "ErrCodeKvBackendError",
+      "ErrCodeKvInvalidSubscription",
+      "ErrCodeKvSubscriptionLimit",
       "ErrQueueNotFound",
       "ErrQueueMessageNotFound",
       "ErrQueueInvalidToken",
       "ErrQueueFull",
       "ErrQueueInvalidDelay",
       "ErrCodeQueueFull",
+      "ErrCodeQueueInvalidSubscription",
+      "ErrCodeQueueSubscriptionLimit",
       "ErrCodeRpcTimeout",
       "ErrCodeRpcWorkerNotFound",
       "ErrCodeRpcBackpressure",
@@ -119,11 +105,17 @@ describe("public surface", () => {
       "ErrCodeRpcWrongWorker",
       "ErrCodeRpcUnauthorized",
       "ErrCodeRpcBackendError",
+      "ErrCodeRpcInvalidSubscription",
+      "ErrCodeRpcSubscriptionLimit",
       "ErrLeaseHeld",
       "ErrLeaseNotFound",
       "ErrLeaseInvalidToken",
       "ErrCodeLeaseHeld",
+      "ErrCodeLeaseBadRequest",
+      "ErrCodeLeaseInvalidSubscriptionRoute",
       "ErrNoticeGeneral",
+      "ErrCodeNoticeInvalidPattern",
+      "ErrCodeNoticeSubscriptionLimit",
       "ErrStreamNotFound",
       "ErrStreamOffsetOutOfRange",
       "ErrStreamInvalidOffset",
@@ -131,12 +123,16 @@ describe("public surface", () => {
       "ErrStreamSessionNotFound",
       "ErrStreamSessionClosed",
       "ErrStreamExpectedOffsetMismatch",
+      "ErrCodeStreamInvalidSubscription",
+      "ErrCodeStreamSubscriptionLimit",
       "ErrScheduleNotFound",
       "ErrScheduleTaskNotFound",
       "ErrScheduleInvalidCron",
       "ErrScheduleInvalidDelay",
       "ErrScheduleInvalidTimestamp",
       "ErrCodeScheduleInvalidDeliveryMode",
+      "ErrCodeScheduleInvalidSubscription",
+      "ErrCodeScheduleSubscriptionLimit",
       "FitzError",
       "TransportError",
       "ConnectionError",
@@ -165,8 +161,11 @@ describe("public surface", () => {
       "DurabilityMode",
       "KvBeginOptions",
       "KvGetResult",
+      "KvHandler",
+      "KvNotification",
       "KvScanPage",
       "KvScanOptions",
+      "KvSubscription",
       "QueueClient",
       "EnqueueOptions",
       "AvailabilityHandler",
@@ -225,7 +224,20 @@ describe("public surface", () => {
       "ScheduleHandler",
       "ScheduleSubscription",
       "ScheduleStatus",
+      "ScheduleListPage",
     ]);
+  });
+
+  it("exports ScheduleListPage from both the node and browser entry points", () => {
+    // The browser entry point hand-maintains its own export list rather
+    // than re-exporting ./index like index.node.ts does, so it's easy for
+    // a type added to the node surface to silently miss the browser one —
+    // confirmed via tsc that importing ScheduleListPage from
+    // "@cntryl/fitz" (browser) used to fail to compile.
+    const nodeExports = collectExportNames(readSource("../../src/index.ts"));
+    const browserExports = collectExportNames(readSource("../../src/index.browser.ts"));
+    expect(nodeExports).toContain("ScheduleListPage");
+    expect(browserExports).toContain("ScheduleListPage");
   });
 
   it("keeps rpc worker request correlation ids private", () => {
@@ -280,23 +292,5 @@ describe("public surface", () => {
     expectTypeOf<BrowserFacadeClient["connectWhenReady"]>().toEqualTypeOf<
       (options?: BrowserConnectWhenReadyOptions) => Promise<void>
     >();
-  });
-
-  it("exports callable factory aliases without constructor signatures", () => {
-    expectTypeOf<IsCallableFactoryAlias<typeof Client>>().toEqualTypeOf<true>();
-    expectTypeOf<IsCallableFactoryAlias<typeof BrowserClientAlias>>().toEqualTypeOf<true>();
-    expectTypeOf<IsCallableFactoryAlias<typeof Connection>>().toEqualTypeOf<true>();
-    expectTypeOf<IsCallableFactoryAlias<typeof Multiplexer>>().toEqualTypeOf<true>();
-    expectTypeOf<IsCallableFactoryAlias<typeof FrameParser>>().toEqualTypeOf<true>();
-    expectTypeOf<IsCallableFactoryAlias<typeof Deferred>>().toEqualTypeOf<true>();
-    expectTypeOf<IsCallableFactoryAlias<typeof BufferWriter>>().toEqualTypeOf<true>();
-    expectTypeOf<IsCallableFactoryAlias<typeof BufferReader>>().toEqualTypeOf<true>();
-    expectTypeOf<IsCallableFactoryAlias<typeof KvClient>>().toEqualTypeOf<true>();
-    expectTypeOf<IsCallableFactoryAlias<typeof QueueClient>>().toEqualTypeOf<true>();
-    expectTypeOf<IsCallableFactoryAlias<typeof RpcClient>>().toEqualTypeOf<true>();
-    expectTypeOf<IsCallableFactoryAlias<typeof LeaseClient>>().toEqualTypeOf<true>();
-    expectTypeOf<IsCallableFactoryAlias<typeof NoticeClient>>().toEqualTypeOf<true>();
-    expectTypeOf<IsCallableFactoryAlias<typeof StreamClient>>().toEqualTypeOf<true>();
-    expectTypeOf<IsCallableFactoryAlias<typeof ScheduleClient>>().toEqualTypeOf<true>();
   });
 });

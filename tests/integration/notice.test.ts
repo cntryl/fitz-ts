@@ -23,18 +23,15 @@ describe("Notice integration", () => {
         rejectReceived(new Error("timed out waiting for notice"));
       }, 5000);
 
-      await f
-        .client()
-        .notice()
-        .subscribe(route, async (msg) => {
-          clearTimeout(timer);
-          resolveReceived({
-            route: msg.route,
-            body: Buffer.from(msg.body).toString(),
-          });
+      await f.client().notice.subscribe(route, async (msg) => {
+        clearTimeout(timer);
+        resolveReceived({
+          route: msg.route,
+          body: Buffer.from(msg.body).toString(),
         });
+      });
 
-      await f.client().notice().publish(route, b("hello"));
+      await f.client().notice.publish(route, b("hello"));
       await expect(received).resolves.toEqual({ route, body: "hello" });
     });
 
@@ -49,20 +46,14 @@ describe("Notice integration", () => {
       const route = f1.uniqueRoute("notice");
       let count = 0;
 
-      await f1
-        .client()
-        .notice()
-        .subscribe(route, async () => {
-          count += 1;
-        });
-      await f2
-        .client()
-        .notice()
-        .subscribe(route, async () => {
-          count += 1;
-        });
+      await f1.client().notice.subscribe(route, async () => {
+        count += 1;
+      });
+      await f2.client().notice.subscribe(route, async () => {
+        count += 1;
+      });
 
-      await publisher.client().notice().publish(route, b("fanout"));
+      await publisher.client().notice.publish(route, b("fanout"));
       await sleep(500);
 
       expect(count).toBe(2);
@@ -75,26 +66,20 @@ describe("Notice integration", () => {
       const route = f.uniqueRoute("notice");
       const received: string[] = [];
 
-      const subOne = await f
-        .client()
-        .notice()
-        .subscribe(route, async (msg) => {
-          received.push(`one:${Buffer.from(msg.body).toString()}`);
-        });
-      const subTwo = await f
-        .client()
-        .notice()
-        .subscribe(route, async (msg) => {
-          received.push(`two:${Buffer.from(msg.body).toString()}`);
-        });
+      const subOne = await f.client().notice.subscribe(route, async (msg) => {
+        received.push(`one:${Buffer.from(msg.body).toString()}`);
+      });
+      const subTwo = await f.client().notice.subscribe(route, async (msg) => {
+        received.push(`two:${Buffer.from(msg.body).toString()}`);
+      });
 
-      await f.client().notice().publish(route, b("local-fanout"));
+      await f.client().notice.publish(route, b("local-fanout"));
       await sleep(500);
 
       expect(received).toEqual(["one:local-fanout", "two:local-fanout"]);
 
       await subOne.unsubscribe();
-      await f.client().notice().publish(route, b("after-unsub"));
+      await f.client().notice.publish(route, b("after-unsub"));
       await sleep(500);
 
       expect(received).toEqual(["one:local-fanout", "two:local-fanout", "two:after-unsub"]);
@@ -107,7 +92,7 @@ describe("Notice integration", () => {
       await f.connectOrFail();
 
       await expect(
-        f.client().notice().publish(f.uniqueRoute("notice"), b("nobody")),
+        f.client().notice.publish(f.uniqueRoute("notice"), b("nobody")),
       ).resolves.toBeUndefined();
     });
 
@@ -120,7 +105,7 @@ describe("Notice integration", () => {
 
       try {
         await expect(
-          f.client().notice().publish(f.uniqueRoute("notice"), b("quiet")),
+          f.client().notice.publish(f.uniqueRoute("notice"), b("quiet")),
         ).resolves.toBeUndefined();
         await sleep(250);
         expect(warn).not.toHaveBeenCalled();
@@ -138,19 +123,16 @@ describe("Notice integration", () => {
       const route = f.uniqueRoute("notice");
       const received: string[] = [];
 
-      const sub = await f
-        .client()
-        .notice()
-        .subscribe(route, async (msg) => {
-          received.push(Buffer.from(msg.body).toString());
-        });
+      const sub = await f.client().notice.subscribe(route, async (msg) => {
+        received.push(Buffer.from(msg.body).toString());
+      });
 
-      await f.client().notice().publish(route, b("before"));
+      await f.client().notice.publish(route, b("before"));
       await sleep(500);
       expect(received).toEqual(["before"]);
 
       await sub.unsubscribe();
-      await f.client().notice().publish(route, b("after"));
+      await f.client().notice.publish(route, b("after"));
       await sleep(500);
 
       expect(received).toEqual(["before"]);
@@ -175,18 +157,15 @@ describe("Notice integration", () => {
         rejectReceived(new Error("timed out waiting for wildcard notice"));
       }, 5000);
 
-      await f
-        .client()
-        .notice()
-        .subscribe(pattern, async (msg) => {
-          clearTimeout(timer);
-          resolveReceived({
-            route: msg.route,
-            body: Buffer.from(msg.body).toString(),
-          });
+      await f.client().notice.subscribe(pattern, async (msg) => {
+        clearTimeout(timer);
+        resolveReceived({
+          route: msg.route,
+          body: Buffer.from(msg.body).toString(),
         });
+      });
 
-      await f.client().notice().publish(route, b("wildcard-test"));
+      await f.client().notice.publish(route, b("wildcard-test"));
       await expect(received).resolves.toEqual({
         route,
         body: "wildcard-test",
@@ -203,20 +182,14 @@ describe("Notice integration", () => {
       const route = `notice://${realm}/${nestedArea}/events`;
       const received: string[] = [];
 
-      await f
-        .client()
-        .notice()
-        .subscribe(`notice://${realm}/${area}/*`, async () => {
-          received.push("single");
-        });
-      await f
-        .client()
-        .notice()
-        .subscribe(`notice://${realm}/**`, async () => {
-          received.push("double");
-        });
+      await f.client().notice.subscribe(`notice://${realm}/${area}/*`, async () => {
+        received.push("single");
+      });
+      await f.client().notice.subscribe(`notice://${realm}/**`, async () => {
+        received.push("double");
+      });
 
-      await f.client().notice().publish(route, b("nested"));
+      await f.client().notice.publish(route, b("nested"));
       await sleep(500);
 
       expect(received).toEqual(["double"]);
@@ -231,20 +204,14 @@ describe("Notice integration", () => {
       const area = f.uniqueArea();
       const received: string[] = [];
 
-      await f
-        .client()
-        .notice()
-        .subscribe(`notice://${prodRealm}/**`, async () => {
-          received.push("prod");
-        });
-      await f
-        .client()
-        .notice()
-        .subscribe(`notice://${stagingRealm}/**`, async () => {
-          received.push("staging");
-        });
+      await f.client().notice.subscribe(`notice://${prodRealm}/**`, async () => {
+        received.push("prod");
+      });
+      await f.client().notice.subscribe(`notice://${stagingRealm}/**`, async () => {
+        received.push("staging");
+      });
 
-      await f.client().notice().publish(`notice://${prodRealm}/${area}/events`, b("prod"));
+      await f.client().notice.publish(`notice://${prodRealm}/${area}/events`, b("prod"));
       await sleep(500);
 
       expect(received).toEqual(["prod"]);

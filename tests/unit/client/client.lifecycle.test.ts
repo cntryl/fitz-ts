@@ -145,7 +145,7 @@ describe("Client lifecycle ownership", () => {
 
     const client = createClient({ url: "ws://example.test" });
     await client.connect();
-    const kvClient = client.kv();
+    const kvClient = client.kv;
 
     connection.state = ConnectionState.Reconnecting;
     connection.shouldWaitForReconnectValue = true;
@@ -169,7 +169,7 @@ describe("Client lifecycle ownership", () => {
     releaseReconnect();
     await Promise.all([firstWait, secondWait]);
 
-    expect(client.kv()).toBe(kvClient);
+    expect(client.kv).toBe(kvClient);
     expect(client.isConnected()).toBe(true);
   });
 
@@ -365,6 +365,43 @@ describe("Client lifecycle ownership", () => {
 
       await vi.advanceTimersByTimeAsync(20);
       expect(await ready).toBeInstanceOf(TimeoutError);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("waits past the default 30s deadline when connectWhenReady timeoutMs is Infinity", async () => {
+    vi.useFakeTimers();
+    try {
+      const connection = new FakeOwnedConnection();
+      let connectAttempts = 0;
+      connection.setConnectImpl(async () => {
+        connectAttempts += 1;
+        if (connectAttempts < 6) {
+          throw new TransportError("dial failed");
+        }
+
+        connection.state = ConnectionState.Authenticated;
+      });
+      createConnectionMock.mockReturnValue(connection);
+
+      const client = createClient({ url: "ws://example.test" });
+      // A fixed 8s backoff means the 5th failure's post-failure deadline
+      // check lands at t=30000 — exactly the 30s default startup deadline.
+      // If timeoutMs: Infinity were silently coerced back to that default
+      // (rather than genuinely meaning "no deadline"), this is where it
+      // would incorrectly reject with TimeoutError instead of continuing
+      // on to the 6th, successful attempt.
+      const ready = client.connectWhenReady({
+        timeoutMs: Infinity,
+        backoffMs: 8000,
+        maxBackoffMs: 8000,
+      });
+
+      await vi.advanceTimersByTimeAsync(45000);
+
+      await expect(ready).resolves.toBeUndefined();
+      expect(connectAttempts).toBe(6);
     } finally {
       vi.useRealTimers();
     }

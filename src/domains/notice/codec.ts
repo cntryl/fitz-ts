@@ -9,7 +9,7 @@ import {
   writeU32BEAt,
   writeU64BEAt,
 } from "../../core/buffer";
-import { SubscribeResponse, UnsubscribeResponse } from "./types";
+import { ProtocolError } from "../../core/errors";
 
 export const NoticeCodec = {
   /**
@@ -37,31 +37,6 @@ export const NoticeCodec = {
   },
 
   /**
-   * Decode SUBSCRIBE response
-   * Standard response: [u8 status=0][u8 has_sub_id][u64 sub_id if has=1]
-   */
-  decodeSubscribeResponse(payload: Uint8Array): SubscribeResponse {
-    if (payload.length < 2) {
-      throw new Error("SUBSCRIBE response too short");
-    }
-
-    const reader = createBufferReader(payload);
-    const status = reader.readU8();
-    const hasSubId = reader.readU8();
-
-    if (hasSubId !== 1) {
-      throw new Error("SUBSCRIBE response missing subscription_id");
-    }
-
-    if (reader.remainingBytes() < 8) {
-      throw new Error("SUBSCRIBE response too short for subscription_id");
-    }
-
-    const subId = reader.readU64BE();
-    return { status, subId };
-  },
-
-  /**
    * Encode UNSUBSCRIBE request
    * Payload: [u64 subscription_id]
    */
@@ -69,14 +44,6 @@ export const NoticeCodec = {
     const buffer = new Uint8Array(8);
     writeU64BEAt(buffer, 0, subId);
     return buffer;
-  },
-
-  /**
-   * Decode UNSUBSCRIBE response
-   * Standard response: [u8 status=0]
-   */
-  decodeUnsubscribeResponse(): UnsubscribeResponse {
-    return { status: 0 };
   },
 
   /**
@@ -94,7 +61,9 @@ export const NoticeCodec = {
     const bodyLen = reader.readU32BE();
     const body = reader.readBytes(bodyLen);
     if (!reader.isEOF()) {
-      throw new Error("NOTICE_NOTIFY payload has trailing bytes");
+      throw new ProtocolError("NOTICE_NOTIFY payload has trailing bytes", undefined, {
+        operation: "NOTICE_NOTIFY",
+      });
     }
 
     return { subId, route, body };

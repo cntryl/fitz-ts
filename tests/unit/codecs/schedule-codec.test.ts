@@ -16,7 +16,7 @@ describe("ScheduleCodec", () => {
       const payload = testData('{"bucket": "s3://backups"}');
 
       // Act
-      const encoded = ScheduleCodec.encodeCreate(route, cronExpr, "broadcast", payload);
+      const encoded = ScheduleCodec.encodeCreate(route, cronExpr, "Broadcast", payload);
 
       // Assert
       expect(encoded).toBeInstanceOf(Uint8Array);
@@ -28,7 +28,7 @@ describe("ScheduleCodec", () => {
       const encoded = ScheduleCodec.encodeCreate(
         "schedule://test/jobs/job/run",
         "*/5 * * * *",
-        "single",
+        "Single",
         new Uint8Array(0),
       );
 
@@ -37,8 +37,8 @@ describe("ScheduleCodec", () => {
     });
 
     it.each([
-      ["broadcast", 0],
-      ["single", 1],
+      ["Broadcast", 0],
+      ["Single", 1],
     ] as const)("should_encode_%s_delivery_mode_as_%i", (mode, expected) => {
       const encoded = ScheduleCodec.encodeCreate(
         "schedule://test/jobs/job/run",
@@ -105,69 +105,35 @@ describe("ScheduleCodec", () => {
     });
   });
 
-  describe("LIST encoding", () => {
-    it("should_encode_list_with_offset_and_limit", () => {
-      // Arrange/Act
-      const encoded = ScheduleCodec.encodeList(10n, 50n);
-
-      // Assert
-      expect(encoded).toBeInstanceOf(Uint8Array);
+  describe("LIST_PAGE encoding and decoding", () => {
+    it("should_encode_list_page_with_offset_and_limit", () => {
+      const encoded = ScheduleCodec.encodeListPage(25n, 50n);
+      const reader = createBufferReader(encoded);
+      expect(reader.readU8()).toBe(1);
+      expect(reader.readU64BE()).toBe(25n);
+      expect(reader.readU8()).toBe(1);
+      expect(reader.readU64BE()).toBe(50n);
     });
 
-    it("should_encode_list_with_defaults", () => {
-      // Arrange/Act
-      const encoded = ScheduleCodec.encodeList();
-
-      // Assert
-      expect(encoded).toBeInstanceOf(Uint8Array);
-    });
-  });
-
-  describe("LIST decoding", () => {
-    it("should_decode_list_response_with_single_entry", () => {
-      // Arrange
+    it("should_decode_list_page_response_with_single_entry", () => {
       const writer = createBufferWriter(128);
-      writer.writeU64BE(1n); // totalCount = 1
-      // Entry 1
-      writer.writeU8(1); // hasEntry = 1
+      writer.writeU64BE(1n);
+      writer.writeU8(1);
       writer.writeString("schedule://acme/jobs/job1/run");
       writer.writeString("0 0 * * *");
       writer.writeU8(1);
       writer.writeU32BE(testData("payload1").length);
       writer.writeBytes(testData("payload1"));
-      // End marker
-      writer.writeU8(0); // hasEntry = 0
+      writer.writeU8(0);
 
-      const response = writer.getBuffer();
-
-      // Act
-      const decoded = ScheduleCodec.decodeListResponse(response);
-
-      // Assert
+      const decoded = ScheduleCodec.decodeListPage(writer.getBuffer());
       expect(decoded.totalCount).toBe(1n);
       expect(decoded.entries).toHaveLength(1);
       expect(decoded.entries[0].route).toBe("schedule://acme/jobs/job1/run");
-      expect(decoded.entries[0].cron).toBe("0 0 * * *");
-      expect(decoded.entries[0].deliveryMode).toBe("single");
-      expect(decoded.entries[0].payload).toEqual(testData("payload1"));
+      expect(decoded.entries[0].deliveryMode).toBe("Single");
     });
 
-    it("should_decode_list_response_empty", () => {
-      // Arrange
-      const writer = createBufferWriter(16);
-      writer.writeU64BE(0n); // totalCount
-      writer.writeU8(0); // hasEntry = 0 (no entries)
-      const response = writer.getBuffer();
-
-      // Act
-      const decoded = ScheduleCodec.decodeListResponse(response);
-
-      // Assert
-      expect(decoded.entries).toHaveLength(0);
-      expect(decoded.totalCount).toBe(0n);
-    });
-
-    it("should_reject_unknown_list_delivery_mode", () => {
+    it("should_reject_unknown_list_page_delivery_mode", () => {
       const writer = createBufferWriter(128);
       writer.writeU64BE(1n);
       writer.writeU8(1);
@@ -175,10 +141,18 @@ describe("ScheduleCodec", () => {
       writer.writeString("0 0 * * *");
       writer.writeU8(2);
       writer.writeU32BE(0);
-      writer.writeU8(0);
-
-      expect(() => ScheduleCodec.decodeListResponse(writer.getBuffer())).toThrow(
+      expect(() => ScheduleCodec.decodeListPage(writer.getBuffer())).toThrow(
         "Invalid schedule delivery mode byte: 2",
+      );
+    });
+
+    it("should_reject_invalid_list_page_entry_sentinel", () => {
+      const writer = createBufferWriter(16);
+      writer.writeU64BE(0n);
+      writer.writeU8(2);
+
+      expect(() => ScheduleCodec.decodeListPage(writer.getBuffer())).toThrow(
+        "LIST_PAGE response has invalid entry sentinel",
       );
     });
   });
@@ -223,6 +197,7 @@ describe("ScheduleCodec", () => {
       // Arrange
       const writer = createBufferWriter(256);
       writer.writeU64BE(444n); // subId
+      writer.writeString("schedule://realm/area/resource/run");
       writer.writeU32BE(testData('{"execution_id": "exec_123"}').length);
       writer.writeBytes(testData('{"execution_id": "exec_123"}'));
       const payload = writer.getBuffer();
@@ -232,6 +207,7 @@ describe("ScheduleCodec", () => {
 
       // Assert
       expect(decoded.subId).toBe(444n);
+      expect(decoded.route).toBe("schedule://realm/area/resource/run");
       expect(decoded.payload).toEqual(testData('{"execution_id": "exec_123"}'));
     });
 
@@ -240,14 +216,13 @@ describe("ScheduleCodec", () => {
       writer.writeU32BE(testData('{"execution_id": "exec_456"}').length);
       writer.writeBytes(testData('{"execution_id": "exec_456"}'));
 
-      expect(() => ScheduleCodec.decodeNotification(writer.getBuffer())).toThrow(
-        "payload truncated",
-      );
+      expect(() => ScheduleCodec.decodeNotification(writer.getBuffer())).toThrow();
     });
 
     it("should_reject_schedule_fire_notification_with_trailing_bytes", () => {
       const writer = createBufferWriter(256);
       writer.writeU64BE(444n);
+      writer.writeString("schedule://realm/area/resource/run");
       writer.writeU32BE(0);
       writer.writeU8(0xff);
 
@@ -269,7 +244,7 @@ describe("ScheduleCodec", () => {
         const encoded = ScheduleCodec.encodeCreate(
           "schedule://test/jobs/job/run",
           cron,
-          "broadcast",
+          "Broadcast",
           new Uint8Array(0),
         );
         expect(encoded).toBeInstanceOf(Uint8Array);

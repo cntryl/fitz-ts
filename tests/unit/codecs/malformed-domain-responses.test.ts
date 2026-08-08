@@ -2,7 +2,6 @@ import { describe, expect, it } from "vite-plus/test";
 
 import { KvCodec } from "../../../src/domains/kv/codec";
 import { LeaseCodec } from "../../../src/domains/lease/codec";
-import { NoticeCodec } from "../../../src/domains/notice/codec";
 import { QueueCodec } from "../../../src/domains/queue/codec";
 import { RpcCodec } from "../../../src/domains/rpc/codec";
 import { ScheduleCodec } from "../../../src/domains/schedule/codec";
@@ -13,7 +12,11 @@ describe("malformed domain responses", () => {
     ["kv", () => KvCodec.decodeBeginResponse(new Uint8Array()), "Buffer overflow", undefined],
     [
       "queue",
-      () => QueueCodec.decodeReserveResponse(new Uint8Array([0, 0, 0, 0, 1])),
+      () =>
+        QueueCodec.decodeReserveResponse(
+          new Uint8Array([0, 0, 0, 0, 1]),
+          "queue://realm/area/resource",
+        ),
       "Buffer overflow",
       undefined,
     ],
@@ -30,12 +33,6 @@ describe("malformed domain responses", () => {
       "PROTOCOL_ERROR",
     ],
     [
-      "notice",
-      () => NoticeCodec.decodeSubscribeResponse(new Uint8Array()),
-      "SUBSCRIBE response too short",
-      undefined,
-    ],
-    [
       "stream",
       () => StreamCodec.decodeBeginResponse(new Uint8Array()),
       "Buffer overflow",
@@ -43,8 +40,8 @@ describe("malformed domain responses", () => {
     ],
     [
       "schedule",
-      () => ScheduleCodec.decodeListResponse(new Uint8Array()),
-      "LIST response missing total_count",
+      () => ScheduleCodec.decodeListPage(new Uint8Array()),
+      "Buffer overflow",
       undefined,
     ],
   ])(

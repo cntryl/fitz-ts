@@ -2,6 +2,8 @@
  * Buffer utilities for big-endian encoding
  */
 
+import { CodecError } from "./errors";
+
 export const utf8Encoder = new TextEncoder();
 export const utf8Decoder = new TextDecoder();
 
@@ -160,7 +162,7 @@ export function createBufferWriter(capacity: number = 4096) {
 
   const overwriteU32BE = (position: number, value: number): void => {
     if (position + 4 > buffer.length) {
-      throw new Error("Buffer overwrite out of bounds");
+      throw new CodecError("Buffer overwrite out of bounds", { position, needed: 4 });
     }
     writeU32BEAt(buffer, position, value);
   };
@@ -244,7 +246,13 @@ export function createBufferWriter(capacity: number = 4096) {
   };
 
   const getBuffer = (): Uint8Array => {
-    return offset === buffer.length ? buffer : buffer.slice(0, offset);
+    // Always copy. The exact-length fast path used to return the live
+    // internal array here, which is safe only until the writer is reset()
+    // and reused — its entire purpose — at which point a previously
+    // "final" buffer a caller is still holding would be silently mutated
+    // in place. getBufferView() below is the deliberate no-copy escape
+    // hatch for callers that promise not to retain it across reset().
+    return buffer.slice(0, offset);
   };
 
   const getBufferView = (): Uint8Array => {
@@ -309,8 +317,6 @@ export function createBufferWriter(capacity: number = 4096) {
   };
 }
 
-export const BufferWriter = createBufferWriter;
-
 export type BufferReader = ReturnType<typeof createBufferReader>;
 
 export function createBufferReader(buffer: Uint8Array) {
@@ -319,14 +325,14 @@ export function createBufferReader(buffer: Uint8Array) {
 
   const readU8 = (): number => {
     if (offset >= internalBuffer.length) {
-      throw new Error("Buffer overflow: cannot read U8");
+      throw new CodecError("Buffer overflow: cannot read U8", { offset, needed: 1 });
     }
     return internalBuffer[offset++]!;
   };
 
   const readU16BE = (): number => {
     if (offset + 2 > internalBuffer.length) {
-      throw new Error("Buffer overflow: cannot read U16BE");
+      throw new CodecError("Buffer overflow: cannot read U16BE", { offset, needed: 2 });
     }
     const value = (internalBuffer[offset]! << 8) | internalBuffer[offset + 1]!;
     offset += 2;
@@ -335,7 +341,7 @@ export function createBufferReader(buffer: Uint8Array) {
 
   const readU32BE = (): number => {
     if (offset + 4 > internalBuffer.length) {
-      throw new Error("Buffer overflow: cannot read U32BE");
+      throw new CodecError("Buffer overflow: cannot read U32BE", { offset, needed: 4 });
     }
     const value = readU32BEAt(internalBuffer, offset);
     offset += 4;
@@ -344,7 +350,7 @@ export function createBufferReader(buffer: Uint8Array) {
 
   const readU64BE = (): bigint => {
     if (offset + 8 > internalBuffer.length) {
-      throw new Error("Buffer overflow: cannot read U64BE");
+      throw new CodecError("Buffer overflow: cannot read U64BE", { offset, needed: 8 });
     }
     const high =
       ((BigInt(internalBuffer[offset]!) << 24n) |
@@ -366,7 +372,7 @@ export function createBufferReader(buffer: Uint8Array) {
 
   const readBytes = (count: number): Uint8Array => {
     if (offset + count > internalBuffer.length) {
-      throw new Error("Buffer overflow: cannot read bytes");
+      throw new CodecError("Buffer overflow: cannot read bytes", { offset, needed: count });
     }
     const data = internalBuffer.subarray(offset, offset + count);
     offset += count;
@@ -380,7 +386,7 @@ export function createBufferReader(buffer: Uint8Array) {
     }
 
     if (offset + length > internalBuffer.length) {
-      throw new Error("Buffer overflow: cannot read string");
+      throw new CodecError("Buffer overflow: cannot read string", { offset, needed: length });
     }
 
     const bytes = internalBuffer.subarray(offset, offset + length);
@@ -398,14 +404,17 @@ export function createBufferReader(buffer: Uint8Array) {
 
   const setOffset = (value: number): void => {
     if (value < 0 || value > internalBuffer.length) {
-      throw new Error("Invalid offset");
+      throw new CodecError("Invalid offset", {
+        offset: value,
+        bufferLength: internalBuffer.length,
+      });
     }
     offset = value;
   };
 
   const peekU8 = (): number => {
     if (offset >= internalBuffer.length) {
-      throw new Error("Buffer overflow: cannot peek U8");
+      throw new CodecError("Buffer overflow: cannot peek U8", { offset, needed: 1 });
     }
     return internalBuffer[offset]!;
   };
@@ -456,5 +465,3 @@ export function createBufferReader(buffer: Uint8Array) {
     remaining,
   };
 }
-
-export const BufferReader = createBufferReader;
