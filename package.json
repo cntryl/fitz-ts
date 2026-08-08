@@ -90,13 +90,13 @@
     "prepare": "vp config"
   },
   "dependencies": {
-    "ws": "^8.21.0"
+    "ws": "^8.21.3"
   },
   "devDependencies": {
-    "@types/node": "^26.1.1",
+    "@types/node": "^26.2.0",
     "@types/ws": "^8.18.1",
     "cross-env": "^10.1.0",
-    "typescript": "^6.0.3",
+    "typescript": "^7.0.2",
     "vite-plus": "latest"
   },
   "engines": {

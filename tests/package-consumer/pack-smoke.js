@@ -234,7 +234,16 @@ run(tscBin, ["--project", "tsconfig.typecheck-root-browser.json"], { cwd: smokeD
 run(tscBin, ["--project", "tsconfig.typecheck-browser-subpath.json"], { cwd: smokeDir });
 run(
   vpBin,
-  ["pack", "worker-entry.ts", "--platform", "browser", "--out-dir", "vp-worker", "--clean"],
+  [
+    "pack",
+    "worker-entry.ts",
+    "--platform",
+    "browser",
+    "--out-dir",
+    "vp-worker",
+    "--clean",
+    "--dts=false",
+  ],
   {
     cwd: smokeDir,
   },
