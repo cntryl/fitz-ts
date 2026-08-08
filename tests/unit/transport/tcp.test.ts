@@ -155,7 +155,14 @@ describe("tcp transport", () => {
     const address = server.address();
     if (!address || typeof address === "string") throw new Error("expected tcp address");
 
-    const transport = createTcpTransport(`localhost:${address.port}`, { timeout: 20 });
+    // Disable the socket-level receive timeout so this test isolates the
+    // per-send timeout. Otherwise the idle socket timeout can destroy the
+    // connection between iterations and turn later assertions into
+    // "TCP socket is not connected" failures.
+    const transport = createTcpTransport(`localhost:${address.port}`, {
+      timeout: 20,
+      receiveTimeout: false,
+    });
     await transport.connect();
 
     const warnings: string[] = [];
