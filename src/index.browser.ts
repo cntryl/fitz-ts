@@ -161,6 +161,7 @@ export type {
   LeaseSubscription,
   LeaseStatus,
   LeaseLifecycleError,
+  LeaseAuthority,
   WithLeaseOptions,
 } from "./domains/lease/types";
 export type { NoticeClient } from "./domains/notice/client";

@@ -246,11 +246,17 @@ Broker-backed connection hardening coverage now includes automatic reconnect sub
 
 ## Managed leases
 
-`client.lease.withLease(route, ttlSecs, async signal => { ... })` acquires, renews, and
-releases a lease around a callback. Pass `{ waitForAvailability: true, signal }` to wait
-through typed contention and link caller cancellation. Callback code must stop promptly
-when `signal` aborts. Low-level `acquire`, `extend`, and `release` remain available; each
-successful extend replaces the fencing token, and an uncertain extend invalidates the handle.
+`client.lease.withLease(route, ttlSecs, async (signal, authority) => { ... })` acquires,
+renews, and releases a lease around a callback. Pass `{ waitForAvailability: true, signal }`
+to wait through typed contention and link caller cancellation. Callback code must stop
+promptly when `signal` aborts. `authority.fencingToken` is the immutable admission fencing
+epoch returned by the successful acquisition; it does not change when renewal rotates the
+handle's live broker credential. Tokens are ordered only across successive ownership of the
+same route. An external store should atomically retain the greatest token it has accepted and
+reject lower tokens, rather than comparing this snapshot for equality with a later live token.
+Callbacks that only accept `signal` remain supported. Low-level `acquire`, `extend`, and
+`release` remain available; each successful extend replaces the live fencing token, and an
+uncertain extend invalidates the handle.
 
 ## Canonical Docs
 

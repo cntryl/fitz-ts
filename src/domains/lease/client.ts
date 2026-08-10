@@ -44,6 +44,7 @@ import {
   LeaseSubscription,
   LeaseLifecycleError,
   LeaseAcquireOptions,
+  LeaseAuthority,
   WithLeaseOptions,
   createLease,
   createLeaseSubscription,
@@ -86,7 +87,7 @@ export interface LeaseClient {
   withLease<T>(
     route: string,
     ttlSecs: number,
-    callback: (signal: AbortSignal) => T | Promise<T>,
+    callback: (signal: AbortSignal, authority: LeaseAuthority) => T | Promise<T>,
     options?: WithLeaseOptions,
   ): Promise<T>;
   query(route: string): Promise<LeaseInfo>;
@@ -154,7 +155,7 @@ export function createLeaseClient(connection: LeaseConnectionPort): LeaseClient 
     route: string,
     ttlSecs: number,
     options: LeaseAcquireOptions = {},
-  ): Promise<Lease> => {
+  ): Promise<{ lease: Lease; authority: LeaseAuthority }> => {
     assertExactLeaseRoute(route);
     assertLeaseTtl(ttlSecs);
     assertWaitSeconds(options.waitSeconds ?? 0);
@@ -210,14 +211,17 @@ export function createLeaseClient(connection: LeaseConnectionPort): LeaseClient 
     }
 
     const expiresAt = decoded.expiresAt ?? BigInt(Math.floor(Date.now() / 1000)) + BigInt(ttlSecs);
-    return createLease(decoded.token, expiresAt, route, connection);
+    return {
+      lease: createLease(decoded.token, expiresAt, route, connection),
+      authority: Object.freeze({ fencingToken: decoded.token }),
+    };
   };
 
-  const acquire = (
+  const acquireWithAuthority = (
     route: string,
     ttlSecs: number,
     options: LeaseAcquireOptions = {},
-  ): Promise<Lease> => {
+  ): Promise<{ lease: Lease; authority: LeaseAuthority }> => {
     const result = acquisitionTail.then(() => runAcquire(route, ttlSecs, options));
     acquisitionTail = result.then(
       () => undefined,
@@ -226,10 +230,16 @@ export function createLeaseClient(connection: LeaseConnectionPort): LeaseClient 
     return result;
   };
 
+  const acquire = async (
+    route: string,
+    ttlSecs: number,
+    options: LeaseAcquireOptions = {},
+  ): Promise<Lease> => (await acquireWithAuthority(route, ttlSecs, options)).lease;
+
   const withLease = async <T>(
     route: string,
     ttlSecs: number,
-    callback: (signal: AbortSignal) => T | Promise<T>,
+    callback: (signal: AbortSignal, authority: LeaseAuthority) => T | Promise<T>,
     options: WithLeaseOptions = {},
   ): Promise<T> => {
     assertExactLeaseRoute(route);
@@ -238,7 +248,7 @@ export function createLeaseClient(connection: LeaseConnectionPort): LeaseClient 
       throw options.signal.reason ?? new Error("Lease execution canceled");
     }
 
-    const lease = await acquire(route, ttlSecs, {
+    const { lease, authority } = await acquireWithAuthority(route, ttlSecs, {
       waitSeconds: options.waitForAvailability ? (options.waitSeconds ?? 30) : 0,
       signal: options.signal,
     });
@@ -290,7 +300,7 @@ export function createLeaseClient(connection: LeaseConnectionPort): LeaseClient 
     const renewal = renew();
     try {
       try {
-        callbackValue = await callback(lifecycle.signal);
+        callbackValue = await callback(lifecycle.signal, authority);
       } catch (error) {
         callbackFailure = error;
       }

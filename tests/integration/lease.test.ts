@@ -83,6 +83,28 @@ describe("Lease integration", () => {
       expect(reacquired.getExpiry()).toBeGreaterThan(BigInt(Math.floor(Date.now() / 1000)));
     });
 
+    it("should advance managed admission fencing tokens after handoff", async () => {
+      const first = new TestFixture(transport, authMode);
+      const successor = new TestFixture(transport, authMode);
+      await first.connectOrFail();
+      await successor.connectOrFail();
+
+      const route = first.uniqueRoute("lease");
+      let firstToken: bigint | undefined;
+      await first.client().lease.withLease(route, 30, (_signal, authority) => {
+        firstToken = authority.fencingToken;
+      });
+
+      let successorToken: bigint | undefined;
+      await successor.client().lease.withLease(route, 30, (_signal, authority) => {
+        successorToken = authority.fencingToken;
+      });
+
+      expect(firstToken).toBeTypeOf("bigint");
+      expect(successorToken).toBeTypeOf("bigint");
+      expect(successorToken!).toBeGreaterThan(firstToken!);
+    });
+
     it("should reject release when token does not match", async () => {
       const f1 = new TestFixture(transport, authMode);
       const f2 = new TestFixture(transport, authMode);

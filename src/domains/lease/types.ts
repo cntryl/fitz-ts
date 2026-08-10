@@ -191,6 +191,17 @@ export interface WithLeaseOptions {
 }
 
 /**
+ * Immutable authority granted when a managed lease callback is admitted.
+ *
+ * The fencing token is an admission epoch, not the lease handle's live
+ * renewal credential. It remains stable for the callback invocation even
+ * when renewal rotates the credential used for later broker operations.
+ */
+export interface LeaseAuthority {
+  readonly fencingToken: bigint;
+}
+
+/**
  * Represents a combination of failures across a withLease() invocation's
  * lifecycle (lease loss, callback failure, release failure) rather than a
  * single domain-status code, so it's a standalone FitzError subclass with
