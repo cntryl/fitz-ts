@@ -82,6 +82,10 @@ contractual.
   correlation id, only FIFO arrival order, so a second `acquire()` for a
   completely unrelated route cannot even send its request until the prior
   call's full lifecycle (including any deferred wait) has resolved.
+- `lease.withLease()` passes a frozen `LeaseAuthority` snapshot to its callback.
+  `fencingToken` is the admission epoch from the final successful ACQUIRE,
+  remains stable across renewal, and is ordered only across successive owners
+  of the same exact lease route. It is not the handle's live renewal credential.
 
 ## Subscription Registrations
 

@@ -86,6 +86,76 @@ run(
   { cwd: smokeDir },
 );
 
+run(
+  "node",
+  [
+    "--eval",
+    `
+      const root = require("@cntryl/fitz");
+      const node = require("@cntryl/fitz/node");
+      if (typeof root.createClient !== "function") throw new Error("CJS root createClient missing");
+      if (typeof node.createClient !== "function") throw new Error("CJS node createClient missing");
+    `,
+  ],
+  { cwd: smokeDir },
+);
+
+writeSmokeFile(
+  "typecheck-node-esm.mts",
+  `
+    import { createClient, type LeaseAuthority } from "@cntryl/fitz";
+
+    const client = createClient({ url: "tcp://localhost:4090", transport: "tcp" });
+    client.lease.withLease("lease://realm/area/resource", 30, async signal => {
+      signal.aborted satisfies boolean;
+    });
+    client.lease.withLease("lease://realm/area/resource", 30, async (_signal, authority) => {
+      const snapshot: LeaseAuthority = authority;
+      const token: bigint = snapshot.fencingToken;
+      // @ts-expect-error Admission fencing tokens are bigint, never number.
+      const invalid: number = snapshot.fencingToken;
+      void token;
+      void invalid;
+    });
+  `,
+);
+
+writeSmokeFile(
+  "typecheck-node-cjs.cts",
+  `
+    import fitz = require("@cntryl/fitz/node");
+
+    const client = fitz.createClient({ url: "tcp://localhost:4090", transport: "tcp" });
+    client.lease.withLease("lease://realm/area/resource", 30, async signal => {
+      signal.aborted satisfies boolean;
+    });
+    client.lease.withLease("lease://realm/area/resource", 30, async (_signal, authority) => {
+      const token: bigint = authority.fencingToken;
+      // @ts-expect-error Admission fencing tokens are bigint, never number.
+      const invalid: number = authority.fencingToken;
+      void token;
+      void invalid;
+    });
+  `,
+);
+
+writeSmokeFile(
+  "tsconfig.typecheck-node.json",
+  `
+    {
+      "compilerOptions": {
+        "module": "preserve",
+        "moduleResolution": "bundler",
+        "target": "es2022",
+        "strict": true,
+        "noEmit": true,
+        "lib": ["es2022", "dom"]
+      },
+      "include": ["typecheck-node-esm.mts", "typecheck-node-cjs.cts"]
+    }
+  `,
+);
+
 writeSmokeFile(
   "browser-entry.ts",
   `
@@ -102,11 +172,15 @@ writeSmokeFile(
 writeSmokeFile(
   "typecheck-root-browser.ts",
   `
-    import { createClient } from "@cntryl/fitz";
+    import { createClient, type LeaseAuthority } from "@cntryl/fitz";
 
     const client = createClient({ url: "ws://example.test/ws", transport: "ws" });
 
     client.config.transport satisfies "ws" | "auto";
+    client.lease.withLease("lease://realm/area/resource", 30, async (_signal, authority) => {
+      const snapshot: LeaseAuthority = authority;
+      snapshot.fencingToken satisfies bigint;
+    });
 
     // @ts-expect-error Browser-resolved root import must reject TCP transport.
     createClient({ url: "tcp://example.test:4090", transport: "tcp" });
@@ -230,6 +304,7 @@ writeSmokeFile(
 
 run(viteBin, ["build", "--config", "vite.browser.config.mjs"], { cwd: smokeDir });
 run(viteBin, ["build", "--config", "vite.worker.config.mjs"], { cwd: smokeDir });
+run(tscBin, ["--project", "tsconfig.typecheck-node.json"], { cwd: smokeDir });
 run(tscBin, ["--project", "tsconfig.typecheck-root-browser.json"], { cwd: smokeDir });
 run(tscBin, ["--project", "tsconfig.typecheck-browser-subpath.json"], { cwd: smokeDir });
 run(

@@ -6,6 +6,10 @@ The format is based on Keep a Changelog and the project follows Semantic Version
 
 ## [Unreleased]
 
+### Added
+
+- Managed lease callbacks receive an immutable admission `LeaseAuthority` with the broker-issued fencing token.
+
 ### Changed
 
 - Breaking: Schedule listing now uses canonical message 702 with offset/limit pages and `totalCount`.

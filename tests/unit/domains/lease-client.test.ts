@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vite-plus/test";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { createBufferWriter } from "../../../src/core/buffer";
 import { LeaseLifecycleError } from "../../../src/domains/lease/types";
@@ -9,6 +9,7 @@ import { LeaseCodec } from "../../../src/domains/lease/codec";
 import {
   MSG_LEASE_ACQUIRE,
   MSG_LEASE_NOTIFY,
+  MSG_LEASE_RENEW,
   MSG_LEASE_RELEASE,
   MSG_LEASE_SUBSCRIBE,
   MSG_LEASE_UNSUBSCRIBE,
@@ -132,6 +133,24 @@ function acquireResponse(kind: 0 | 1 | 2 | 3, token: bigint): Uint8Array {
   return bytes;
 }
 
+function renewResponse(token: bigint): Uint8Array {
+  const bytes = new Uint8Array(9);
+  bytes[0] = 0;
+  new DataView(bytes.buffer).setBigUint64(1, token);
+  return bytes;
+}
+
+function errorResponse(code: number, message: string): Uint8Array {
+  const encoded = new TextEncoder().encode(message);
+  const bytes = new Uint8Array(1 + 4 + 4 + encoded.length);
+  bytes[0] = 1;
+  const view = new DataView(bytes.buffer);
+  view.setUint32(1, code);
+  view.setUint32(5, encoded.length);
+  bytes.set(encoded, 9);
+  return bytes;
+}
+
 class FakeLeaseConnection {
   readonly handlers = new Map<number, (payload: Uint8Array) => void>();
   readonly requests: Array<{ messageType: number; payload: Uint8Array }> = [];
@@ -231,6 +250,145 @@ describe("lease acquisition", () => {
 });
 
 describe("withLease", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("passes a frozen snapshot of the immediately granted fencing token to the callback", async () => {
+    const connection = new FullLeaseConnection();
+    connection.respond(MSG_LEASE_ACQUIRE, acquireResponse(0, 42n));
+    connection.respond(MSG_LEASE_RELEASE, plainSuccessResponse());
+    const client = createLeaseClient(connection as unknown as Connection);
+
+    await client.withLease("lease://realm/area/resource", 30, (_signal, authority) => {
+      expect(authority.fencingToken).toBe(42n);
+      expect(Object.isFrozen(authority)).toBe(true);
+    });
+  });
+
+  it("uses the token returned by an AlreadyHeld acquisition", async () => {
+    const connection = new FullLeaseConnection();
+    connection.respond(MSG_LEASE_ACQUIRE, acquireResponse(1, 43n));
+    connection.respond(MSG_LEASE_RELEASE, plainSuccessResponse());
+    const client = createLeaseClient(connection as unknown as Connection);
+
+    await client.withLease("lease://realm/area/resource", 30, (_signal, authority) => {
+      expect(authority.fencingToken).toBe(43n);
+    });
+  });
+
+  it("passes the final granted token after a queued acquisition", async () => {
+    const connection = new FakeLeaseConnection([acquireResponse(2, 7n), plainSuccessResponse()]);
+    const client = createLeaseClient(connection as unknown as Connection);
+
+    let observedToken: bigint | undefined;
+    const pending = client.withLease(
+      "lease://realm/area/resource",
+      30,
+      (_signal, authority) => {
+        observedToken = authority.fencingToken;
+      },
+      { waitForAvailability: true, waitSeconds: 12 },
+    );
+    await Promise.resolve();
+    connection.handlers.get(MSG_LEASE_ACQUIRE)?.(acquireResponse(0, 42n));
+
+    await pending;
+    expect(observedToken).toBe(42n);
+  });
+
+  it("keeps the admission snapshot stable when renewal rotates the live credential", async () => {
+    vi.useFakeTimers();
+    const route = "lease://realm/area/resource";
+    const connection = new FullLeaseConnection();
+    connection.respond(MSG_LEASE_ACQUIRE, acquireResponse(0, 42n));
+    connection.respond(MSG_LEASE_RENEW, renewResponse(99n));
+    connection.respond(MSG_LEASE_RELEASE, plainSuccessResponse());
+    const client = createLeaseClient(connection as unknown as Connection);
+
+    let finishCallback: () => void = () => undefined;
+    const callbackCanFinish = new Promise<void>((resolve) => {
+      finishCallback = resolve;
+    });
+    let callbackStarted: () => void = () => undefined;
+    const started = new Promise<void>((resolve) => {
+      callbackStarted = resolve;
+    });
+
+    const pending = client.withLease(route, 3, async (_signal, authority) => {
+      callbackStarted();
+      expect(authority.fencingToken).toBe(42n);
+      await callbackCanFinish;
+      expect(authority.fencingToken).toBe(42n);
+    });
+
+    await started;
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(connection.requests.some(({ messageType }) => messageType === MSG_LEASE_RENEW)).toBe(
+      true,
+    );
+    finishCallback();
+    await pending;
+    const release = connection.requests.find(
+      ({ messageType }) => messageType === MSG_LEASE_RELEASE,
+    );
+    expect(release?.payload).toEqual(LeaseCodec.encodeRelease(route, 99n));
+  });
+
+  it("does not invoke the callback when acquisition fails", async () => {
+    const connection = new FakeLeaseConnection([errorResponse(5005, "lease held")]);
+    const client = createLeaseClient(connection as unknown as Connection);
+    let invoked = false;
+
+    await expect(
+      client.withLease("lease://realm/area/resource", 30, () => {
+        invoked = true;
+      }),
+    ).rejects.toThrow("lease held");
+    expect(invoked).toBe(false);
+  });
+
+  it("does not invoke the callback when queued acquisition times out", async () => {
+    const connection = new FakeLeaseConnection([acquireResponse(2, 7n)]);
+    const client = createLeaseClient(connection as unknown as Connection);
+    let invoked = false;
+
+    const pending = client.withLease(
+      "lease://realm/area/resource",
+      30,
+      () => {
+        invoked = true;
+      },
+      { waitForAvailability: true, waitSeconds: 1 },
+    );
+    await Promise.resolve();
+    connection.handlers.get(MSG_LEASE_ACQUIRE)?.(errorResponse(5006, "lease wait timed out"));
+
+    await expect(pending).rejects.toThrow("lease wait timed out");
+    expect(invoked).toBe(false);
+  });
+
+  it("does not invoke the callback when acquisition is already canceled", async () => {
+    const connection = new FullLeaseConnection();
+    const client = createLeaseClient(connection as unknown as Connection);
+    const controller = new AbortController();
+    const reason = new Error("stop before acquire");
+    controller.abort(reason);
+    let invoked = false;
+
+    await expect(
+      client.withLease(
+        "lease://realm/area/resource",
+        30,
+        () => {
+          invoked = true;
+        },
+        { signal: controller.signal },
+      ),
+    ).rejects.toBe(reason);
+    expect(invoked).toBe(false);
+  });
+
   // A RELEASE call that fails with an AbortError-named Error unrelated to
   // any real cancellation — mirroring what the real multiplexer produces
   // when a request's own signal aborts for any reason, including (but not
