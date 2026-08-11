@@ -6,9 +6,13 @@ The format is based on Keep a Changelog and the project follows Semantic Version
 
 ## [Unreleased]
 
+## [0.0.16] - 2026-08-10
+
 ### Added
 
 - Managed lease callbacks receive an immutable admission `LeaseAuthority` with the broker-issued fencing token.
+
+## [0.0.15] - 2026-08-05
 
 ### Changed
 
@@ -17,9 +21,6 @@ The format is based on Keep a Changelog and the project follows Semantic Version
 - Lease acquisition accepts `waitSeconds` and completes broker-managed queued acquisition instead of polling.
 - Stream selectors accept the full documented wildcard matrix and global records expose `globalOffset`.
 - Domain errors preserve broker codes and messages; reconnect, unsubscribe, close, and request cancellation bookkeeping is transactional.
-
-## [0.0.15] - 2026-08-05
-
 - Breaking: removed legacy stream continuation fields and the offset-based Schedule list call. Use `schedule.listPage()` and its continuation token.
 - Breaking: callable capitalized client aliases were removed; use `createClient` and the domain `create*` factories.
 - Breaking: Queue reserve, Stream read, and Stream last responses now require a concrete route for every returned item. `QueueItem`, `StreamReadItem`, and `StreamRecord` expose that route.
