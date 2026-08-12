@@ -114,7 +114,7 @@ export const ScheduleCodec = {
       const cron = reader.readString();
       const deliveryMode = decodeDeliveryMode(reader.readU8());
       const payload = reader.readBytes(reader.readU32BE());
-      entries.push({ id: route, route, cron, deliveryMode, payload });
+      entries.push({ route, cron, deliveryMode, payload });
     }
     if (!reader.isEOF()) throw new Error("LIST_PAGE response has trailing bytes");
     return { entries, totalCount };

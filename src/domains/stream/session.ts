@@ -47,23 +47,16 @@ export function createStreamSession(
     throw new StreamError(`${operation} failed: ${statusName}`, operation, code);
   };
 
-  const append = async (
-    expectedOffset: bigint,
-    body: Uint8Array,
-    optionsOrSignal?: AbortSignal | StreamAppendOptions,
-    signal?: AbortSignal,
-  ): Promise<bigint> => {
+  const append = async (options: StreamAppendOptions): Promise<bigint> => {
     ensureOpen();
-
-    const { options, requestSignal } = normalizeAppendArguments(optionsOrSignal, signal);
     const payload = StreamCodec.encodeAppend(
       sessionId,
-      expectedOffset,
-      body,
+      options.expectedOffset,
+      options.body,
       undefined,
-      options?.discriminator,
+      options.discriminator,
     );
-    const response = await connection.request(MSG_STREAM_APPEND, payload, requestSignal);
+    const response = await connection.request(MSG_STREAM_APPEND, payload, options.signal);
     const decoded = StreamCodec.decodeAppendResponse(response);
 
     checkStatus(decoded, "APPEND");
@@ -71,11 +64,14 @@ export function createStreamSession(
     return decoded.offset ?? 0n;
   };
 
-  const commit = async (mode: StreamCommitMode, signal?: AbortSignal): Promise<void> => {
+  const commit = async (options: {
+    mode: StreamCommitMode;
+    signal?: AbortSignal;
+  }): Promise<void> => {
     ensureOpen();
 
-    const payload = StreamCodec.encodeCommit(sessionId, mode);
-    const response = await connection.request(MSG_STREAM_COMMIT, payload, signal);
+    const payload = StreamCodec.encodeCommit(sessionId, options.mode);
+    const response = await connection.request(MSG_STREAM_COMMIT, payload, options.signal);
     const decoded = StreamCodec.decodeCommitResponse(response);
 
     checkStatus(decoded, "COMMIT");
@@ -83,7 +79,7 @@ export function createStreamSession(
     unsubscribeDisconnect();
   };
 
-  const rollback = async (signal?: AbortSignal): Promise<void> => {
+  const rollback = async (options: { signal?: AbortSignal } = {}): Promise<void> => {
     if (closed) {
       return;
     }
@@ -92,19 +88,19 @@ export function createStreamSession(
     unsubscribeDisconnect();
 
     const payload = StreamCodec.encodeRollback(sessionId);
-    try {
-      const response = await connection.request(MSG_STREAM_ROLLBACK, payload, signal);
-      const decoded = StreamCodec.decodeRollbackResponse(response);
-      checkStatus(decoded, "ROLLBACK");
-    } catch {
-      // Ignore rollback errors
-    }
+    const response = await connection.request(MSG_STREAM_ROLLBACK, payload, options.signal);
+    const decoded = StreamCodec.decodeRollbackResponse(response);
+    checkStatus(decoded, "ROLLBACK");
   };
 
   const isOpen = (): boolean => !closed;
 
   const asyncDispose = async (): Promise<void> => {
-    await rollback();
+    try {
+      await rollback();
+    } catch {
+      // Disposal is explicitly best effort.
+    }
   };
 
   return {
@@ -114,27 +110,4 @@ export function createStreamSession(
     isOpen,
     [Symbol.asyncDispose]: asyncDispose,
   };
-}
-
-function normalizeAppendArguments(
-  optionsOrSignal?: AbortSignal | StreamAppendOptions,
-  signal?: AbortSignal,
-): { options?: StreamAppendOptions; requestSignal?: AbortSignal } {
-  if (isAbortSignal(optionsOrSignal)) {
-    return { requestSignal: optionsOrSignal };
-  }
-
-  return {
-    options: optionsOrSignal,
-    requestSignal: signal,
-  };
-}
-
-function isAbortSignal(value: unknown): value is AbortSignal {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    "aborted" in value &&
-    typeof (value as AbortSignal).addEventListener === "function"
-  );
 }

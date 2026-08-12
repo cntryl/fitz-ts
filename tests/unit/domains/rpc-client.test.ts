@@ -155,7 +155,7 @@ describe("RpcClient", () => {
     const route = "rpc://realm/area/method";
 
     await client.registerWorker(route, async (_req, writer) => {
-      await writer.send(new Uint8Array([1]), true);
+      await writer.end({ body: new Uint8Array([1]) });
     });
 
     connection.setState(ConnectionState.Closed);
@@ -187,7 +187,7 @@ describe("RpcClient", () => {
 
     await client.registerWorker(route, async (_req, writer) => {
       await handlerGate;
-      await writer.send(new Uint8Array([1]), true);
+      await writer.end({ body: new Uint8Array([1]) });
     });
 
     const handler = connection.notificationHandlers.get(MSG_RPC_REQUEST);
@@ -221,7 +221,7 @@ describe("RpcClient", () => {
       async (req, writer) => {
         expect("replyRoute" in req).toBe(false);
         handledBodies.push(utf8Decoder.decode(req.body));
-        await writer.send(new Uint8Array([5]), true);
+        await writer.end({ body: new Uint8Array([5]) });
       },
       { maxConcurrency: 7 },
     );
@@ -405,9 +405,9 @@ describe("RpcClient", () => {
     const client = createRpcClient(connection);
 
     await expect(
-      client.call("rpc://realm/area/method", new Uint8Array([1]), {
-        signal: controller.signal,
-      }),
+      client
+        .call("rpc://realm/area/method", { body: new Uint8Array([1]), signal: controller.signal })
+        .next(),
     ).rejects.toMatchObject({ name: "AbortError" });
     expect(connection.lastSignal).toBe(controller.signal);
     expect(connection.countRequests(MSG_RPC_REQUEST)).toBe(0);
@@ -417,7 +417,9 @@ describe("RpcClient", () => {
     const connection = new FakeRpcConnection();
     const client = createRpcClient(connection);
 
-    const iterator = await client.call("rpc://realm/area/method", new Uint8Array([1]));
+    const iterator = client.call("rpc://realm/area/method", { body: new Uint8Array([1]) });
+    const first = iterator.next();
+    await Promise.resolve();
 
     const request = connection.lastRequest;
     if (!request) {
@@ -436,7 +438,7 @@ describe("RpcClient", () => {
       RpcCodec.encodeResponse(decoded.correlationId, 0n, new Uint8Array([7, 8, 9]), true),
     );
 
-    await expect(iterator.next()).resolves.toMatchObject({
+    await expect(first).resolves.toMatchObject({
       done: false,
       value: { body: new Uint8Array([7, 8, 9]), sequence: 0n },
     });
@@ -447,9 +449,10 @@ describe("RpcClient", () => {
     const connection = new FakeRpcConnection();
     const client = createRpcClient(connection);
 
-    const iterator = await client.call("rpc://realm/area/method", new Uint8Array([1]));
+    const iterator = client.call("rpc://realm/area/method", { body: new Uint8Array([1]) });
 
     const nextPromise = iterator.next();
+    await Promise.resolve();
     connection.emitDisconnect();
 
     await expect(nextPromise).rejects.toMatchObject({
@@ -461,7 +464,9 @@ describe("RpcClient", () => {
     const connection = new FakeRpcConnection();
     const client = createRpcClient(connection);
 
-    const iterator = await client.call("rpc://realm/area/method", new Uint8Array([1]));
+    const iterator = client.call("rpc://realm/area/method", { body: new Uint8Array([1]) });
+    const first = iterator.next();
+    await Promise.resolve();
 
     const request = connection.lastRequest;
     if (!request) {
@@ -480,8 +485,8 @@ describe("RpcClient", () => {
       RpcCodec.encodeResponse(decoded.correlationId, 0n, encodeWorkerNotFoundBody(), true),
     );
 
-    await expect(iterator.next()).rejects.toBeInstanceOf(RpcError);
-    await expect(iterator.next()).rejects.toMatchObject({
+    await expect(first).rejects.toBeInstanceOf(RpcError);
+    await expect(first).rejects.toMatchObject({
       code: "RPC_WORKER_NOT_FOUND",
       domainCode: ErrCodeRpcWorkerNotFound,
     });
@@ -491,7 +496,9 @@ describe("RpcClient", () => {
     const connection = new FakeRpcConnection();
     const client = createRpcClient(connection);
 
-    const iterator = await client.call("rpc://realm/area/method", new Uint8Array([1]));
+    const iterator = client.call("rpc://realm/area/method", { body: new Uint8Array([1]) });
+    const first = iterator.next();
+    await Promise.resolve();
 
     const request = connection.lastRequest;
     if (!request) {
@@ -509,7 +516,7 @@ describe("RpcClient", () => {
     const ambiguousBody = encodeRpcErrorBody(7000, "application payload");
     responseHandler(RpcCodec.encodeResponse(decoded.correlationId, 0n, ambiguousBody, true));
 
-    await expect(iterator.next()).resolves.toMatchObject({
+    await expect(first).resolves.toMatchObject({
       done: false,
       value: { body: ambiguousBody, sequence: 0n },
     });
@@ -520,7 +527,9 @@ describe("RpcClient", () => {
     const connection = new FakeRpcConnection();
     const client = createRpcClient(connection);
 
-    const iterator = await client.call("rpc://realm/area/method", new Uint8Array([1]));
+    const iterator = client.call("rpc://realm/area/method", { body: new Uint8Array([1]) });
+    const first = iterator.next();
+    await Promise.resolve();
     const request = connection.lastRequest;
     if (!request) {
       throw new Error("Expected RPC request payload to be recorded");
@@ -542,7 +551,7 @@ describe("RpcClient", () => {
       ),
     );
 
-    await expect(iterator.next()).rejects.toMatchObject({
+    await expect(first).rejects.toMatchObject({
       code: "RPC_ROUTE_NOT_REGISTERED",
       domainCode: ErrCodeRpcRouteNotRegistered,
     });
@@ -554,10 +563,12 @@ describe("RpcClient", () => {
       const connection = new FakeRpcConnection();
       const client = createRpcClient(connection);
 
-      const iterator = await client.call("rpc://realm/area/method", new Uint8Array([1]), {
+      const iterator = client.call("rpc://realm/area/method", {
+        body: new Uint8Array([1]),
         timeoutMs: 10000,
       });
       const nextPromise = iterator.next();
+      await Promise.resolve();
 
       expect(vi.getTimerCount()).toBe(1);
 
@@ -655,10 +666,12 @@ describe("RpcClient", () => {
       const connection = new FakeRpcConnection();
       const client = createRpcClient(connection);
 
-      const iterator = await client.call("rpc://realm/area/method", new Uint8Array([1]), {
+      const iterator = client.call("rpc://realm/area/method", {
+        body: new Uint8Array([1]),
         timeoutMs: 10,
       });
       const nextPromise = iterator.next();
+      await Promise.resolve();
       // Attach the assertion before advancing timers so the rejection is
       // observed synchronously as it settles, rather than being flagged as
       // briefly unhandled.
@@ -678,7 +691,9 @@ describe("RpcClient", () => {
     const connection = new FakeRpcConnection();
     const client = createRpcClient(connection);
 
-    const iterator = await client.call("rpc://realm/area/method", new Uint8Array([1]));
+    const iterator = client.call("rpc://realm/area/method", { body: new Uint8Array([1]) });
+    const first = iterator.next();
+    await Promise.resolve();
     const request = connection.lastRequest;
     if (!request) {
       throw new Error("Expected RPC request payload to be recorded");
@@ -696,7 +711,7 @@ describe("RpcClient", () => {
     // ... then the connection drops before the caller ever reads it.
     connection.emitDisconnect();
 
-    await expect(iterator.next()).resolves.toMatchObject({
+    await expect(first).resolves.toMatchObject({
       done: false,
       value: { body: new Uint8Array([1]), sequence: 0n },
     });
@@ -706,7 +721,9 @@ describe("RpcClient", () => {
   it("should deliver the pending frame given a later terminal error when both frames arrive before the consumer resumes", async () => {
     const connection = new FakeRpcConnection();
     const client = createRpcClient(connection);
-    const iterator = await client.call("rpc://realm/area/method", new Uint8Array([1]));
+    const iterator = client.call("rpc://realm/area/method", { body: new Uint8Array([1]) });
+    const next = iterator.next();
+    await Promise.resolve();
     const request = connection.lastRequest;
     if (!request) {
       throw new Error("Expected RPC request payload to be recorded");
@@ -718,7 +735,6 @@ describe("RpcClient", () => {
       throw new Error("Expected RPC response handler to be registered");
     }
 
-    const next = iterator.next();
     responseHandler(RpcCodec.encodeResponse(decoded.correlationId, 0n, new Uint8Array([1]), false));
     responseHandler(
       RpcCodec.encodeResponse(decoded.correlationId, 1n, encodeWorkerNotFoundBody(), true),
@@ -751,7 +767,7 @@ describe("RpcClient", () => {
         // The connection has already disconnected by the time this runs —
         // the writer is stale, so this send benignly fails. That must not
         // be reported as "forgot to send a terminal response".
-        await writer.send(new Uint8Array([1]), true).catch(() => undefined);
+        await writer.end({ body: new Uint8Array([1]) }).catch(() => undefined);
       });
 
       const handler = connection.notificationHandlers.get(MSG_RPC_REQUEST);
@@ -784,7 +800,7 @@ describe("RpcClient", () => {
 
     try {
       await client.registerWorker(route, async (_req, writer) => {
-        await writer.send(new Uint8Array([1]), false);
+        await writer.write({ body: new Uint8Array([1]) });
       });
 
       const handler = connection.notificationHandlers.get(MSG_RPC_REQUEST);
@@ -809,10 +825,12 @@ describe("RpcClient", () => {
       const connection = new FakeRpcConnection();
       const client = createRpcClient(connection);
 
-      const iterator = await client.call("rpc://realm/area/method", new Uint8Array([1]), {
+      const iterator = client.call("rpc://realm/area/method", {
+        body: new Uint8Array([1]),
         timeoutMs: 10000,
       });
       const nextPromise = iterator.next();
+      await Promise.resolve();
 
       expect(vi.getTimerCount()).toBe(1);
 

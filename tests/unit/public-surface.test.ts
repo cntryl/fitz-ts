@@ -147,6 +147,7 @@ describe("public surface", () => {
       "RpcError",
       "LeaseError",
       "StreamError",
+      "StreamReadStalledError",
       "ScheduleError",
       "isRetryable",
       "createTaskGroup",
@@ -205,13 +206,13 @@ describe("public surface", () => {
       "StreamFilterClause",
       "StreamFilterSet",
       "StreamAppendOptions",
+      "StreamBeginOptions",
       "StreamReadOptions",
-      "StreamReadCursor",
       "StreamReadEvent",
       "StreamReadFiltered",
       "StreamReadFilteredRange",
       "StreamReadItem",
-      "StreamReadPage",
+      "StreamReadBatch",
       "StreamSession",
       "StreamCommitNotification",
       "StreamCommitHandler",
@@ -250,22 +251,18 @@ describe("public surface", () => {
     const source = readSource("../../src/domains/queue/types.ts");
     expect(source).not.toContain("private id: bigint;");
     expect(source).not.toContain("private token: bigint;");
-    expect(source).toContain("export type QueueItem = ReturnType<typeof createQueueItem>");
+    expect(source).toContain("export interface QueueItem");
     expect(source).toContain("export function createQueueItem(");
-    expect(source).toContain(
-      "export type QueueSubscription = ReturnType<typeof createQueueSubscription>",
-    );
+    expect(source).toContain("export interface QueueSubscription extends AsyncDisposable");
     expect(source).toContain("export function createQueueSubscription(");
   });
 
   it("keeps lease tokens private and exposes lease factories", () => {
     const source = readSource("../../src/domains/lease/types.ts");
     expect(source).not.toContain("private token: bigint;");
-    expect(source).toContain("export type Lease = ReturnType<typeof createLease>");
+    expect(source).toContain("export interface Lease");
     expect(source).toContain("export function createLease(");
-    expect(source).toContain(
-      "export type LeaseSubscription = ReturnType<typeof createLeaseSubscription>",
-    );
+    expect(source).toContain("export interface LeaseSubscription extends AsyncDisposable");
     expect(source).toContain("export function createLeaseSubscription(");
   });
 

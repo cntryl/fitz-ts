@@ -3,6 +3,8 @@
  * Per fitz-go/internal/domains/rpc/rpc.go
  */
 
+import { createSubscriptionHandle } from "../internal/subscription-handle";
+
 /**
  * Single response frame from a streaming RPC call
  */
@@ -23,7 +25,8 @@ export interface InboundRequest {
  * Allows a worker to send responses back to the caller
  */
 export interface ResponseWriter {
-  send(body: Uint8Array, isEnd: boolean): Promise<void>;
+  write(options: { body: Uint8Array; signal?: AbortSignal }): Promise<void>;
+  end(options?: { body?: Uint8Array; signal?: AbortSignal }): Promise<void>;
 }
 
 /**
@@ -38,26 +41,22 @@ export interface RegisterWorkerOptions {
 /**
  * Active worker registration
  */
-export type RpcSubscription = ReturnType<typeof createRpcSubscription>;
+export interface RpcSubscription extends AsyncDisposable {
+  unsubscribe(): Promise<void>;
+}
 
 export function createRpcSubscription(
-  route: string,
-  unsubscribeFn: (route: string) => Promise<void>,
-) {
-  const unsubscribe = async (): Promise<void> => {
-    await unsubscribeFn(route);
-  };
-
-  return {
-    route,
-    unsubscribe,
-  };
+  unsubscribeFn: () => Promise<void>,
+  signal?: AbortSignal,
+): RpcSubscription {
+  return createSubscriptionHandle<RpcSubscription>(unsubscribeFn, signal);
 }
 
 /**
  * RPC request options
  */
 export interface RequestOptions {
+  body: Uint8Array;
   timeoutMs?: number;
   signal?: AbortSignal;
 }

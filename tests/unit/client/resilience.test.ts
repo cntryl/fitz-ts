@@ -375,9 +375,9 @@ describe("Connection resilience", () => {
 
     await connection.connect();
 
-    await expect(queue.enqueue("queue://realm/area/resource", new Uint8Array([1]))).resolves.toBe(
-      7n,
-    );
+    await expect(
+      queue.enqueue("queue://realm/area/resource", { body: new Uint8Array([1]) }),
+    ).resolves.toBeUndefined();
     expect(enqueueAttempts).toBe(2);
 
     await connection.close();
@@ -412,7 +412,7 @@ describe("Connection resilience", () => {
     await confirmSession(transport);
 
     await expect(
-      queue.enqueue("queue://realm/area/resource", new Uint8Array([1])),
+      queue.enqueue("queue://realm/area/resource", { body: new Uint8Array([1]) }),
     ).rejects.toMatchObject({
       code: "QUEUE_InvalidToken",
     });
@@ -451,7 +451,7 @@ describe("Connection resilience", () => {
     await confirmSession(transport);
 
     await expect(
-      queue.enqueue("queue://realm/area/resource", new Uint8Array([1])),
+      queue.enqueue("queue://realm/area/resource", { body: new Uint8Array([1]) }),
     ).rejects.toBeInstanceOf(ConnectionError);
     expect(transport.sentCount(MSG_QUEUE_ENQUEUE)).toBe(1);
 

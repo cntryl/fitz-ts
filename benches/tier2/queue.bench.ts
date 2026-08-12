@@ -7,7 +7,7 @@ const body = payloads.queue;
 
 describe("fitz-ts queue benchmarks", () => {
   benchBatch("queue enqueue encode", SYNC_CODEC_BATCH_SIZE, () => {
-    return QueueCodec.encodeEnqueue(routes.queue, body, { delayMs: 1500 });
+    return QueueCodec.encodeEnqueue(routes.queue, body, { delaySeconds: 1 });
   });
 
   benchBatch("queue reserve encode", SYNC_CODEC_BATCH_SIZE, () => {

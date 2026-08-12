@@ -5,6 +5,7 @@
 import { createDomainClient } from "../base";
 import type {
   AsyncDispatchPort,
+  BackgroundErrorPort,
   DisconnectListenerPort,
   NotificationPort,
   ReconnectListenerPort,
@@ -21,7 +22,6 @@ import {
 } from "../../frame/types";
 import { parsePlainResponse, parseStandardResponse } from "../../protocol/response";
 import { ScheduleCodec } from "./codec";
-import { createWakeGate } from "../../core/wake-gate";
 import {
   ScheduleEntry,
   ScheduleDeliveryMode,
@@ -40,7 +40,6 @@ import { createKeyedSingleFlight } from "../internal/keyed-single-flight";
 import {
   awaitPendingUnsubscribe,
   createGenerationCounter,
-  createLiveSubIdGetter,
   isCurrentEmptyState,
 } from "../internal/subscription-handle";
 import { createPendingNotificationBuffer } from "../internal/pending-notifications";
@@ -60,6 +59,7 @@ type ScheduleSubscriptionState = {
 };
 
 type ScheduleConnectionPort = RequestPort &
+  Partial<BackgroundErrorPort> &
   ReconnectListenerPort &
   DisconnectListenerPort &
   NotificationPort &
@@ -69,19 +69,24 @@ type ScheduleConnectionPort = RequestPort &
 export interface ScheduleClient {
   create(
     route: string,
-    cronExpr: string,
-    deliveryMode: ScheduleDeliveryMode,
-    payload?: Uint8Array,
-  ): Promise<string>;
-  cancel(route: string): Promise<void>;
-  listPage(offset?: bigint, limit?: bigint): Promise<ScheduleListPage>;
-  listBySelector(selector: string): Promise<ScheduleEntry[]>;
-  waitForNotifications(
-    route: string,
+    options: {
+      cron: string;
+      deliveryMode: ScheduleDeliveryMode;
+      payload?: Uint8Array;
+      signal?: AbortSignal;
+    },
+  ): Promise<void>;
+  cancel(route: string, options?: { signal?: AbortSignal }): Promise<void>;
+  entries(
+    selector: string,
+    options?: { pageSize?: bigint; signal?: AbortSignal },
+  ): AsyncIterableIterator<readonly ScheduleEntry[]>;
+  subscribe(
+    pattern: string,
+    handler: ScheduleHandler,
     options?: { signal?: AbortSignal },
-  ): AsyncIterable<ScheduleNotification>;
-  subscribe(pattern: string, handler: ScheduleHandler): Promise<ScheduleSubscription>;
-  subscribeIterator(
+  ): Promise<ScheduleSubscription>;
+  notifications(
     pattern: string,
     options?: SubscriptionIteratorOptions,
   ): AsyncIterable<ScheduleNotification>;
@@ -143,111 +148,74 @@ export function createScheduleClient(connection: ScheduleConnectionPort): Schedu
 
   const create = async (
     route: string,
-    cronExpr: string,
-    deliveryMode: ScheduleDeliveryMode,
-    payload: Uint8Array = new Uint8Array(),
-  ): Promise<string> => {
+    options: {
+      cron: string;
+      deliveryMode: ScheduleDeliveryMode;
+      payload?: Uint8Array;
+      signal?: AbortSignal;
+    },
+  ): Promise<void> => {
     assertConcreteScheduleRoute(route);
 
     const response = await requestFrame(
       MSG_SCHEDULE_CREATE,
-      ScheduleCodec.encodeCreate(route, cronExpr, deliveryMode, payload),
+      ScheduleCodec.encodeCreate(
+        route,
+        options.cron,
+        options.deliveryMode,
+        options.payload ?? new Uint8Array(),
+      ),
+      options.signal,
     );
-    const decoded = ScheduleCodec.decodeCreateResponse(assertPlainSuccess(response, "CREATE"));
-    return decoded.scheduleId ?? route;
+    ScheduleCodec.decodeCreateResponse(assertPlainSuccess(response, "CREATE"));
   };
 
-  const cancel = async (route: string): Promise<void> => {
+  const cancel = async (route: string, options: { signal?: AbortSignal } = {}): Promise<void> => {
     assertConcreteScheduleRoute(route);
 
-    const response = await requestFrame(MSG_SCHEDULE_CANCEL, ScheduleCodec.encodeCancel(route));
+    const response = await requestFrame(
+      MSG_SCHEDULE_CANCEL,
+      ScheduleCodec.encodeCancel(route),
+      options.signal,
+    );
     ScheduleCodec.decodeCancelResponse(assertPlainSuccess(response, "CANCEL"));
   };
 
-  const listPage = async (offset?: bigint, limit?: bigint): Promise<ScheduleListPage> => {
+  const listPage = async (options: {
+    offset?: bigint;
+    limit?: bigint;
+    signal?: AbortSignal;
+  }): Promise<ScheduleListPage> => {
     const response = await requestFrame(
       MSG_SCHEDULE_LIST_PAGE,
-      ScheduleCodec.encodeListPage(offset, limit),
+      ScheduleCodec.encodeListPage(options.offset, options.limit),
+      options.signal,
     );
     return ScheduleCodec.decodeListPage(assertSuccess(response, "LIST_PAGE"));
   };
 
-  const listBySelector = async (selector: string): Promise<ScheduleEntry[]> => {
+  const entries = async function* (
+    selector: string,
+    options: { pageSize?: bigint; signal?: AbortSignal } = {},
+  ): AsyncIterableIterator<readonly ScheduleEntry[]> {
     if (!isScheduleSelector(selector))
       throw new ScheduleError("invalid schedule selector", "INVALID_ROUTE");
-    const entries: ScheduleEntry[] = [];
     let offset = 0n;
     let complete = false;
     while (!complete) {
-      const page = await listPage(offset);
-      entries.push(...page.entries.filter((entry) => routeMatchesSchedule(entry.route, selector)));
+      const page = await listPage({ offset, limit: options.pageSize, signal: options.signal });
+      yield Object.freeze(
+        page.entries.filter((entry) => routeMatchesSchedule(entry.route, selector)),
+      );
       offset += BigInt(page.entries.length);
       complete = offset >= page.totalCount || page.entries.length === 0;
-    }
-    return entries;
-  };
-
-  const waitForNotifications = async function* (
-    route: string,
-    options: {
-      signal?: AbortSignal;
-    } = {},
-  ): AsyncIterable<ScheduleNotification> {
-    assertConcreteScheduleRoute(route);
-
-    const wakeGate = createWakeGate();
-    const queuedNotifications: ScheduleNotification[] = [];
-    const subscription = await subscribe(route, (notification) => {
-      queuedNotifications.push(notification);
-      wakeGate.wake();
-    });
-    const unsubscribeReconnectWake = connection.onReconnect(() => {
-      wakeGate.wake();
-    });
-    // Without this, a disconnect while idle-parked in wakeGate.waitAfter()
-    // below has no wake source at all — a `for await...break` or
-    // client.close() can hang forever, leaking the wire subscription in the
-    // finally block that never runs.
-    //
-    // Deliberately just a wake, not a sticky "stop" flag: a sticky flag
-    // fires for every disconnect, including the transient ones a live
-    // reconnect resolves moments later, and would make this throw before
-    // the restored subscription (via the onReconnect wake above) ever gets
-    // a chance to keep the iteration going — regressing reconnect survival
-    // for exactly the case this generator is meant to support. This matches
-    // the equivalent notification-waiting generators in the KV, Lease,
-    // Notice, and Stream domains, none of which treat disconnect as
-    // terminal either — callers that need prompt teardown on a permanent
-    // disconnect should pass `options.signal` and abort it themselves.
-    const unsubscribeDisconnectWake = connection.onDisconnect(() => {
-      wakeGate.wake();
-    });
-
-    try {
-      while (true) {
-        const notification = queuedNotifications.shift();
-        if (notification) {
-          yield notification;
-          continue;
-        }
-
-        const observed = wakeGate.version;
-        if (queuedNotifications.length > 0) {
-          continue;
-        }
-
-        await wakeGate.waitAfter(observed, { signal: options.signal });
-      }
-    } finally {
-      unsubscribeReconnectWake();
-      unsubscribeDisconnectWake();
-      await subscription.unsubscribe().catch(() => undefined);
     }
   };
 
   const subscribe = async (
     pattern: string,
     handler: ScheduleHandler,
+    options?: { signal?: AbortSignal },
   ): Promise<ScheduleSubscription> => {
     assertSchedulePattern(pattern);
 
@@ -264,15 +232,15 @@ export function createScheduleClient(connection: ScheduleConnectionPort): Schedu
           await awaitPendingUnsubscribe(existing);
           continue;
         }
-        return addLocalSubscription(pattern, existing.subId, handler);
+        return addLocalSubscription(pattern, existing.subId, handler, options?.signal);
       }
 
       const subId = await registerSingleFlight(pattern, () => subscribeWire(pattern));
-      return addLocalSubscription(pattern, subId, handler);
+      return addLocalSubscription(pattern, subId, handler, options?.signal);
     }
   };
 
-  const subscribeIterator = (
+  const notifications = (
     pattern: string,
     iteratorOptions?: SubscriptionIteratorOptions,
   ): AsyncIterable<ScheduleNotification> =>
@@ -291,6 +259,7 @@ export function createScheduleClient(connection: ScheduleConnectionPort): Schedu
     pattern: string,
     subId: bigint,
     handler: ScheduleHandler,
+    signal?: AbortSignal,
   ): ScheduleSubscription => {
     const handlerId = nextHandlerId++;
     let subscription = subscriptionsByPattern.get(pattern);
@@ -302,13 +271,7 @@ export function createScheduleClient(connection: ScheduleConnectionPort): Schedu
 
     subscription.handlers.set(handlerId, handler);
     pendingNotifications.flush(subId);
-    return createScheduleSubscription(
-      createLiveSubIdGetter(subscriptionsByPattern, pattern, subId, subscription.generation),
-      pattern,
-      async () => {
-        await unsubscribe(pattern, handlerId);
-      },
-    );
+    return createScheduleSubscription(async () => unsubscribe(pattern, handlerId), signal);
   };
 
   const unsubscribe = async (pattern: string, handlerId: number): Promise<void> => {
@@ -361,8 +324,10 @@ export function createScheduleClient(connection: ScheduleConnectionPort): Schedu
           route: decoded.route,
           payload: decoded.payload,
         });
-      } catch {
-        // Best-effort notification dispatch.
+      } catch (error) {
+        connection.reportBackgroundError?.("fitz.schedule.notification_malformed", error, {
+          messageType: MSG_SCHEDULE_NOTIFY,
+        });
       }
     });
   };
@@ -418,11 +383,9 @@ export function createScheduleClient(connection: ScheduleConnectionPort): Schedu
   return {
     create,
     cancel,
-    listPage,
-    listBySelector,
+    entries,
     subscribe,
-    subscribeIterator,
-    waitForNotifications,
+    notifications,
   };
 }
 

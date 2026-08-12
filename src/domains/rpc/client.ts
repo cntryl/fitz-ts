@@ -142,7 +142,7 @@ function createRpcResponseWriter(
     dispose();
   });
 
-  const send = async (body: Uint8Array, isEnd: boolean): Promise<void> => {
+  const send = async (body: Uint8Array, isEnd: boolean, signal?: AbortSignal): Promise<void> => {
     if (stale) {
       throw new ConnectionError("RPC response writer is no longer valid");
     }
@@ -150,7 +150,7 @@ function createRpcResponseWriter(
     const payload = RpcCodec.encodeResponse(correlationId, sequence++, body, isEnd);
 
     try {
-      await connection.send(MSG_RPC_RESPONSE, payload);
+      await connection.send(MSG_RPC_RESPONSE, payload, signal);
       if (isEnd) {
         ended = true;
         dispose();
@@ -166,7 +166,8 @@ function createRpcResponseWriter(
   };
 
   return {
-    send,
+    write: (options) => send(options.body, false, options.signal),
+    end: (options = {}) => send(options.body ?? new Uint8Array(), true, options.signal),
     dispose,
     needsTerminalWarning: () => !ended && !benignlyDisposed,
   };
@@ -361,11 +362,7 @@ function createRpcIterator(
 }
 
 export interface RpcClient {
-  call(
-    route: string,
-    body: Uint8Array,
-    options?: RequestOptions,
-  ): Promise<AsyncIterableIterator<ResponseFrame>>;
+  call(route: string, options: RequestOptions): AsyncIterableIterator<ResponseFrame>;
   registerWorker(
     route: string,
     handler: RpcHandler,
@@ -443,33 +440,32 @@ export function createRpcClient(connection: RpcConnectionPort): RpcClient {
     );
   });
 
-  const call = async (
-    route: string,
-    body: Uint8Array,
-    options?: RequestOptions,
-  ): Promise<AsyncIterableIterator<ResponseFrame>> => {
+  const call = (route: string, options: RequestOptions): AsyncIterableIterator<ResponseFrame> => {
     assertRpcRoute(route);
     initRpcHandler();
 
-    const timeoutMs = options?.timeoutMs ?? 30000;
-    const correlationId = acquirePooledCorrelationId();
-    const correlationKey = correlationIdToKey(correlationId);
+    return (async function* (): AsyncIterableIterator<ResponseFrame> {
+      const timeoutMs = options.timeoutMs ?? 30000;
+      const correlationId = acquirePooledCorrelationId();
+      const correlationKey = correlationIdToKey(correlationId);
+      const iterator = createRpcIterator(
+        () => cleanupPendingRpc(correlationKey, correlationId),
+        timeoutMs,
+        options.signal,
+      );
+      pendingRpcs.set(correlationKey, { iterator, correlationId });
 
-    const iterator = createRpcIterator(
-      () => cleanupPendingRpc(correlationKey, correlationId),
-      timeoutMs,
-      options?.signal,
-    );
-    pendingRpcs.set(correlationKey, { iterator, correlationId });
-
-    try {
-      const payload = RpcCodec.encodeCallRequest(correlationId, route, body);
-      await connection.send(MSG_RPC_REQUEST, payload, options?.signal);
-      return iterator;
-    } catch (error) {
-      cleanupPendingRpc(correlationKey, correlationId);
-      throw error;
-    }
+      try {
+        const payload = RpcCodec.encodeCallRequest(correlationId, route, options.body);
+        await connection.send(MSG_RPC_REQUEST, payload, options.signal);
+        yield* iterator;
+      } catch (error) {
+        cleanupPendingRpc(correlationKey, correlationId);
+        throw error;
+      } finally {
+        await iterator.return?.();
+      }
+    })();
   };
 
   const registerWorkerInternal = async (
@@ -505,11 +501,7 @@ export function createRpcClient(connection: RpcConnectionPort): RpcClient {
       return await registerWorkerInternal(route, handler, normalizedOptions);
     });
 
-    const unsubscribeFn = async (registeredRoute: string) => {
-      await unregisterWorker(registeredRoute, registration);
-    };
-
-    return createRpcSubscription(route, unsubscribeFn);
+    return createRpcSubscription(async () => unregisterWorker(route, registration));
   };
 
   const unregisterWorker = async (route: string, registration: RegisteredWorker): Promise<void> => {
@@ -643,7 +635,7 @@ export function createRpcClient(connection: RpcConnectionPort): RpcClient {
 
         const message = error instanceof Error ? error.message : "Handler error";
         try {
-          await writer.send(utf8Encoder.encode(`Handler error: ${message}`), true);
+          await writer.end({ body: utf8Encoder.encode(`Handler error: ${message}`) });
         } catch {
           // Best-effort error response.
         }
@@ -677,10 +669,9 @@ export function createRpcClient(connection: RpcConnectionPort): RpcClient {
 
   const sendBackpressureResponse = async (writer: ManagedResponseWriter): Promise<void> => {
     try {
-      await writer.send(
-        encodeRpcErrorBody(ErrCodeRpcBackpressure, "Local RPC worker is overloaded"),
-        true,
-      );
+      await writer.end({
+        body: encodeRpcErrorBody(ErrCodeRpcBackpressure, "Local RPC worker is overloaded"),
+      });
     } catch {
       // Best-effort overload response.
     } finally {

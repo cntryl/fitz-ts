@@ -5,6 +5,7 @@
 import { createDomainClient } from "../base";
 import type {
   AsyncDispatchPort,
+  BackgroundErrorPort,
   DisconnectListenerPort,
   NotificationPort,
   ReconnectListenerPort,
@@ -29,7 +30,6 @@ import { formatStatusName } from "../internal/status";
 import {
   awaitPendingUnsubscribe,
   createGenerationCounter,
-  createLiveSubIdGetter,
   isCurrentEmptyState,
 } from "../internal/subscription-handle";
 import { createPendingNotificationBuffer } from "../internal/pending-notifications";
@@ -60,6 +60,7 @@ type QueueSubscriptionState = {
 };
 
 type QueueConnectionPort = RequestPort &
+  Partial<BackgroundErrorPort> &
   ReconnectListenerPort &
   DisconnectListenerPort &
   NotificationPort &
@@ -68,28 +69,26 @@ type QueueConnectionPort = RequestPort &
   Partial<ReconnectRestoreRequestPort>;
 
 export interface QueueClient {
-  enqueue(route: string, body: Uint8Array, options?: EnqueueOptions): Promise<bigint>;
-  /**
-   * Reserves up to `batchSize` messages.
-   *
-   * Note: unlike {@link QueueClient.reserveWhenAvailable}, this takes
-   * positional parameters rather than an options object — the two are
-   * conceptually the same operation in different shapes for historical
-   * reasons; take care not to transpose `batchSize` and `waitSeconds`.
-   */
+  enqueue(route: string, options: EnqueueOptions): Promise<void>;
   reserve(
     route: string,
-    leaseSeconds: number,
-    batchSize?: number,
-    waitSeconds?: number,
-    signal?: AbortSignal,
-  ): Promise<QueueItem[]>;
+    options: {
+      leaseSeconds: number;
+      batchSize?: number;
+      waitSeconds?: number;
+      signal?: AbortSignal;
+    },
+  ): Promise<readonly QueueItem[]>;
   reserveWhenAvailable(
     route: string,
     options: { leaseSeconds: number; batchSize?: number; signal?: AbortSignal },
-  ): AsyncIterable<QueueItem[]>;
-  subscribe(pattern: string, handler: AvailabilityHandler): Promise<QueueSubscription>;
-  subscribeIterator(
+  ): AsyncIterable<readonly QueueItem[]>;
+  subscribe(
+    pattern: string,
+    handler: AvailabilityHandler,
+    options?: { signal?: AbortSignal },
+  ): Promise<QueueSubscription>;
+  notifications(
     pattern: string,
     options?: SubscriptionIteratorOptions,
   ): AsyncIterable<AvailabilityNotification>;
@@ -145,55 +144,55 @@ export function createQueueClient(connection: QueueConnectionPort): QueueClient 
     }
   });
 
-  const enqueue = async (
-    route: string,
-    body: Uint8Array,
-    options?: EnqueueOptions,
-  ): Promise<bigint> => {
+  const enqueue = async (route: string, options: EnqueueOptions): Promise<void> => {
     assertQueueRoute(route);
-    if (options?.priority !== undefined || options?.ttlMs !== undefined) {
-      // encodeEnqueue has no wire-format byte range for either field — they
-      // were previously accepted and silently dropped. Fail loudly instead
-      // of guessing at wire bytes until the protocol actually supports
-      // them.
+    const runtimeOptions = options as EnqueueOptions & {
+      priority?: unknown;
+      ttlMs?: unknown;
+      delayMs?: unknown;
+    };
+    if ("priority" in runtimeOptions || "ttlMs" in runtimeOptions || "delayMs" in runtimeOptions) {
       throw new QueueError(
-        "EnqueueOptions.priority and .ttlMs are not yet supported by the wire protocol",
+        "enqueue() does not support priority, ttlMs, or delayMs; use delaySeconds",
         "UNSUPPORTED_OPTION",
       );
     }
-    return runWithRetry(
+    await runWithRetry(
       {
         domain: "queue",
         operation: "enqueue",
         retryClass: "confirmed_negative_retry",
       },
       async () => {
-        const payload = QueueCodec.encodeEnqueue(route, body, options);
-        const response = await requestFrame(MSG_QUEUE_ENQUEUE, payload);
+        const payload = QueueCodec.encodeEnqueue(route, options.body, options);
+        const response = await requestFrame(MSG_QUEUE_ENQUEUE, payload, options.signal);
         const decoded = QueueCodec.decodeEnqueueResponse(response);
         checkStatus(decoded, "ENQUEUE");
-
-        if (decoded.messageId === undefined) {
-          throw new QueueError("ENQUEUE response missing messageId", "MISSING_MESSAGE_ID");
-        }
-
-        return decoded.messageId;
       },
     );
   };
 
   const reserve = async (
     route: string,
-    leaseSeconds: number,
-    batchSize: number = 1,
-    waitSeconds: number = 0,
-    signal?: AbortSignal,
-  ): Promise<QueueItem[]> => {
+    options: {
+      leaseSeconds: number;
+      batchSize?: number;
+      waitSeconds?: number;
+      signal?: AbortSignal;
+    },
+  ): Promise<readonly QueueItem[]> => {
     assertQueueReserveRoute(route);
+    const batchSize = options.batchSize ?? 1;
     if (!Number.isInteger(batchSize) || batchSize < 0 || batchSize > 1024) {
       throw new QueueError("RESERVE batch size must be between 0 and 1024", "INVALID_BATCH_SIZE");
     }
-    return reserveOnce(route, leaseSeconds, batchSize, signal, waitSeconds);
+    return reserveOnce(
+      route,
+      options.leaseSeconds,
+      batchSize,
+      options.signal,
+      options.waitSeconds ?? 0,
+    );
   };
 
   const reserveWhenAvailable = async function* (
@@ -203,7 +202,7 @@ export function createQueueClient(connection: QueueConnectionPort): QueueClient 
       batchSize?: number;
       signal?: AbortSignal;
     },
-  ): AsyncIterable<QueueItem[]> {
+  ): AsyncIterable<readonly QueueItem[]> {
     assertQueueReserveRoute(route);
 
     const wakeGate = createWakeGate();
@@ -275,6 +274,7 @@ export function createQueueClient(connection: QueueConnectionPort): QueueClient 
   const subscribe = async (
     pattern: string,
     handler: AvailabilityHandler,
+    options?: { signal?: AbortSignal },
   ): Promise<QueueSubscription> => {
     assertQueueSubscriptionPattern(pattern);
     initNotificationHandler();
@@ -290,11 +290,11 @@ export function createQueueClient(connection: QueueConnectionPort): QueueClient 
           await awaitPendingUnsubscribe(existing);
           continue;
         }
-        return addLocalSubscription(pattern, existing.subId, handler);
+        return addLocalSubscription(pattern, existing.subId, handler, options?.signal);
       }
 
       const subId = await registerSingleFlight(pattern, () => subscribeWire(pattern));
-      return addLocalSubscription(pattern, subId, handler);
+      return addLocalSubscription(pattern, subId, handler, options?.signal);
     }
   };
 
@@ -315,6 +315,7 @@ export function createQueueClient(connection: QueueConnectionPort): QueueClient 
     pattern: string,
     subId: bigint,
     handler: AvailabilityHandler,
+    signal?: AbortSignal,
   ): QueueSubscription => {
     const handlerId = nextHandlerId++;
     let subscription = subscriptionsByPattern.get(pattern);
@@ -327,13 +328,7 @@ export function createQueueClient(connection: QueueConnectionPort): QueueClient 
     subscription.handlers.set(handlerId, handler);
     pendingNotifications.flush(subId);
 
-    return createQueueSubscription(
-      createLiveSubIdGetter(subscriptionsByPattern, pattern, subId, subscription.generation),
-      pattern,
-      async () => {
-        await unsubscribe(pattern, handlerId);
-      },
-    );
+    return createQueueSubscription(async () => unsubscribe(pattern, handlerId), signal);
   };
 
   const unsubscribe = async (pattern: string, handlerId: number): Promise<void> => {
@@ -372,7 +367,7 @@ export function createQueueClient(connection: QueueConnectionPort): QueueClient 
     }
   };
 
-  const subscribeIterator = (
+  const notifications = (
     pattern: string,
     iteratorOptions?: SubscriptionIteratorOptions,
   ): AsyncIterable<AvailabilityNotification> =>
@@ -395,8 +390,10 @@ export function createQueueClient(connection: QueueConnectionPort): QueueClient 
           inflightMessages,
         };
         pendingNotifications.dispatchOrQueue(subId, notification);
-      } catch {
-        // Best-effort notification dispatch.
+      } catch (error) {
+        connection.reportBackgroundError?.("fitz.queue.notification_malformed", error, {
+          messageType: MSG_QUEUE_NOTIFY,
+        });
       }
     });
   };
@@ -442,7 +439,7 @@ export function createQueueClient(connection: QueueConnectionPort): QueueClient 
     reserve,
     reserveWhenAvailable,
     subscribe,
-    subscribeIterator,
+    notifications,
   };
 }
 

@@ -6,6 +6,7 @@ import { createQueueClient } from "../../../src/domains/queue/client";
 import { createQueueItem } from "../../../src/domains/queue/types";
 import {
   MSG_QUEUE_EXTEND,
+  MSG_QUEUE_ENQUEUE,
   MSG_QUEUE_NOTIFY,
   MSG_QUEUE_RESERVE,
   MSG_QUEUE_SUBSCRIBE,
@@ -67,6 +68,11 @@ class FakeQueueConnection {
     if (messageType === MSG_QUEUE_RESERVE) {
       this.onReserve?.();
       return this.reserveResponses.shift() ?? encodeQueueReserveResponse([]);
+    }
+    if (messageType === MSG_QUEUE_ENQUEUE) {
+      const response = new Uint8Array(9);
+      new DataView(response.buffer).setBigUint64(1, 1n, false);
+      return response;
     }
     throw new Error(`unexpected message type ${messageType}`);
   }
@@ -152,7 +158,10 @@ describe("QueueClient reserveWhenAvailable", () => {
     );
     const client = createQueueClient(connection);
 
-    const items = await client.reserve("queue://*/cats/*", 30, 1);
+    const items = await client.reserve("queue://*/cats/*", {
+      leaseSeconds: 30,
+      batchSize: 1,
+    });
 
     expect(items).toHaveLength(1);
     expect(items[0].route).toBe("queue://acme/cats/cat");
@@ -380,7 +389,7 @@ describe("QueueItem.extend", () => {
 
     let caught: unknown;
     try {
-      await item.extend(30);
+      await item.extend({ leaseSeconds: 30 });
     } catch (error) {
       caught = error;
     }
@@ -392,20 +401,34 @@ describe("QueueItem.extend", () => {
 });
 
 describe("QueueClient enqueue", () => {
-  it("throws synchronously instead of silently dropping priority or ttlMs", async () => {
+  it("encodes delay in seconds and hides the broker message id", async () => {
     const connection = new FakeQueueConnection();
     const client = createQueueClient(connection);
 
     await expect(
-      client.enqueue("queue://realm/area/resource", new Uint8Array([1]), { priority: 5 }),
-    ).rejects.toThrow(/not yet supported/i);
-    await expect(
-      client.enqueue("queue://realm/area/resource", new Uint8Array([1]), { ttlMs: 1000 }),
-    ).rejects.toThrow(/not yet supported/i);
-
-    // Neither call should have reached the wire.
-    expect(connection.requests).toHaveLength(0);
+      client.enqueue("queue://realm/area/resource", {
+        body: new Uint8Array([1]),
+        delaySeconds: 5,
+      }),
+    ).resolves.toBeUndefined();
+    expect(connection.requests).toHaveLength(1);
   });
+
+  it.each(["priority", "ttlMs", "delayMs"])(
+    "rejects removed %s options supplied by untyped callers",
+    async (removedOption) => {
+      const connection = new FakeQueueConnection();
+      const client = createQueueClient(connection);
+
+      await expect(
+        client.enqueue("queue://realm/area/resource", {
+          body: new Uint8Array([1]),
+          [removedOption]: 5,
+        } as never),
+      ).rejects.toMatchObject({ code: "QUEUE_UNSUPPORTED_OPTION" });
+      expect(connection.requests).toHaveLength(0);
+    },
+  );
 });
 
 describe("QueueClient reserve", () => {
@@ -415,7 +438,12 @@ describe("QueueClient reserve", () => {
     const client = createQueueClient(connection);
 
     connection.gate(MSG_QUEUE_RESERVE);
-    const pending = client.reserve("queue://realm/area/resource", 30, 1, 30, controller.signal);
+    const pending = client.reserve("queue://realm/area/resource", {
+      leaseSeconds: 30,
+      batchSize: 1,
+      waitSeconds: 30,
+      signal: controller.signal,
+    });
     await Promise.resolve();
 
     controller.abort();
@@ -475,19 +503,19 @@ describe("QueueClient subscribe/unsubscribe", () => {
     const client = createQueueClient(connection);
 
     const subscription = await client.subscribe("queue://realm/area/**", async () => undefined);
-    expect(subscription.subId).toBe(1n);
+    expect(subscription).not.toHaveProperty("subId");
 
     connection.subscribeSubId = 2n;
     await connection.reconnect();
 
-    expect(subscription.subId).toBe(2n);
+    expect(subscription).not.toHaveProperty("subId");
   });
 
   it("exposes subscribeIterator() for symmetry with the other domains", async () => {
     const connection = new FakeQueueConnection();
     const client = createQueueClient(connection);
 
-    const iterator = client.subscribeIterator("queue://realm/area/**")[Symbol.asyncIterator]();
+    const iterator = client.notifications("queue://realm/area/**")[Symbol.asyncIterator]();
     const pending = iterator.next();
     await vi.waitFor(() => {
       expect(connection.requests.some((call) => call.messageType === MSG_QUEUE_SUBSCRIBE)).toBe(

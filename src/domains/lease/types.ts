@@ -4,6 +4,7 @@
  */
 
 import type { DisconnectListenerPort, RequestPort } from "../base";
+import { createSubscriptionHandle } from "../internal/subscription-handle";
 import { FitzError, LeaseError } from "../../core/errors";
 
 /**
@@ -21,31 +22,26 @@ export type ChangeHandler = (notif: ChangeNotification) => void | Promise<void>;
 /**
  * Active lease change subscription
  */
-export type LeaseSubscription = ReturnType<typeof createLeaseSubscription>;
+export interface LeaseSubscription extends AsyncDisposable {
+  unsubscribe(): Promise<void>;
+}
 
 export function createLeaseSubscription(
-  getSubId: () => bigint,
-  route: string,
   unsubscribeFn: () => Promise<void>,
-) {
-  const unsubscribe = async (): Promise<void> => {
-    await unsubscribeFn();
-  };
-
-  return {
-    get subId(): bigint {
-      return getSubId();
-    },
-    route,
-    unsubscribe,
-  };
+  signal?: AbortSignal,
+): LeaseSubscription {
+  return createSubscriptionHandle<LeaseSubscription>(unsubscribeFn, signal);
 }
 
 /**
  * Lease handle representing an acquired lease
  * Provides renew() and release() methods
  */
-export type Lease = ReturnType<typeof createLease>;
+export interface Lease {
+  extend(options: { ttlSeconds: number; signal?: AbortSignal }): Promise<bigint>;
+  release(options?: { signal?: AbortSignal }): Promise<void>;
+  getExpiry(): bigint;
+}
 
 export function createLease(
   token: bigint,
@@ -78,19 +74,19 @@ export function createLease(
     return result;
   };
 
-  const extend = (ttlSecs: number, signal?: AbortSignal): Promise<bigint> =>
+  const extend = (options: { ttlSeconds: number; signal?: AbortSignal }): Promise<bigint> =>
     serialize(async () => {
       ensureOpen();
       try {
-        const requestPayload = LeaseCodec.encodeExtend(route, currentToken, ttlSecs);
-        const response = await connection.request(MSG_LEASE_RENEW, requestPayload, signal);
+        const requestPayload = LeaseCodec.encodeExtend(route, currentToken, options.ttlSeconds);
+        const response = await connection.request(MSG_LEASE_RENEW, requestPayload, options.signal);
         const data = LeaseCodec.decodeSuccessResponse(response, "EXTEND");
         if (!data || data.length < 8) {
           throw new LeaseError("EXTEND response missing fencing token", "EXTEND_INVALID_RESPONSE");
         }
         const reader = createBufferReader(data);
         currentToken = reader.readU64BE();
-        currentExpiry = BigInt(Math.floor(Date.now() / 1000)) + BigInt(ttlSecs);
+        currentExpiry = BigInt(Math.floor(Date.now() / 1000)) + BigInt(options.ttlSeconds);
         return currentExpiry;
       } catch (error) {
         closed = true;
@@ -99,13 +95,13 @@ export function createLease(
       }
     });
 
-  const release = (signal?: AbortSignal): Promise<void> =>
+  const release = (options: { signal?: AbortSignal } = {}): Promise<void> =>
     serialize(async () => {
       ensureOpen();
       closed = true;
       unsubscribeDisconnect();
       const payload = LeaseCodec.encodeRelease(route, currentToken);
-      const response = await connection.request(MSG_LEASE_RELEASE, payload, signal);
+      const response = await connection.request(MSG_LEASE_RELEASE, payload, options.signal);
       LeaseCodec.decodeSuccessResponse(response, "RELEASE");
     });
 
@@ -128,6 +124,7 @@ export interface AcquireResponse {
 }
 
 export interface LeaseAcquireOptions {
+  ttlSeconds: number;
   waitSeconds?: number;
   signal?: AbortSignal;
 }
@@ -185,7 +182,7 @@ export enum LeaseStatus {
 }
 
 export interface WithLeaseOptions {
-  waitForAvailability?: boolean;
+  ttlSeconds: number;
   waitSeconds?: number;
   signal?: AbortSignal;
 }

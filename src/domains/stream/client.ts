@@ -10,6 +10,7 @@
 import { createDomainClient } from "../base";
 import type {
   AsyncDispatchPort,
+  BackgroundErrorPort,
   DisconnectListenerPort,
   NotificationPort,
   ReconnectListenerPort,
@@ -17,13 +18,15 @@ import type {
   RequestPort,
   RetryExecutionPort,
 } from "../base";
-import { StreamCodec } from "./codec";
+import { StreamCodec, type StreamWireReadOptions } from "./codec";
 import {
   StreamSession,
   StreamRecord,
   StreamMetadata,
+  StreamBeginOptions,
   StreamReadOptions,
   StreamReadPage,
+  StreamReadBatch,
   StreamStatus,
   StreamStatusNames,
   StreamCommitHandler,
@@ -32,8 +35,7 @@ import {
   createStreamSubscription,
 } from "./types";
 import { createStreamSession } from "./session";
-import { StreamError } from "../../core/errors";
-import { createSliceIterator, createAsyncIterableIterator } from "../../core/iterator";
+import { StreamError, StreamReadStalledError } from "../../core/errors";
 import { createWakeGate } from "../../core/wake-gate";
 import {
   MSG_STREAM_BEGIN,
@@ -51,7 +53,6 @@ import { formatStatusName } from "../internal/status";
 import {
   awaitPendingUnsubscribe,
   createGenerationCounter,
-  createLiveSubIdGetter,
   isCurrentEmptyState,
 } from "../internal/subscription-handle";
 import { createPendingNotificationBuffer } from "../internal/pending-notifications";
@@ -77,43 +78,21 @@ type StreamConnectionPort = RequestPort &
   DisconnectListenerPort &
   NotificationPort &
   AsyncDispatchPort &
+  Partial<BackgroundErrorPort> &
   RetryExecutionPort &
   Partial<ReconnectRestoreRequestPort>;
 
 export interface StreamClient {
-  begin(route: string, ingestMetadata?: Uint8Array): Promise<StreamSession>;
-  readPage(
-    route: string,
-    startOffset: bigint,
-    limit?: number,
-    options?: StreamReadOptions,
-  ): Promise<StreamReadPage>;
-  read(
-    route: string,
-    startOffset: bigint,
-    limit?: number,
-    options?: StreamReadOptions,
-  ): Promise<StreamRecord[]>;
-  readWhenCommitted(
-    route: string,
-    options: {
-      offset: bigint;
-      batchSize?: number;
-      signal?: AbortSignal;
-      maxBytes?: bigint;
-      filter?: StreamReadOptions["filter"];
-    },
-  ): AsyncIterable<StreamRecord[]>;
-  consume(
-    route: string,
-    startOffset: bigint,
-    limit?: number,
-    options?: StreamReadOptions,
-  ): Promise<AsyncIterable<StreamRecord>>;
-  peek(route: string): Promise<StreamRecord | null>;
-  metadata(route: string): Promise<StreamMetadata>;
-  subscribe(pattern: string, handler: StreamCommitHandler): Promise<StreamSubscription>;
-  subscribeIterator(
+  begin(route: string, options?: StreamBeginOptions): Promise<StreamSession>;
+  read(selector: string, options: StreamReadOptions): AsyncIterableIterator<StreamReadBatch>;
+  peek(route: string, options?: { signal?: AbortSignal }): Promise<StreamRecord | null>;
+  metadata(route: string, options?: { signal?: AbortSignal }): Promise<StreamMetadata>;
+  subscribe(
+    pattern: string,
+    handler: StreamCommitHandler,
+    options?: { signal?: AbortSignal },
+  ): Promise<StreamSubscription>;
+  notifications(
     pattern: string,
     options?: SubscriptionIteratorOptions,
   ): AsyncIterable<StreamCommitNotification>;
@@ -172,10 +151,10 @@ export function createStreamClient(connection: StreamConnectionPort): StreamClie
     }
   });
 
-  const begin = async (route: string, ingestMetadata?: Uint8Array): Promise<StreamSession> => {
+  const begin = async (route: string, options: StreamBeginOptions = {}): Promise<StreamSession> => {
     assertStreamRoute(route);
-    const payload = StreamCodec.encodeBegin(route, ingestMetadata);
-    const response = await requestFrame(MSG_STREAM_BEGIN, payload);
+    const payload = StreamCodec.encodeBegin(route, options.ingestMetadata);
+    const response = await requestFrame(MSG_STREAM_BEGIN, payload, options.signal);
     const decoded = StreamCodec.decodeBeginResponse(response);
 
     checkStatus(decoded, "BEGIN");
@@ -191,7 +170,7 @@ export function createStreamClient(connection: StreamConnectionPort): StreamClie
     route: string,
     startOffset: bigint,
     limit: number = 100,
-    options?: StreamReadOptions,
+    options?: StreamWireReadOptions & { signal?: AbortSignal },
   ): Promise<StreamReadPage> => {
     assertStreamPattern(route);
     return runWithRetry(
@@ -224,40 +203,38 @@ export function createStreamClient(connection: StreamConnectionPort): StreamClie
     );
   };
 
-  const read = async (
+  const read = async function* (
     route: string,
-    startOffset: bigint,
-    limit: number = 100,
-    options?: StreamReadOptions,
-  ): Promise<StreamRecord[]> => {
-    const page = await readPage(route, startOffset, limit, options);
-    return StreamCodec.flattenStreamReadItems(page.items);
-  };
-
-  const readWhenCommitted = async function* (
-    route: string,
-    options: {
-      offset: bigint;
-      batchSize?: number;
-      signal?: AbortSignal;
-      maxBytes?: bigint;
-      filter?: StreamReadOptions["filter"];
-    },
-  ): AsyncIterable<StreamRecord[]> {
+    options: StreamReadOptions,
+  ): AsyncIterableIterator<StreamReadBatch> {
     assertStreamPattern(route);
+    if (options === undefined || options.fromOffset === undefined || options.mode === undefined) {
+      throw new StreamError("READ requires fromOffset and mode", "INVALID_READ_OPTIONS");
+    }
 
     const wakeGate = createWakeGate();
-    const subscription = await subscribe(route, () => {
-      wakeGate.wake();
-    });
-    const unsubscribeReconnectWake = connection.onReconnect(() => {
-      wakeGate.wake();
-    });
+    const subscription =
+      options.mode === "follow"
+        ? await subscribe(
+            route,
+            () => {
+              wakeGate.wake();
+            },
+            { signal: options.signal },
+          )
+        : undefined;
+    const unsubscribeReconnectWake =
+      options.mode === "follow"
+        ? connection.onReconnect(() => {
+            wakeGate.wake();
+          })
+        : () => undefined;
 
     try {
-      let offset = options.offset;
+      let offset = options.fromOffset;
       let cursorFingerprint: bigint | undefined;
       let capturedWatermark: bigint | undefined;
+      let stalledPages = 0;
 
       while (true) {
         const observed = wakeGate.version;
@@ -276,61 +253,57 @@ export function createStreamClient(connection: StreamConnectionPort): StreamClie
         // `page.items.length > 0` left the loop re-requesting the exact
         // same window forever in that case. Only the yield itself needs to
         // wait for actual records.
-        offset = streamNextOffset(route, offset, page.cursor);
+        const fromOffset = offset;
+        const nextOffset = streamNextOffset(route, fromOffset, page.cursor);
         cursorFingerprint = page.cursor.cursorFingerprint;
         capturedWatermark = page.cursor.capturedWatermark;
         const records = StreamCodec.flattenStreamReadItems(page.items);
-        if (records.length > 0) {
-          yield records;
+
+        if (page.cursor.hasMore && nextOffset <= fromOffset) {
+          stalledPages += 1;
+          if (stalledPages >= 2) throw new StreamReadStalledError(route, fromOffset);
+        } else {
+          stalledPages = 0;
         }
+        offset = nextOffset;
+
+        yield Object.freeze({
+          items: Object.freeze([...page.items]),
+          records: Object.freeze([...records]),
+          fromOffset,
+          nextOffset,
+          caughtUp: !page.cursor.hasMore,
+        });
 
         if (page.cursor.hasMore) {
           continue;
         }
 
+        if (options.mode === "replay") return;
+
         await wakeGate.waitAfter(observed, { signal: options.signal });
       }
     } finally {
       unsubscribeReconnectWake();
-      await subscription.unsubscribe().catch(() => undefined);
+      await subscription?.[Symbol.asyncDispose]();
     }
   };
 
-  const consume = async (
+  const peek = async (
     route: string,
-    startOffset: bigint,
-    limit?: number,
-    options?: StreamReadOptions,
-  ): Promise<AsyncIterable<StreamRecord>> => {
-    const page = await readPage(route, startOffset, limit ?? 100, options);
-    // Mirrors KvTransaction.scan()'s guard for the identical shape (a
-    // single page wrapped as a batch async iterable): "consume" implies
-    // full traversal, so silently truncating to one page with no signal
-    // that more data exists is a footgun, not a documented limitation.
-    // Only fires when the caller left `limit` unspecified — an explicit
-    // limit is an intentional bound, not truncation.
-    if (page.cursor.hasMore && limit === undefined) {
-      throw new StreamError(
-        "CONSUME truncated an unbounded response unexpectedly",
-        "CONSUME_TRUNCATED",
-      );
-    }
-
-    const records = StreamCodec.flattenStreamReadItems(page.items);
-    return createAsyncIterableIterator(createSliceIterator(records));
-  };
-
-  const peek = async (route: string): Promise<StreamRecord | null> => {
+    options: { signal?: AbortSignal } = {},
+  ): Promise<StreamRecord | null> => {
     assertStreamRoute(route);
     return runWithRetry(
       {
         domain: "stream",
         operation: "last",
         retryClass: "replayable_read",
+        signal: options.signal,
       },
       async () => {
         const payload = StreamCodec.encodeLast(route);
-        const response = await requestFrame(MSG_STREAM_LAST, payload);
+        const response = await requestFrame(MSG_STREAM_LAST, payload, options.signal);
         const decoded = StreamCodec.decodeLastResponse(response, route);
 
         checkStatus(decoded, "LAST");
@@ -340,17 +313,21 @@ export function createStreamClient(connection: StreamConnectionPort): StreamClie
     );
   };
 
-  const metadata = async (route: string): Promise<StreamMetadata> => {
+  const metadata = async (
+    route: string,
+    options: { signal?: AbortSignal } = {},
+  ): Promise<StreamMetadata> => {
     assertStreamRoute(route);
     return runWithRetry(
       {
         domain: "stream",
         operation: "metadata",
         retryClass: "replayable_read",
+        signal: options.signal,
       },
       async () => {
         const payload = StreamCodec.encodeMetadata(route);
-        const response = await requestFrame(MSG_STREAM_GET_METADATA, payload);
+        const response = await requestFrame(MSG_STREAM_GET_METADATA, payload, options.signal);
         const decoded = StreamCodec.decodeMetadataResponse(response);
 
         checkStatus(decoded, "GET_METADATA");
@@ -369,6 +346,7 @@ export function createStreamClient(connection: StreamConnectionPort): StreamClie
   const subscribe = async (
     pattern: string,
     handler: StreamCommitHandler,
+    options?: { signal?: AbortSignal },
   ): Promise<StreamSubscription> => {
     assertStreamPattern(pattern);
     initNotifyHandler();
@@ -384,15 +362,15 @@ export function createStreamClient(connection: StreamConnectionPort): StreamClie
           await awaitPendingUnsubscribe(existing);
           continue;
         }
-        return addLocalSubscription(pattern, existing.subId, handler);
+        return addLocalSubscription(pattern, existing.subId, handler, options?.signal);
       }
 
       const subId = await registerSingleFlight(pattern, () => subscribeWire(pattern));
-      return addLocalSubscription(pattern, subId, handler);
+      return addLocalSubscription(pattern, subId, handler, options?.signal);
     }
   };
 
-  const subscribeIterator = (
+  const notifications = (
     pattern: string,
     iteratorOptions?: SubscriptionIteratorOptions,
   ): AsyncIterable<StreamCommitNotification> =>
@@ -426,6 +404,7 @@ export function createStreamClient(connection: StreamConnectionPort): StreamClie
     pattern: string,
     subId: bigint,
     handler: StreamCommitHandler,
+    signal?: AbortSignal,
   ): StreamSubscription => {
     const handlerId = nextHandlerId++;
     let subscription = subscriptionsByPattern.get(pattern);
@@ -437,13 +416,7 @@ export function createStreamClient(connection: StreamConnectionPort): StreamClie
 
     subscription.handlers.set(handlerId, handler);
     pendingNotifications.flush(subId);
-    return createStreamSubscription(
-      createLiveSubIdGetter(subscriptionsByPattern, pattern, subId, subscription.generation),
-      pattern,
-      async () => {
-        await unsubscribe(pattern, handlerId);
-      },
-    );
+    return createStreamSubscription(async () => unsubscribe(pattern, handlerId), signal);
   };
 
   const unsubscribe = async (pattern: string, handlerId: number): Promise<void> => {
@@ -498,8 +471,10 @@ export function createStreamClient(connection: StreamConnectionPort): StreamClie
         const decoded = StreamCodec.decodeNotification(payload);
         const notification = toCommitNotification(decoded);
         pendingNotifications.dispatchOrQueue(decoded.subId, notification);
-      } catch {
-        // Best-effort notification dispatch.
+      } catch (error) {
+        connection.reportBackgroundError?.("fitz.stream.notification_malformed", error, {
+          messageType: MSG_STREAM_NOTIFY,
+        });
       }
     });
   };
@@ -553,14 +528,11 @@ export function createStreamClient(connection: StreamConnectionPort): StreamClie
 
   return {
     begin,
-    readPage,
     read,
-    readWhenCommitted,
-    consume,
     peek,
     metadata,
     subscribe,
-    subscribeIterator,
+    notifications,
   };
 }
 
@@ -582,9 +554,11 @@ export function streamNextOffset(
   // `{realm}/**` is the documented alias for `{realm}/*/*` — both must
   // resolve to the realm axis, not fall through to the resource default.
   if (scope === "realm") {
-    return (cursor.lastRealmOffset ?? cursor.lastResourceOffset) + 1n;
+    return cursor.lastRealmOffset === undefined ? currentOffset : cursor.lastRealmOffset + 1n;
   }
-  if (scope === "area") return (cursor.lastAreaOffset ?? cursor.lastResourceOffset) + 1n;
+  if (scope === "area") {
+    return cursor.lastAreaOffset === undefined ? currentOffset : cursor.lastAreaOffset + 1n;
+  }
   return cursor.lastResourceOffset + 1n;
 }
 

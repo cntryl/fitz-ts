@@ -51,7 +51,7 @@ function measureSync(iterations: number, callback: () => void): number {
 describe("fitz-ts subsystem perf thresholds", () => {
   it("keeps queue and domain encode cost within budget", () => {
     expect(
-      measureSync(100_000, () => QueueCodec.encodeEnqueue(queueRoute, body, { delayMs: 1500 })),
+      measureSync(100_000, () => QueueCodec.encodeEnqueue(queueRoute, body, { delaySeconds: 1 })),
     ).toBeLessThan(adjustedThreshold(thresholdsMs.queueEnqueueEncode));
 
     expect(measureSync(100_000, () => QueueCodec.encodeReserve(queueRoute, 60, 10))).toBeLessThan(

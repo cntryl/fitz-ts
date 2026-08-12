@@ -154,7 +154,7 @@ describe("route validation", () => {
     const client = createLeaseClient(connection as unknown as Connection);
 
     await expectRouteValidationFailure(
-      client.acquire("lease://example/*", 30),
+      client.acquire("lease://example/*", { ttlSeconds: 30 }),
       LeaseError,
       "LEASE_INVALID_ROUTE",
       "expected lease://",
@@ -167,7 +167,7 @@ describe("route validation", () => {
     const client = createQueueClient(connection as unknown as Connection);
 
     await expectRouteValidationFailure(
-      client.enqueue("queue://example/app/*", new Uint8Array([1])),
+      client.enqueue("queue://example/app/*", { body: new Uint8Array([1]) }),
       QueueError,
       "QUEUE_INVALID_ROUTE",
       "expected queue://",
@@ -180,7 +180,7 @@ describe("route validation", () => {
     const client = createQueueClient(connection as unknown as Connection);
 
     await expectRouteValidationFailure(
-      client.reserve("queue://example/area/bad*", 30),
+      client.reserve("queue://example/area/bad*", { leaseSeconds: 30 }),
       QueueError,
       "QUEUE_INVALID_ROUTE",
       "whole-segment pattern",
@@ -194,7 +194,7 @@ describe("route validation", () => {
 
     const subscription = await client.subscribe("queue://example/**", async () => undefined);
 
-    expect(subscription.pattern).toBe("queue://example/**");
+    expect(subscription).not.toHaveProperty("pattern");
     expect(connection.lastRequest?.messageType).toBe(MSG_QUEUE_SUBSCRIBE);
   });
 
@@ -203,7 +203,7 @@ describe("route validation", () => {
     const client = createNoticeClient(connection as unknown as Connection);
 
     await expectRouteValidationFailure(
-      client.publish("notice://example/**", new Uint8Array([1])),
+      client.publish("notice://example/**", { body: new Uint8Array([1]) }),
       NoticeError,
       "NOTICE_INVALID_ROUTE",
       "expected notice://",
@@ -217,7 +217,7 @@ describe("route validation", () => {
 
     const subscription = await client.subscribe("notice://example/**", async () => undefined);
 
-    expect(subscription.pattern).toBe("notice://example/**");
+    expect(subscription).not.toHaveProperty("pattern");
     expect(connection.lastRequest?.messageType).toBe(MSG_NOTICE_SUBSCRIBE);
   });
 
@@ -225,11 +225,8 @@ describe("route validation", () => {
     const connection = new FakeConnection(new Uint8Array([0]));
     const client = createRpcClient(connection as unknown as Connection);
 
-    await expectRouteValidationFailure(
-      client.call("rpc://example/*", new Uint8Array([1])),
+    expect(() => client.call("rpc://example/*", { body: new Uint8Array([1]) })).toThrowError(
       RpcError,
-      "RPC_INVALID_ROUTE",
-      "expected rpc://",
     );
     expect(connection.lastRequest).toBeNull();
   });
@@ -240,7 +237,7 @@ describe("route validation", () => {
 
     const worker = await client.registerWorker("rpc://*/orders/**/**", async () => undefined);
 
-    expect(worker.route).toBe("rpc://*/orders/**/**");
+    expect(worker).not.toHaveProperty("route");
     expect(connection.lastRequest).not.toBeNull();
   });
 
@@ -263,7 +260,7 @@ describe("route validation", () => {
 
     const subscription = await client.subscribe("stream://example/area/*", async () => undefined);
 
-    expect(subscription.subId).toBe(7n);
+    expect(subscription).not.toHaveProperty("subId");
     expect(connection.lastRequest).not.toBeNull();
   });
 
@@ -271,9 +268,9 @@ describe("route validation", () => {
     const connection = new FakeConnection(new Uint8Array([0]));
     const client = createStreamClient(connection as unknown as Connection);
 
-    const records = await client.read("stream://example/*/*", 0n);
-
-    expect(records).toEqual([]);
+    await expect(
+      client.read("stream://example/*/*", { fromOffset: 0n, mode: "replay" }).next(),
+    ).resolves.toMatchObject({ done: false });
     expect(connection.lastRequest?.messageType).toBe(MSG_STREAM_READ);
   });
 
@@ -295,7 +292,10 @@ describe("route validation", () => {
     const client = createScheduleClient(connection as unknown as Connection);
 
     await expectRouteValidationFailure(
-      client.create("queue://example/app/jobs/run", "0 0 * * *", "Broadcast"),
+      client.create("queue://example/app/jobs/run", {
+        cron: "0 0 * * *",
+        deliveryMode: "Broadcast",
+      }),
       ScheduleError,
       "SCHEDULE_INVALID_ROUTE",
       "expected schedule://",
@@ -308,7 +308,10 @@ describe("route validation", () => {
     const client = createScheduleClient(connection as unknown as Connection);
 
     await expectRouteValidationFailure(
-      client.create("schedule://example/jobs/nightly", "0 0 * * *", "Broadcast"),
+      client.create("schedule://example/jobs/nightly", {
+        cron: "0 0 * * *",
+        deliveryMode: "Broadcast",
+      }),
       ScheduleError,
       "SCHEDULE_INVALID_ROUTE",
       "expected schedule://",

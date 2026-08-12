@@ -26,10 +26,23 @@ import {
   MSG_KV_SCAN,
 } from "../../frame/types";
 import { KvError } from "../../core/errors";
-import { createSliceIterator, createAsyncIterableIterator } from "../../core/iterator";
 import { formatStatusName } from "../internal/status";
 
-export type KvTransaction = ReturnType<typeof createKvTransaction>;
+export interface KvTransaction extends AsyncDisposable {
+  put(options: { key: Uint8Array; value: Uint8Array; signal?: AbortSignal }): Promise<void>;
+  insert(options: { key: Uint8Array; value: Uint8Array; signal?: AbortSignal }): Promise<void>;
+  get(options: { key: Uint8Array; signal?: AbortSignal }): Promise<KvGetResult>;
+  delete(options: { key: Uint8Array; signal?: AbortSignal }): Promise<void>;
+  deleteRange(options: {
+    startKey: Uint8Array;
+    endKey: Uint8Array;
+    signal?: AbortSignal;
+  }): Promise<void>;
+  scan(options?: KvScanOptions): Promise<KvScanPage>;
+  commit(options?: { signal?: AbortSignal }): Promise<void>;
+  rollback(options?: { signal?: AbortSignal }): Promise<void>;
+  isOpen(): boolean;
+}
 
 type KvTransactionConnectionPort = RequestPort & DisconnectListenerPort & RetryExecutionPort;
 
@@ -77,36 +90,40 @@ export function createKvTransaction(
 
   const { runWithRetry } = createDomainClient(connection);
 
-  const put = async (key: Uint8Array, value: Uint8Array, signal?: AbortSignal): Promise<void> => {
+  const put = async (options: {
+    key: Uint8Array;
+    value: Uint8Array;
+    signal?: AbortSignal;
+  }): Promise<void> => {
     ensureOpen();
-    const payload = KvCodec.encodePut(txId, route, key, value);
-    const response = await connection.request(MSG_KV_PUT, payload, signal);
+    const payload = KvCodec.encodePut(txId, route, options.key, options.value);
+    const response = await connection.request(MSG_KV_PUT, payload, options.signal);
     checkStatus(KvCodec.decodeStatusResponse(response), "PUT");
   };
 
-  const insert = async (
-    key: Uint8Array,
-    value: Uint8Array,
-    signal?: AbortSignal,
-  ): Promise<void> => {
+  const insert = async (options: {
+    key: Uint8Array;
+    value: Uint8Array;
+    signal?: AbortSignal;
+  }): Promise<void> => {
     ensureOpen();
-    const payload = KvCodec.encodeInsert(txId, route, key, value);
-    const response = await connection.request(MSG_KV_INSERT, payload, signal);
+    const payload = KvCodec.encodeInsert(txId, route, options.key, options.value);
+    const response = await connection.request(MSG_KV_INSERT, payload, options.signal);
     checkStatus(KvCodec.decodeStatusResponse(response), "INSERT");
   };
 
-  const get = async (key: Uint8Array, signal?: AbortSignal): Promise<KvGetResult> => {
+  const get = async (options: { key: Uint8Array; signal?: AbortSignal }): Promise<KvGetResult> => {
     ensureOpen();
     return runWithRetry(
       {
         domain: "kv",
         operation: "get",
         retryClass: "replayable_read",
-        signal,
+        signal: options.signal,
       },
       async () => {
-        const payload = KvCodec.encodeGet(txId, route, key);
-        const response = await connection.request(MSG_KV_GET, payload, signal);
+        const payload = KvCodec.encodeGet(txId, route, options.key);
+        const response = await connection.request(MSG_KV_GET, payload, options.signal);
         const decoded = KvCodec.decodeGetResponse(response);
         checkStatus(decoded, "GET");
         if (!decoded.found || !decoded.value) {
@@ -117,29 +134,26 @@ export function createKvTransaction(
     );
   };
 
-  const deleteItem = async (key: Uint8Array, signal?: AbortSignal): Promise<void> => {
+  const deleteItem = async (options: { key: Uint8Array; signal?: AbortSignal }): Promise<void> => {
     ensureOpen();
-    const payload = KvCodec.encodeDelete(txId, route, key);
-    const response = await connection.request(MSG_KV_DELETE, payload, signal);
+    const payload = KvCodec.encodeDelete(txId, route, options.key);
+    const response = await connection.request(MSG_KV_DELETE, payload, options.signal);
     checkStatus(KvCodec.decodeStatusResponse(response), "DELETE");
   };
 
-  const deleteRange = async (
-    startKey: Uint8Array,
-    endKey: Uint8Array,
-    signal?: AbortSignal,
-  ): Promise<void> => {
+  const deleteRange = async (options: {
+    startKey: Uint8Array;
+    endKey: Uint8Array;
+    signal?: AbortSignal;
+  }): Promise<void> => {
     ensureOpen();
-    assertValidRange(startKey, endKey);
-    const payload = KvCodec.encodeDeleteRange(txId, route, startKey, endKey);
-    const response = await connection.request(MSG_KV_DELETE_RANGE, payload, signal);
+    assertValidRange(options.startKey, options.endKey);
+    const payload = KvCodec.encodeDeleteRange(txId, route, options.startKey, options.endKey);
+    const response = await connection.request(MSG_KV_DELETE_RANGE, payload, options.signal);
     checkStatus(KvCodec.decodeStatusResponse(response), "DELETE_RANGE");
   };
 
-  const scanPage = async (
-    options: KvScanOptions = {},
-    signal?: AbortSignal,
-  ): Promise<KvScanPage> => {
+  const scan = async (options: KvScanOptions = {}): Promise<KvScanPage> => {
     ensureOpen();
     if (options.startKey !== undefined && options.endKey !== undefined) {
       assertValidRange(options.startKey, options.endKey);
@@ -147,13 +161,13 @@ export function createKvTransaction(
     return runWithRetry(
       {
         domain: "kv",
-        operation: "scanPage",
+        operation: "scan",
         retryClass: "replayable_read",
-        signal,
+        signal: options.signal,
       },
       async () => {
         const payload = KvCodec.encodeScan(txId, route, options);
-        const response = await connection.request(MSG_KV_SCAN, payload, signal);
+        const response = await connection.request(MSG_KV_SCAN, payload, options.signal);
         const decoded = KvCodec.decodeScanResponse(response);
         checkStatus(decoded, "SCAN");
         return { entries: decoded.entries, hasMore: decoded.hasMore };
@@ -161,28 +175,16 @@ export function createKvTransaction(
     );
   };
 
-  const scan = async (
-    options: KvScanOptions = {},
-    signal?: AbortSignal,
-  ): Promise<AsyncIterable<{ key: Uint8Array; value: Uint8Array }>> => {
-    const page = await scanPage(options, signal);
-    if (page.hasMore && options.limit === undefined) {
-      throw new KvError("SCAN truncated an unbounded response unexpectedly", "SCAN_TRUNCATED");
-    }
-
-    return createAsyncIterableIterator(createSliceIterator(page.entries));
-  };
-
-  const commit = async (signal?: AbortSignal): Promise<void> => {
+  const commit = async (options: { signal?: AbortSignal } = {}): Promise<void> => {
     ensureOpen();
     closed = true;
     unsubscribeDisconnect();
     const payload = KvCodec.encodeCommit(txId, route);
-    const response = await connection.request(MSG_KV_COMMIT, payload, signal);
+    const response = await connection.request(MSG_KV_COMMIT, payload, options.signal);
     checkStatus(KvCodec.decodeStatusResponse(response), "COMMIT");
   };
 
-  const rollback = async (signal?: AbortSignal): Promise<void> => {
+  const rollback = async (options: { signal?: AbortSignal } = {}): Promise<void> => {
     if (closed) {
       return;
     }
@@ -190,20 +192,18 @@ export function createKvTransaction(
     closed = true;
     unsubscribeDisconnect();
     const payload = KvCodec.encodeRollback(txId, route);
-    try {
-      const response = await connection.request(MSG_KV_ROLLBACK, payload, signal);
-      checkStatus(KvCodec.decodeStatusResponse(response), "ROLLBACK");
-    } catch {
-      // Best-effort cleanup.
-    }
+    const response = await connection.request(MSG_KV_ROLLBACK, payload, options.signal);
+    checkStatus(KvCodec.decodeStatusResponse(response), "ROLLBACK");
   };
-
-  const getTxId = (): bigint => txId;
 
   const isOpen = (): boolean => !closed;
 
   const asyncDispose = async (): Promise<void> => {
-    await rollback();
+    try {
+      await rollback();
+    } catch {
+      // Disposal is explicitly best effort.
+    }
   };
 
   return {
@@ -212,11 +212,9 @@ export function createKvTransaction(
     get,
     delete: deleteItem,
     deleteRange,
-    scanPage,
     scan,
     commit,
     rollback,
-    getTxId,
     isOpen,
     [Symbol.asyncDispose]: asyncDispose,
   };

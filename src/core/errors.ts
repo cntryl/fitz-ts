@@ -283,6 +283,19 @@ export class StreamError extends FitzError {
   }
 }
 
+export class StreamReadStalledError extends StreamError {
+  constructor(selector: string, fromOffset: bigint) {
+    super(
+      `Stream read made no logical progress for selector ${selector} from offset ${fromOffset}`,
+      "READ_STALLED",
+      undefined,
+      { selector, fromOffset: fromOffset.toString(), retryable: false },
+    );
+    this.name = "StreamReadStalledError";
+    Object.setPrototypeOf(this, StreamReadStalledError.prototype);
+  }
+}
+
 export class ScheduleError extends FitzError {
   constructor(
     message: string,

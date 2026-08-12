@@ -66,6 +66,10 @@ export interface AsyncDispatchPort {
   tryDispatchAsyncHandler?(task: AsyncHandlerTask): boolean;
 }
 
+export interface BackgroundErrorPort {
+  reportBackgroundError(event: string, error: unknown, fields?: Record<string, unknown>): void;
+}
+
 export interface RetryExecutionPort {
   executeWithRetry?: <T>(operation: RetryOperation, task: () => Promise<T>) => Promise<T>;
 }

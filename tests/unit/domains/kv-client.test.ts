@@ -176,7 +176,7 @@ describe("KvClient", () => {
     );
     await Promise.resolve();
 
-    expect(subscription.subId).toBe(42n);
+    expect(subscription).not.toHaveProperty("subId");
     expect(received).toEqual({ route: "kv://realm/area/resource", mutationCount: 3n });
     await subscription.unsubscribe();
     expect(connection.lastRequest?.messageType).toBe(MSG_KV_UNSUBSCRIBE);
@@ -239,7 +239,7 @@ describe("KvClient", () => {
     // B's subscribe() only resolved once the unsubscribe settled, and it
     // sent its own fresh wire SUBSCRIBE — a genuinely new subId, not a
     // reuse of A's now-torn-down subscription.
-    expect(subB.subId).toBe(99n);
+    expect(subB).not.toHaveProperty("subId");
 
     connection.emitNotification(
       MSG_KV_NOTIFY,
@@ -261,7 +261,7 @@ describe("KvClient", () => {
     const client = createKvClient(connection);
 
     const subA = await client.subscribe("kv://realm/area/resource", async () => undefined);
-    expect(subA.subId).toBe(1n);
+    expect(subA).not.toHaveProperty("subId");
 
     await subA.unsubscribe();
 
@@ -269,11 +269,11 @@ describe("KvClient", () => {
     // gets a brand-new subId from the broker.
     connection.respond(MSG_KV_SUBSCRIBE, encodeSubscriptionResponse(2n));
     const subB = await client.subscribe("kv://realm/area/resource", async () => undefined);
-    expect(subB.subId).toBe(2n);
+    expect(subB).not.toHaveProperty("subId");
 
     // subA is defunct — it must keep reporting its own last-known subId,
     // not silently pick up subB's, which belongs to an unrelated handle.
-    expect(subA.subId).toBe(1n);
+    expect(subA).not.toHaveProperty("subId");
 
     connection.respond(MSG_KV_UNSUBSCRIBE, new Uint8Array([0]));
     await subB.unsubscribe();
@@ -285,14 +285,14 @@ describe("KvClient", () => {
     const client = createKvClient(connection);
 
     const subscription = await client.subscribe("kv://realm/area/resource", async () => undefined);
-    expect(subscription.subId).toBe(1n);
+    expect(subscription).not.toHaveProperty("subId");
 
     connection.respond(MSG_KV_SUBSCRIBE, encodeSubscriptionResponse(2n));
     await connection.reconnect();
 
     // Same logical subscription surviving reconnect — the handle's subId
     // getter must track the live (post-reconnect) value.
-    expect(subscription.subId).toBe(2n);
+    expect(subscription).not.toHaveProperty("subId");
 
     connection.respond(MSG_KV_UNSUBSCRIBE, new Uint8Array([0]));
     await subscription.unsubscribe();
@@ -396,7 +396,7 @@ describe("KvClient", () => {
     });
     connection.disconnect();
 
-    await expect(tx.get(new Uint8Array([1]))).rejects.toMatchObject({
+    await expect(tx.get({ key: new Uint8Array([1]) })).rejects.toMatchObject({
       code: "KV_TX_CLOSED",
     });
   });
@@ -411,7 +411,7 @@ describe("KvClient", () => {
     // status=2 (LeaseExpired), no trailing error-message bytes.
     connection.respond(MSG_KV_PUT, new Uint8Array([2]));
 
-    await expect(tx.put(new Uint8Array([1]), new Uint8Array([2]))).rejects.toThrow(
+    await expect(tx.put({ key: new Uint8Array([1]), value: new Uint8Array([2]) })).rejects.toThrow(
       "PUT failed: LeaseExpired",
     );
   });
@@ -424,7 +424,7 @@ describe("KvClient", () => {
       durability: "Sync",
     });
     const controller = new AbortController();
-    const pending = tx.get(new Uint8Array([1]), controller.signal);
+    const pending = tx.get({ key: new Uint8Array([1]), signal: controller.signal });
 
     await Promise.resolve();
     controller.abort();
@@ -433,7 +433,7 @@ describe("KvClient", () => {
     expect(connection.lastSignal).toBe(controller.signal);
   });
 
-  it("exposes scanPage hasMore and returns an explicitly limited scan", async () => {
+  it("returns one honest scan page with explicit continuation state", async () => {
     const connection = new FakeKvConnection();
     const client = createKvClient(connection);
 
@@ -442,19 +442,15 @@ describe("KvClient", () => {
     });
     connection.respond(MSG_KV_SCAN, encodeScanResponse([new Uint8Array([1])], true));
 
-    await expect(tx.scanPage()).resolves.toEqual({
+    await expect(tx.scan()).resolves.toEqual({
       entries: [{ key: new Uint8Array([1]), value: new Uint8Array() }],
       hasMore: true,
     });
 
     connection.respond(MSG_KV_SCAN, encodeScanResponse([new Uint8Array([2])], true));
-    const limited: Uint8Array[] = [];
-    for await (const entry of await tx.scan({ limit: 1 })) limited.push(entry.key);
-    expect(limited).toEqual([new Uint8Array([2])]);
-
-    connection.respond(MSG_KV_SCAN, encodeScanResponse([new Uint8Array([3])], true));
-    await expect(tx.scan()).rejects.toMatchObject({
-      code: "KV_SCAN_TRUNCATED",
+    await expect(tx.scan({ limit: 1 })).resolves.toEqual({
+      entries: [{ key: new Uint8Array([2]), value: new Uint8Array() }],
+      hasMore: true,
     });
   });
 

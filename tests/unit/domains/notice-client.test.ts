@@ -137,7 +137,7 @@ describe("NoticeClient", () => {
     const subscription = await client.subscribe("notice://realm/area/**", async (msg) => {
       received = msg;
     });
-    expect(subscription.subId).toBe(7n);
+    expect(subscription).not.toHaveProperty("subId");
 
     connection.emitNotification(
       MSG_NOTICE_NOTIFY,
@@ -158,7 +158,7 @@ describe("NoticeClient", () => {
     const connection = new FakeNoticeConnection();
     const client = createNoticeClient(connection as unknown as Connection);
 
-    await client.publish("notice://realm/area/resource", new Uint8Array([1]));
+    await client.publish("notice://realm/area/resource", { body: new Uint8Array([1]) });
 
     // A fire-and-forget PUBLISH never gets a real response — leaving the
     // registration in place after a successful send would leak one
@@ -200,7 +200,7 @@ describe("NoticeClient", () => {
     // B's subscribe() only resolved once the unsubscribe settled, and it
     // sent its own fresh wire SUBSCRIBE — a genuinely new subId, not a
     // reuse of A's now-torn-down subscription.
-    expect(subB.subId).toBe(9n);
+    expect(subB).not.toHaveProperty("subId");
 
     connection.emitNotification(
       MSG_NOTICE_NOTIFY,
@@ -243,16 +243,16 @@ describe("NoticeClient", () => {
     const client = createNoticeClient(connection as unknown as Connection);
 
     const subA = await client.subscribe("notice://realm/area/**", async () => undefined);
-    expect(subA.subId).toBe(1n);
+    expect(subA).not.toHaveProperty("subId");
 
     connection.respond(MSG_NOTICE_UNSUBSCRIBE, plainSuccessResponse());
     await subA.unsubscribe();
 
     connection.respond(MSG_NOTICE_SUBSCRIBE, subscribeResponse(2n));
     const subB = await client.subscribe("notice://realm/area/**", async () => undefined);
-    expect(subB.subId).toBe(2n);
+    expect(subB).not.toHaveProperty("subId");
 
-    expect(subA.subId).toBe(1n);
+    expect(subA).not.toHaveProperty("subId");
 
     connection.respond(MSG_NOTICE_UNSUBSCRIBE, plainSuccessResponse());
     await subB.unsubscribe();
@@ -264,12 +264,12 @@ describe("NoticeClient", () => {
     const client = createNoticeClient(connection as unknown as Connection);
 
     const subscription = await client.subscribe("notice://realm/area/**", async () => undefined);
-    expect(subscription.subId).toBe(1n);
+    expect(subscription).not.toHaveProperty("subId");
 
     connection.respond(MSG_NOTICE_SUBSCRIBE, subscribeResponse(2n));
     await connection.reconnect();
 
-    expect(subscription.subId).toBe(2n);
+    expect(subscription).not.toHaveProperty("subId");
 
     connection.respond(MSG_NOTICE_UNSUBSCRIBE, plainSuccessResponse());
     await subscription.unsubscribe();

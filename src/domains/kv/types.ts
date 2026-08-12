@@ -2,12 +2,15 @@
  * KV domain types.
  */
 
+import { createSubscriptionHandle } from "../internal/subscription-handle";
+
 export type TxMode = "ReadOnly" | "ReadWrite";
 export type DurabilityMode = "Buffered" | "Sync";
 
 export interface KvBeginOptions {
   mode?: TxMode;
   durability: DurabilityMode;
+  signal?: AbortSignal;
 }
 
 export interface KvScanOptions {
@@ -15,12 +18,13 @@ export interface KvScanOptions {
   endKey?: Uint8Array;
   limit?: number;
   reverse?: boolean;
+  signal?: AbortSignal;
 }
 
 export type KvGetResult = { type: "found"; value: Uint8Array } | { type: "not-found" };
 
 export interface KvScanPage {
-  entries: Array<{ key: Uint8Array; value: Uint8Array }>;
+  entries: readonly { key: Uint8Array; value: Uint8Array }[];
   hasMore: boolean;
 }
 
@@ -31,20 +35,15 @@ export interface KvNotification {
 
 export type KvHandler = (notification: KvNotification) => void | Promise<void>;
 
-export type KvSubscription = ReturnType<typeof createKvSubscription>;
+export interface KvSubscription extends AsyncDisposable {
+  unsubscribe(): Promise<void>;
+}
 
 export function createKvSubscription(
-  getSubId: () => bigint,
-  pattern: string,
   unsubscribeFn: () => Promise<void>,
-) {
-  return {
-    get subId(): bigint {
-      return getSubId();
-    },
-    pattern,
-    unsubscribe: unsubscribeFn,
-  };
+  signal?: AbortSignal,
+): KvSubscription {
+  return createSubscriptionHandle<KvSubscription>(unsubscribeFn, signal);
 }
 
 export interface KvBeginResponse {

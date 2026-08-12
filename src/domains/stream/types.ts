@@ -7,6 +7,7 @@
  */
 
 import "../../core/async-dispose";
+import { createSubscriptionHandle } from "../internal/subscription-handle";
 
 /**
  * Stream record with offset, timestamp, and payload
@@ -51,14 +52,23 @@ export interface StreamFilterSet {
 }
 
 export interface StreamAppendOptions {
+  expectedOffset: bigint;
+  body: Uint8Array;
   discriminator?: StreamDiscriminator;
+  signal?: AbortSignal;
+}
+
+export interface StreamBeginOptions {
+  ingestMetadata?: Uint8Array;
+  signal?: AbortSignal;
 }
 
 export interface StreamReadOptions {
+  fromOffset: bigint;
+  mode: "replay" | "follow";
+  batchSize?: number;
   maxBytes?: bigint;
   filter?: StreamFilterSet;
-  cursorFingerprint?: bigint;
-  capturedWatermark?: bigint;
   signal?: AbortSignal;
 }
 
@@ -96,8 +106,16 @@ export interface StreamReadFilteredRange {
 export type StreamReadItem = StreamReadEvent | StreamReadFiltered | StreamReadFilteredRange;
 
 export interface StreamReadPage {
-  items: StreamReadItem[];
+  items: readonly StreamReadItem[];
   cursor: StreamReadCursor;
+}
+
+export interface StreamReadBatch {
+  readonly items: readonly StreamReadItem[];
+  readonly records: readonly StreamRecord[];
+  readonly fromOffset: bigint;
+  readonly nextOffset: bigint;
+  readonly caughtUp: boolean;
 }
 
 export type StreamCommitMode = "Buffered" | "Sync";
@@ -128,23 +146,15 @@ export interface StreamCommitNotification {
 
 export type StreamCommitHandler = (notification: StreamCommitNotification) => void | Promise<void>;
 
-export type StreamSubscription = ReturnType<typeof createStreamSubscription>;
+export interface StreamSubscription extends AsyncDisposable {
+  unsubscribe(): Promise<void>;
+}
 
 export function createStreamSubscription(
-  getSubId: () => bigint,
-  pattern: string,
-  unsubscribeFn: (pattern: string) => Promise<void>,
-) {
-  const unsubscribe = async (): Promise<void> => {
-    await unsubscribeFn(pattern);
-  };
-
-  return {
-    get subId(): bigint {
-      return getSubId();
-    },
-    unsubscribe,
-  };
+  unsubscribeFn: () => Promise<void>,
+  signal?: AbortSignal,
+): StreamSubscription {
+  return createSubscriptionHandle<StreamSubscription>(unsubscribeFn, signal);
 }
 
 /**
@@ -156,23 +166,17 @@ export interface StreamSession {
    * Append a record to the stream.
    * Returns the assigned offset
    */
-  append(expectedOffset: bigint, body: Uint8Array, signal?: AbortSignal): Promise<bigint>;
-  append(
-    expectedOffset: bigint,
-    body: Uint8Array,
-    options?: StreamAppendOptions,
-    signal?: AbortSignal,
-  ): Promise<bigint>;
+  append(options: StreamAppendOptions): Promise<bigint>;
 
   /**
    * Commit the write session and make appended records durable.
    */
-  commit(mode: StreamCommitMode, signal?: AbortSignal): Promise<void>;
+  commit(options: { mode: StreamCommitMode; signal?: AbortSignal }): Promise<void>;
 
   /**
    * Roll back and discard uncommitted appends.
    */
-  rollback(signal?: AbortSignal): Promise<void>;
+  rollback(options?: { signal?: AbortSignal }): Promise<void>;
 
   /**
    * Check if session is still open

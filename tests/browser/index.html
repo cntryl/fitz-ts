@@ -1,0 +1,13 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>fitz-ts browser integration</title>
+  </head>
+  <body>
+    <script type="module">
+      import { createClient } from "/src/index.browser.ts";
+      globalThis.fitzCreateClient = createClient;
+    </script>
+  </body>
+</html>

@@ -52,7 +52,7 @@ export function brokerAddrFor(transport: TransportType, authMode: AuthMode): str
         EnvBrokerAnonTCPAddr,
         EnvBrokerAnonWSAddr,
         "localhost:4191",
-        "ws://localhost:4190/ws",
+        "ws://localhost:4290/ws",
       );
     case "valid_jwt":
     case "expired_jwt":

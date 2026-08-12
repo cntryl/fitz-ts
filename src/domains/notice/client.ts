@@ -5,6 +5,7 @@
 import { createDomainClient } from "../base";
 import type {
   AsyncDispatchPort,
+  BackgroundErrorPort,
   FireAndForgetPort,
   NotificationPort,
   OptionalResponsePort,
@@ -25,7 +26,6 @@ import { createKeyedSingleFlight } from "../internal/keyed-single-flight";
 import {
   awaitPendingUnsubscribe,
   createGenerationCounter,
-  createLiveSubIdGetter,
   isCurrentEmptyState,
 } from "../internal/subscription-handle";
 import { createPendingNotificationBuffer } from "../internal/pending-notifications";
@@ -49,6 +49,7 @@ type NoticeSubscriptionState = {
 };
 
 type NoticeConnectionPort = RequestPort &
+  Partial<BackgroundErrorPort> &
   ReconnectListenerPort &
   NotificationPort &
   AsyncDispatchPort &
@@ -57,12 +58,13 @@ type NoticeConnectionPort = RequestPort &
   Partial<ReconnectRestoreRequestPort>;
 
 export interface NoticeClient {
-  publish(route: string, body: Uint8Array): Promise<void>;
-  subscribe(pattern: string, handler: NoticeHandler): Promise<NoticeSubscription>;
-  subscribeIterator(
+  publish(route: string, options: { body: Uint8Array; signal?: AbortSignal }): Promise<void>;
+  subscribe(
     pattern: string,
-    options?: SubscriptionIteratorOptions,
-  ): AsyncIterable<NoticeMsg>;
+    handler: NoticeHandler,
+    options?: { signal?: AbortSignal },
+  ): Promise<NoticeSubscription>;
+  notifications(pattern: string, options?: SubscriptionIteratorOptions): AsyncIterable<NoticeMsg>;
 }
 
 export function createNoticeClient(connection: NoticeConnectionPort): NoticeClient {
@@ -116,12 +118,15 @@ export function createNoticeClient(connection: NoticeConnectionPort): NoticeClie
     }
   });
 
-  const publish = async (route: string, body: Uint8Array): Promise<void> => {
+  const publish = async (
+    route: string,
+    options: { body: Uint8Array; signal?: AbortSignal },
+  ): Promise<void> => {
     assertNoticeRoute(route);
-    const payload = NoticeCodec.encodePublish(route, body);
+    const payload = NoticeCodec.encodePublish(route, options.body);
     const cancelOptionalResponse = expectOptionalResponse(MSG_NOTICE_PUBLISH);
     try {
-      await connection.sendFireAndForget(MSG_NOTICE_PUBLISH, payload);
+      await connection.sendFireAndForget(MSG_NOTICE_PUBLISH, payload, options.signal);
     } finally {
       // Must run on the success path too — this fire-and-forget PUBLISH
       // never gets an actual response, so leaving the registration in place
@@ -134,6 +139,7 @@ export function createNoticeClient(connection: NoticeConnectionPort): NoticeClie
   const subscribe = async (
     pattern: string,
     handler: NoticeHandler,
+    options?: { signal?: AbortSignal },
   ): Promise<NoticeSubscription> => {
     assertNoticePattern(pattern);
     initNotifyHandler();
@@ -149,15 +155,15 @@ export function createNoticeClient(connection: NoticeConnectionPort): NoticeClie
           await awaitPendingUnsubscribe(existing);
           continue;
         }
-        return addLocalSubscription(pattern, existing.subId, handler);
+        return addLocalSubscription(pattern, existing.subId, handler, options?.signal);
       }
 
       const subId = await registerSingleFlight(pattern, () => subscribeWire(pattern));
-      return addLocalSubscription(pattern, subId, handler);
+      return addLocalSubscription(pattern, subId, handler, options?.signal);
     }
   };
 
-  const subscribeIterator = (
+  const notifications = (
     pattern: string,
     iteratorOptions?: SubscriptionIteratorOptions,
   ): AsyncIterable<NoticeMsg> =>
@@ -185,6 +191,7 @@ export function createNoticeClient(connection: NoticeConnectionPort): NoticeClie
     pattern: string,
     subId: bigint,
     handler: NoticeHandler,
+    signal?: AbortSignal,
   ): NoticeSubscription => {
     const handlerId = nextHandlerId++;
     let subscription = subscriptionsByPattern.get(pattern);
@@ -196,13 +203,7 @@ export function createNoticeClient(connection: NoticeConnectionPort): NoticeClie
 
     subscription.handlers.set(handlerId, handler);
     pendingNotifications.flush(subId);
-    return createNoticeSubscription(
-      createLiveSubIdGetter(subscriptionsByPattern, pattern, subId, subscription.generation),
-      pattern,
-      async () => {
-        await unsubscribe(pattern, handlerId);
-      },
-    );
+    return createNoticeSubscription(async () => unsubscribe(pattern, handlerId), signal);
   };
 
   const unsubscribe = async (pattern: string, handlerId: number): Promise<void> => {
@@ -263,8 +264,10 @@ export function createNoticeClient(connection: NoticeConnectionPort): NoticeClie
       try {
         const { subId, route, body } = NoticeCodec.decodeNotification(payload);
         pendingNotifications.dispatchOrQueue(subId, { route, body });
-      } catch {
-        // Best-effort notification dispatch.
+      } catch (error) {
+        connection.reportBackgroundError?.("fitz.notice.notification_malformed", error, {
+          messageType: MSG_NOTICE_NOTIFY,
+        });
       }
     });
   };
@@ -272,7 +275,7 @@ export function createNoticeClient(connection: NoticeConnectionPort): NoticeClie
   return {
     publish,
     subscribe,
-    subscribeIterator,
+    notifications,
   };
 }
 

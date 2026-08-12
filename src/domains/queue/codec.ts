@@ -53,9 +53,13 @@ export const QueueCodec = {
    * Encode ENQUEUE request.
    * Payload: [route: string][body_len: u32][body: bytes][has_delay: u8][delay_seconds: u64 if has_delay]
    */
-  encodeEnqueue(route: string, body: Uint8Array, options?: EnqueueOptions): Uint8Array {
+  encodeEnqueue(
+    route: string,
+    body: Uint8Array,
+    options?: Pick<EnqueueOptions, "delaySeconds">,
+  ): Uint8Array {
     const routeBytes = getRouteEncoding(route);
-    const delaySeconds = options?.delayMs ? Math.floor(options.delayMs / 1000) : 0;
+    const delaySeconds = options?.delaySeconds ?? 0;
     const hasDelay = delaySeconds > 0 ? 1 : 0;
 
     const buffer = new Uint8Array(routeBytes.length + 4 + body.length + 1 + (hasDelay ? 8 : 0));

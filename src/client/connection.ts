@@ -102,6 +102,7 @@ export function createConnection(
   const maxInFlightRequests = options.maxInFlightRequests ?? 256;
   const maxRequestQueueSize = options.maxRequestQueueSize ?? 1024;
   const observability = options.observability;
+  const closeReceiveBudgetMs = 200;
 
   let transport: Transport | null = null;
   let state: ConnectionState = ConnectionState.Disconnected;
@@ -263,23 +264,31 @@ export function createConnection(
 
     const activeReceiveLoop = receiveLoop;
     receiveLoop = null;
-    if (activeReceiveLoop) {
-      await Promise.race([activeReceiveLoop.catch(() => undefined), sleep(1000)]);
-    }
-
-    if (transport) {
-      // Every other bookkeeping step above (permanentlyClosed, closeRequested,
-      // state=Closed) has already committed by this point — close() must stay
-      // idempotent and resolve even if the underlying transport's close()
-      // itself rejects (a custom Transport is free to reject here; nothing in
-      // the Transport interface guarantees it won't). Matches the same
-      // defensive .catch() already used for the other two transport.close()
-      // call sites in this file.
-      await transport.close().catch(() => undefined);
-      transport = null;
-    }
-
+    // Observe the receive loop before closing the transport. A custom
+    // transport may reject close() and later reject receive(); neither
+    // rejection may escape teardown as an unhandled promise.
+    const settledReceiveLoop = activeReceiveLoop?.catch(() => undefined);
+    const activeTransport = transport;
     transport = null;
+    let transportClosed = false;
+    if (activeTransport) {
+      // receive() is allowed to remain pending until the transport closes.
+      // Close first so shutdown cannot deadlock on its own receive loop.
+      transportClosed = await activeTransport.close().then(
+        () => true,
+        () => false,
+      );
+    }
+    if (settledReceiveLoop && transportClosed) {
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(resolve, closeReceiveBudgetMs);
+        void settledReceiveLoop.then(() => {
+          clearTimeout(timer);
+          resolve();
+        });
+      });
+    }
+
     await asyncHandlerDispatcher.drain();
     await scopeDisposePromise;
   };
@@ -1069,6 +1078,15 @@ export function createConnection(
     }
   };
 
+  const reportBackgroundError = (
+    event: string,
+    error: unknown,
+    fields?: Record<string, unknown>,
+  ): void => {
+    log("error", event, { ...fields, ...describeErrorFields(error), error: describeError(error) });
+    observability?.meter?.counter("fitz.background_error", 1, { event });
+  };
+
   return {
     connect,
     close,
@@ -1092,5 +1110,6 @@ export function createConnection(
     getState,
     isConnected,
     getUrl,
+    reportBackgroundError,
   };
 }

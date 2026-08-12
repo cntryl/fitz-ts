@@ -57,8 +57,11 @@ describe("ScheduleClient route validation", () => {
     const client = createScheduleClient(connection);
 
     await expect(
-      client.create("schedule://realm/area/resource/run", "0 0 * * *", "Broadcast"),
-    ).resolves.toBe("schedule://realm/area/resource/run");
+      client.create("schedule://realm/area/resource/run", {
+        cron: "0 0 * * *",
+        deliveryMode: "Broadcast",
+      }),
+    ).resolves.toBeUndefined();
     expect(connection.requestCalls).toHaveLength(1);
   });
 
@@ -67,7 +70,10 @@ describe("ScheduleClient route validation", () => {
     const client = createScheduleClient(connection);
 
     await expectScheduleRouteFailure(
-      client.create("schedule://realm/area/resource", "0 0 * * *", "Broadcast"),
+      client.create("schedule://realm/area/resource", {
+        cron: "0 0 * * *",
+        deliveryMode: "Broadcast",
+      }),
     );
     expect(connection.requestCalls).toHaveLength(0);
   });
@@ -77,7 +83,10 @@ describe("ScheduleClient route validation", () => {
     const client = createScheduleClient(connection);
 
     await expectScheduleRouteFailure(
-      client.create("queue://realm/area/resource/run", "0 0 * * *", "Broadcast"),
+      client.create("queue://realm/area/resource/run", {
+        cron: "0 0 * * *",
+        deliveryMode: "Broadcast",
+      }),
     );
     expect(connection.requestCalls).toHaveLength(0);
   });
@@ -122,7 +131,10 @@ describe("ScheduleClient domain errors", () => {
     const client = createScheduleClient(new FakeScheduleConnection(response));
 
     await expect(
-      client.create("schedule://realm/area/resource/run", "0 0 * * *", "Single"),
+      client.create("schedule://realm/area/resource/run", {
+        cron: "0 0 * * *",
+        deliveryMode: "Single",
+      }),
     ).rejects.toMatchObject({
       code: "SCHEDULE_CREATE_FAILED",
       message: "CREATE failed: invalid delivery mode",
@@ -144,7 +156,7 @@ describe("ScheduleClient domain errors", () => {
 
     const client = createScheduleClient(new FakeScheduleConnection(response));
 
-    await expect(client.listPage()).rejects.toMatchObject({
+    await expect(client.entries("schedule://realm/**").next()).rejects.toMatchObject({
       code: "SCHEDULE_INVALID_TIMESTAMP",
       domainCode: 5,
     });
@@ -167,7 +179,7 @@ describe("ScheduleClient domain errors", () => {
 
     const client = createScheduleClient(new FakeScheduleConnection(response));
 
-    await expect(client.listPage()).rejects.toMatchObject({
+    await expect(client.entries("schedule://realm/**").next()).rejects.toMatchObject({
       code: "SCHEDULE_INVALID_SUBSCRIPTION",
       domainCode: 7006,
     });

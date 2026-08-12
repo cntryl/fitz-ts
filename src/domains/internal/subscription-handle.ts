@@ -98,3 +98,55 @@ export async function awaitPendingUnsubscribe(state: {
     await state.pendingUnsubscribe.catch(() => undefined);
   }
 }
+
+export interface SubscriptionHandle extends AsyncDisposable {
+  unsubscribe(): Promise<void>;
+}
+
+/**
+ * Creates the shared, retryable unsubscribe state machine used by every
+ * domain. Concurrent callers share one wire round-trip; a failed explicit
+ * unsubscribe remains retryable; async disposal is deliberately best effort.
+ */
+export function createSubscriptionHandle<T extends SubscriptionHandle>(
+  unsubscribeFn: () => Promise<void>,
+  signal?: AbortSignal,
+): T {
+  let active = true;
+  let pending: Promise<void> | undefined;
+  let onAbort: (() => void) | undefined;
+
+  const unsubscribe = async (): Promise<void> => {
+    if (!active) return pending;
+    active = false;
+    if (signal && onAbort) signal.removeEventListener("abort", onAbort);
+    pending = unsubscribeFn().catch((error: unknown) => {
+      active = true;
+      throw error;
+    });
+    try {
+      await pending;
+    } finally {
+      pending = undefined;
+    }
+  };
+
+  const handle: SubscriptionHandle = {
+    unsubscribe,
+    async [Symbol.asyncDispose](): Promise<void> {
+      try {
+        await unsubscribe();
+      } catch {
+        // Disposal is explicitly best effort.
+      }
+    },
+  };
+
+  if (signal) {
+    onAbort = (): void => void handle[Symbol.asyncDispose]();
+    if (signal.aborted) onAbort();
+    else signal.addEventListener("abort", onAbort, { once: true });
+  }
+
+  return handle as T;
+}

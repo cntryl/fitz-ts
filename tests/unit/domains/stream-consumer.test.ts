@@ -80,12 +80,12 @@ describe("StreamClient readWhenCommitted", () => {
     const client = createStreamClient(connection);
 
     const result = await client
-      .readWhenCommitted("stream://realm/area/resource", { offset: 4n, batchSize: 10 })
+      .read("stream://realm/area/resource", { fromOffset: 4n, mode: "follow", batchSize: 10 })
       [Symbol.asyncIterator]()
       .next();
 
     expect(result.done).toBe(false);
-    expect(result.value?.map((record: { offset: bigint }) => record.offset)).toEqual([4n]);
+    expect(result.value?.records.map((record: { offset: bigint }) => record.offset)).toEqual([4n]);
   });
 
   it("wakes on commit notifications and advances across filtered marker pages", async () => {
@@ -96,9 +96,11 @@ describe("StreamClient readWhenCommitted", () => {
     );
     const client = createStreamClient(connection);
     const iterator = client
-      .readWhenCommitted("stream://realm/area/resource", { offset: 4n })
+      .read("stream://realm/area/resource", { fromOffset: 4n, mode: "follow" })
       [Symbol.asyncIterator]();
 
+    const first = await iterator.next();
+    expect(first.value?.records).toEqual([]);
     const pending = iterator.next();
     await vi.waitFor(() => {
       expect(readOffsets(connection)).toEqual([4n]);
@@ -108,7 +110,7 @@ describe("StreamClient readWhenCommitted", () => {
 
     const result = await pending;
     expect(result.done).toBe(false);
-    expect(result.value?.map((record: { offset: bigint }) => record.offset)).toEqual([6n]);
+    expect(result.value?.records.map((record: { offset: bigint }) => record.offset)).toEqual([6n]);
     expect(readOffsets(connection)).toEqual([4n, 6n]);
 
     await iterator.return?.();
@@ -123,13 +125,16 @@ describe("StreamClient readWhenCommitted", () => {
     );
     const client = createStreamClient(connection);
 
-    const result = await client
-      .readWhenCommitted("stream://realm/area/resource", { offset: 4n })
-      [Symbol.asyncIterator]()
-      .next();
+    const iterator = client.read("stream://realm/area/resource", {
+      fromOffset: 4n,
+      mode: "follow",
+    });
+    const first = await iterator.next();
+    expect(first.value?.records).toEqual([]);
+    const result = await iterator.next();
 
     expect(result.done).toBe(false);
-    expect(result.value?.map((record: { offset: bigint }) => record.offset)).toEqual([6n]);
+    expect(result.value?.records.map((record: { offset: bigint }) => record.offset)).toEqual([6n]);
     expect(readOffsets(connection)).toEqual([4n, 6n]);
   });
 
@@ -141,9 +146,11 @@ describe("StreamClient readWhenCommitted", () => {
     );
     const client = createStreamClient(connection);
     const iterator = client
-      .readWhenCommitted("stream://realm/area/resource", { offset: 4n, batchSize: 10 })
+      .read("stream://realm/area/resource", { fromOffset: 4n, mode: "follow", batchSize: 10 })
       [Symbol.asyncIterator]();
 
+    const first = await iterator.next();
+    expect(first.value?.records).toEqual([]);
     const pending = iterator.next();
     await vi.waitFor(() => {
       expect(readOffsets(connection)).toEqual([4n]);
@@ -153,7 +160,7 @@ describe("StreamClient readWhenCommitted", () => {
 
     const result = await pending;
     expect(result.done).toBe(false);
-    expect(result.value?.map((record: { offset: bigint }) => record.offset)).toEqual([4n]);
+    expect(result.value?.records.map((record: { offset: bigint }) => record.offset)).toEqual([4n]);
     expect(readOffsets(connection)).toEqual([4n, 4n]);
 
     await iterator.return?.();
@@ -166,12 +173,15 @@ describe("StreamClient readWhenCommitted", () => {
     const client = createStreamClient(connection);
     const controller = new AbortController();
     const iterator = client
-      .readWhenCommitted("stream://realm/area/resource", {
-        offset: 4n,
+      .read("stream://realm/area/resource", {
+        fromOffset: 4n,
+        mode: "follow",
         signal: controller.signal,
       })
       [Symbol.asyncIterator]();
 
+    const first = await iterator.next();
+    expect(first.value?.caughtUp).toBe(true);
     const pending = iterator.next();
     await vi.waitFor(() => {
       expect(readOffsets(connection)).toEqual([4n]);
@@ -190,13 +200,16 @@ describe("StreamClient readWhenCommitted", () => {
     );
     const client = createStreamClient(connection);
 
-    const result = await client
-      .readWhenCommitted("stream://realm/area/resource", { offset: 4n })
-      [Symbol.asyncIterator]()
-      .next();
+    const iterator = client.read("stream://realm/area/resource", {
+      fromOffset: 4n,
+      mode: "follow",
+    });
+    const first = await iterator.next();
+    expect(first.value).toMatchObject({ nextOffset: 6n, records: [] });
+    const result = await iterator.next();
 
     expect(result.done).toBe(false);
-    expect(result.value?.map((record: { offset: bigint }) => record.offset)).toEqual([6n]);
+    expect(result.value?.records.map((record: { offset: bigint }) => record.offset)).toEqual([6n]);
     expect(readOffsets(connection)).toEqual([4n, 6n]);
   }, 2000);
 
@@ -208,13 +221,13 @@ describe("StreamClient readWhenCommitted", () => {
     );
     const client = createStreamClient(connection);
 
-    const result = await client
-      .readWhenCommitted("stream://realm/**", { offset: 4n })
-      [Symbol.asyncIterator]()
-      .next();
+    const iterator = client.read("stream://realm/**", { fromOffset: 4n, mode: "follow" });
+    const first = await iterator.next();
+    expect(first.value).toMatchObject({ nextOffset: 51n, records: [] });
+    const result = await iterator.next();
 
     expect(result.done).toBe(false);
-    expect(result.value?.map((record: { offset: bigint }) => record.offset)).toEqual([51n]);
+    expect(result.value?.records.map((record: { offset: bigint }) => record.offset)).toEqual([51n]);
     // The second READ must resume from lastRealmOffset + 1 (51n), not from
     // lastResourceOffset + 1 (6n) — the bug this regression test guards
     // against silently re-requested the same resource-offset window
@@ -261,7 +274,7 @@ describe("StreamClient subscription lineage", () => {
     // The second subscribe() only resolved once the unsubscribe settled,
     // and it sent its own fresh wire SUBSCRIBE — a genuinely new subId,
     // not a reuse of the first subscription's now-torn-down state.
-    expect(second.subId).toBe(77n);
+    expect(second).not.toHaveProperty("subId");
     expect(
       connection.requests.filter((call) => call.messageType === MSG_STREAM_SUBSCRIBE),
     ).toHaveLength(2);
@@ -278,11 +291,11 @@ describe("StreamClient subscription lineage", () => {
     const client = createStreamClient(connection);
 
     const subscription = await client.subscribe("stream://realm/area/resource", () => undefined);
-    expect(subscription.subId).toBe(9n);
+    expect(subscription).not.toHaveProperty("subId");
 
     await connection.reconnect();
 
-    expect(subscription.subId).toBe(42n);
+    expect(subscription).not.toHaveProperty("subId");
   });
 });
 
@@ -290,9 +303,7 @@ describe("StreamClient subscribeIterator", () => {
   it("yields commit notifications as they arrive", async () => {
     const connection = new FakeStreamConsumerConnection();
     const client = createStreamClient(connection);
-    const iterator = client
-      .subscribeIterator("stream://realm/area/resource")
-      [Symbol.asyncIterator]();
+    const iterator = client.notifications("stream://realm/area/resource")[Symbol.asyncIterator]();
 
     const pending = iterator.next();
     await vi.waitFor(() => {

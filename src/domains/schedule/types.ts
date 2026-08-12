@@ -8,13 +8,13 @@ import {
   ErrCodeScheduleInvalidSubscription,
   ErrCodeScheduleSubscriptionLimit,
 } from "../../core/errors";
+import { createSubscriptionHandle } from "../internal/subscription-handle";
 
 /**
  * ScheduleEntry represents a schedule returned by a list page
  * Per CLIENT_SPEC: route, cron, payload
  */
 export interface ScheduleEntry {
-  id: string; // Route as identity
   route: string;
   cron: string;
   deliveryMode: ScheduleDeliveryMode;
@@ -46,24 +46,15 @@ export type ScheduleHandler = (notification: ScheduleNotification) => void | Pro
 /**
  * ScheduleSubscription represents an active subscription to schedule fire notifications
  */
-export type ScheduleSubscription = ReturnType<typeof createScheduleSubscription>;
+export interface ScheduleSubscription extends AsyncDisposable {
+  unsubscribe(): Promise<void>;
+}
 
 export function createScheduleSubscription(
-  getSubId: () => bigint,
-  pattern: string,
   unsubscribeFn: () => Promise<void>,
-) {
-  const unsubscribe = async (): Promise<void> => {
-    return unsubscribeFn();
-  };
-
-  return {
-    get subId(): bigint {
-      return getSubId();
-    },
-    pattern,
-    unsubscribe,
-  };
+  signal?: AbortSignal,
+): ScheduleSubscription {
+  return createSubscriptionHandle<ScheduleSubscription>(unsubscribeFn, signal);
 }
 
 export interface ScheduleCreateResponse {
@@ -73,7 +64,7 @@ export interface ScheduleCreateResponse {
 export type ScheduleCancelResponse = Record<string, never>;
 
 export interface ScheduleListPage {
-  entries: ScheduleEntry[];
+  entries: readonly ScheduleEntry[];
   totalCount: bigint;
 }
 

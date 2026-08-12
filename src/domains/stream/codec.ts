@@ -31,6 +31,13 @@ import {
   StreamReadOptions,
 } from "./types";
 
+export interface StreamWireReadOptions {
+  maxBytes?: bigint;
+  filter?: StreamReadOptions["filter"];
+  cursorFingerprint?: bigint;
+  capturedWatermark?: bigint;
+}
+
 export const StreamCodec = {
   /**
    * Encode BEGIN request
@@ -193,7 +200,7 @@ export const StreamCodec = {
     route: string,
     startOffset: bigint,
     limit: number,
-    options?: StreamReadOptions,
+    options?: StreamWireReadOptions,
   ): Uint8Array {
     const routeBytes = getRouteEncoding(route);
     const hasMaxBytes = options?.maxBytes !== undefined;
@@ -468,7 +475,7 @@ export const StreamCodec = {
     };
   },
 
-  flattenStreamReadItems(items: StreamReadItem[]): StreamRecord[] {
+  flattenStreamReadItems(items: readonly StreamReadItem[]): StreamRecord[] {
     return items.flatMap((item) => (item.kind === "event" ? [item.record] : []));
   },
 

@@ -62,7 +62,7 @@ describe("fitz-ts hotpath benchmarks", () => {
   });
 
   benchBatch("queue enqueue encode", SYNC_CODEC_BATCH_SIZE, () => {
-    return QueueCodec.encodeEnqueue(routes.queue, body, { delayMs: 1500 });
+    return QueueCodec.encodeEnqueue(routes.queue, body, { delaySeconds: 1 });
   });
 
   benchBatch("schedule create encode", SYNC_CODEC_BATCH_SIZE, () => {

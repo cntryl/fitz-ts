@@ -1583,6 +1583,22 @@ describe("Connection", () => {
     await expect(connection.close()).resolves.toBeUndefined();
   });
 
+  it("bounds close() when transport close succeeds without releasing receive", async () => {
+    const transport = new FakeTransport();
+    transport.close = async () => undefined;
+    const connection = createConnection(
+      () => transport,
+      () => "",
+      { authSettleDelayMs: 0 },
+    );
+
+    await connection.connect();
+    const startedAt = performance.now();
+    await connection.close();
+
+    expect(performance.now() - startedAt).toBeLessThan(250);
+  });
+
   it("shares one teardown given overlapping close calls", async () => {
     const transport = new FakeTransport();
     const connection = createConnection(
