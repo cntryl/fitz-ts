@@ -16,7 +16,7 @@ import {
   type BufferWriter,
 } from "../../core/buffer";
 import { StreamError } from "../../core/errors";
-import { isRouteShape, isStreamSelectorShape } from "../_routes";
+import { classifyStreamSelectorScope, isRouteShape, isStreamSelectorShape } from "../_routes";
 import {
   StreamCommitMode,
   StreamCommitPayload,
@@ -560,7 +560,7 @@ export const StreamCodec = {
 };
 
 export function isGlobalSelector(selector: string): boolean {
-  return selector === "stream://**" || selector === "stream://*/*/*";
+  return classifyStreamSelectorScope(selector) === "global";
 }
 
 function isStreamSelector(selector: string): boolean {
