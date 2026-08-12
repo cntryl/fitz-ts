@@ -6,6 +6,13 @@ The format is based on Keep a Changelog and the project follows Semantic Version
 
 ## [Unreleased]
 
+## [0.0.17] - 2026-08-12
+
+### Fixed
+
+- Decode realm-wildcard filtered Stream reads with the extended global record and cursor layout.
+- Continue filtered global Stream processors on `lastGlobalOffset` while retaining snapshot fingerprint and watermark state across sparse pages.
+
 ## [0.0.16] - 2026-08-10
 
 ### Added

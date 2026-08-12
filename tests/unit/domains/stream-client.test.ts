@@ -13,7 +13,7 @@ import {
   MSG_STREAM_READ,
   MSG_STREAM_ROLLBACK,
 } from "../../../src/frame/types";
-import { createStreamClient } from "../../../src/domains/stream/client";
+import { createStreamClient, streamNextOffset } from "../../../src/domains/stream/client";
 import type { Connection } from "../../../src/client/connection";
 import type { StreamFilterSet } from "../../../src/domains/stream/types";
 
@@ -103,6 +103,32 @@ class FakeStreamConnection {
 }
 
 describe("StreamClient", () => {
+  it.each(["stream://*/area/resource", "stream://*/area/*", "stream://*/*/resource"])(
+    "continues filtered global selector %s on the global axis",
+    (selector) => {
+      expect(
+        streamNextOffset(selector, 3n, {
+          lastResourceOffset: 5n,
+          lastAreaOffset: 7n,
+          lastRealmOffset: 11n,
+          lastGlobalOffset: 13n,
+          hasMore: true,
+        }),
+      ).toBe(14n);
+    },
+  );
+
+  it("does not fabricate filtered global progress from a narrower cursor axis", () => {
+    expect(
+      streamNextOffset("stream://*/area/*", 3n, {
+        lastResourceOffset: 17n,
+        lastAreaOffset: 19n,
+        lastRealmOffset: 23n,
+        hasMore: true,
+      }),
+    ).toBe(3n);
+  });
+
   it("should invalidate a stream handle given disconnect when the old handle is reused", async () => {
     const connection = new FakeStreamConnection();
     const client = createStreamClient(connection as unknown as Connection);
@@ -371,9 +397,7 @@ describe("StreamClient", () => {
 
     await expect(client.readPage("stream://**", 0n, 1)).resolves.toBeDefined();
     await expect(realmClient.readPage("stream://realm/*/*", 0n, 1)).resolves.toBeDefined();
-    await expect(client.readPage("stream://*/area/*", 0n, 1)).rejects.not.toMatchObject({
-      code: "STREAM_INVALID_ROUTE",
-    });
+    await expect(client.readPage("stream://*/area/*", 0n, 1)).resolves.toBeDefined();
   });
 });
 

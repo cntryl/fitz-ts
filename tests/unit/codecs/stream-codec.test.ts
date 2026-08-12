@@ -5,7 +5,7 @@
  */
 
 import { describe, it, expect } from "vite-plus/test";
-import { StreamCodec } from "../../../src/domains/stream/codec";
+import { StreamCodec, isGlobalSelector } from "../../../src/domains/stream/codec";
 import { StreamError } from "../../../src/core/errors";
 import {
   createBufferReader,
@@ -40,18 +40,23 @@ function writeOptionalBytes(writer: BufferWriter, value: Uint8Array | undefined)
   writer.writeBytes(value);
 }
 
-function encodeStreamRecord(options: {
-  offset: bigint;
-  areaOffset?: bigint;
-  realmOffset?: bigint;
-  body: Uint8Array;
-  metadata?: Uint8Array;
-  timestamp: bigint;
-}): Uint8Array {
+function encodeStreamRecord(
+  options: {
+    offset: bigint;
+    areaOffset?: bigint;
+    realmOffset?: bigint;
+    globalOffset?: bigint;
+    body: Uint8Array;
+    metadata?: Uint8Array;
+    timestamp: bigint;
+  },
+  extended = false,
+): Uint8Array {
   const writer = createBufferWriter(256);
   writer.writeU64BE(options.offset);
   writeOptionalU64(writer, options.areaOffset);
   writeOptionalU64(writer, options.realmOffset);
+  if (extended) writeOptionalU64(writer, options.globalOffset);
   writer.writeU32BE(options.body.length);
   writer.writeBytes(options.body);
   writeOptionalBytes(writer, options.metadata);
@@ -79,7 +84,7 @@ function encodeReadResponse(
     switch (item.kind) {
       case "event":
         data.writeU8(0);
-        data.writeBytes(encodeStreamRecord(item.record));
+        data.writeBytes(encodeStreamRecord(item.record, cursor.global));
         break;
       case "filtered":
         data.writeU8(1);
@@ -486,6 +491,91 @@ describe("StreamCodec", () => {
   });
 
   describe("READ decoding", () => {
+    it.each([
+      "stream://*/orders/order",
+      "stream://*/orders/*",
+      "stream://*/*/order",
+      "stream://*/*/*",
+      "stream://**",
+    ])("should_classify_global_selector_%s", (selector) => {
+      expect(isGlobalSelector(selector)).toBe(true);
+    });
+
+    it.each([
+      "stream://tenant/orders/order",
+      "stream://tenant/orders/*",
+      "stream://tenant/*/order",
+      "stream://tenant/*/*",
+      "stream://tenant/**",
+    ])("should_not_classify_realm_selector_%s_as_global", (selector) => {
+      expect(isGlobalSelector(selector)).toBe(false);
+    });
+
+    it.each(["stream://*/orders/order", "stream://*/orders/*", "stream://*/*/order"])(
+      "should_decode_filtered_global_cursor_for_%s",
+      (selector) => {
+        // Arrange
+        const response = encodeReadResponse([], {
+          lastResourceOffset: 3n,
+          lastAreaOffset: 5n,
+          lastRealmOffset: 7n,
+          lastGlobalOffset: 11n,
+          cursorFingerprint: 13n,
+          capturedWatermark: 17n,
+          global: true,
+          hasMore: true,
+        });
+
+        // Act
+        const decoded = StreamCodec.decodeReadResponse(response, selector);
+
+        // Assert
+        expect(decoded.cursor).toEqual({
+          lastResourceOffset: 3n,
+          lastAreaOffset: 5n,
+          lastRealmOffset: 7n,
+          lastGlobalOffset: 11n,
+          cursorFingerprint: 13n,
+          capturedWatermark: 17n,
+          hasMore: true,
+        });
+      },
+    );
+
+    it.each(["stream://*/orders/order", "stream://*/orders/*", "stream://*/*/order"])(
+      "should_decode_filtered_global_event_for_%s",
+      (selector) => {
+        // Arrange
+        const response = encodeReadResponse(
+          [
+            {
+              kind: "event",
+              route: "stream://tenant/orders/order",
+              record: {
+                route: "stream://tenant/orders/order",
+                offset: 3n,
+                areaOffset: 5n,
+                realmOffset: 7n,
+                globalOffset: 11n,
+                body: testData("record"),
+                timestamp: 13n,
+              },
+            },
+          ],
+          { lastResourceOffset: 3n, lastGlobalOffset: 11n, global: true, hasMore: false },
+        );
+
+        // Act
+        const decoded = StreamCodec.decodeReadResponse(response, selector);
+
+        // Assert
+        expect(decoded.items[0]).toMatchObject({
+          kind: "event",
+          record: { globalOffset: 11n },
+        });
+      },
+    );
+
     it("should_decode_read_response_with_records", () => {
       // Arrange
       const response = encodeReadResponse(

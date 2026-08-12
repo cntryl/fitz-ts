@@ -1,4 +1,5 @@
 export type RouteShapeOptions = { allowBareRoute?: boolean };
+export type StreamSelectorScope = "resource" | "area" | "realm" | "global";
 
 const maxWireBytes = 65_535;
 
@@ -49,10 +50,14 @@ export function isRegistrationPatternShape(
 }
 
 export function isStreamSelectorShape(route: string): boolean {
+  return classifyStreamSelectorScope(route) !== undefined;
+}
+
+export function classifyStreamSelectorScope(route: string): StreamSelectorScope | undefined {
   const start = pathStart(route, "stream", false);
-  if (start < 0) return false;
-  if (new TextEncoder().encode(route).length > 512) return false;
-  if (route === "stream://**") return true;
+  if (start < 0) return undefined;
+  if (new TextEncoder().encode(route).length > 512) return undefined;
+  if (route === "stream://**") return "global";
   const segments = route.slice(start).split("/");
   if (
     segments.length === 2 &&
@@ -61,8 +66,8 @@ export function isStreamSelectorShape(route: string): boolean {
     segments[0] !== "*" &&
     !segments[0].includes("*")
   )
-    return true;
-  if (segments.length !== 3 || segments.some((segment) => segment.length === 0)) return false;
+    return "realm";
+  if (segments.length !== 3 || segments.some((segment) => segment.length === 0)) return undefined;
   const realm = segments[0]!;
   const area = segments[1]!;
   const resource = segments[2]!;
@@ -71,7 +76,13 @@ export function isStreamSelectorShape(route: string): boolean {
   // Every segment may be a whole-segment wildcard.  The broker supports the
   // complete selector matrix, including wildcard realms (for example
   // stream://*/orders/created and stream://*/*/created).
-  return [realm, area, resource].every((segment) => literal(segment) || wild(segment));
+  if (![realm, area, resource].every((segment) => literal(segment) || wild(segment))) {
+    return undefined;
+  }
+  if (realm === "*") return "global";
+  if (area === "*") return "realm";
+  if (resource === "*") return "area";
+  return "resource";
 }
 
 export function routeMatchesPattern(route: string, pattern: string): boolean {

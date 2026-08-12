@@ -91,6 +91,39 @@ describe("Stream integration", () => {
       expect(Buffer.from(records[0].body).toString()).toBe("alpha");
     });
 
+    it("should read filtered realm-wildcard streams on the global cursor axis", async () => {
+      // Arrange
+      const f = new TestFixture(transport, authMode);
+      await f.connectOrFail();
+      const area = f.uniqueArea();
+      const resource = f.uniqueResource();
+      const otherArea = f.uniqueArea();
+      const routes = [
+        `stream://${f.uniqueRealm()}/${area}/${resource}`,
+        `stream://${f.uniqueRealm()}/${area}/${resource}`,
+        `stream://${f.uniqueRealm()}/${otherArea}/${resource}`,
+      ];
+      for (const [index, route] of routes.entries()) {
+        const session = await f.client().stream.begin(route);
+        await session.append(0n, b(`record-${index}`));
+        await session.commit("Sync");
+      }
+
+      // Act
+      const page = await f.client().stream.readPage(`stream://*/${area}/${resource}`, 0n, 100);
+
+      // Assert
+      const records = page.items.flatMap((item) => (item.kind === "event" ? [item.record] : []));
+      expect(records.map((record) => Buffer.from(record.body).toString())).toEqual([
+        "record-0",
+        "record-1",
+      ]);
+      expect(records.every((record) => record.globalOffset !== undefined)).toBe(true);
+      expect(page.cursor.lastGlobalOffset).toBeDefined();
+      expect(page.cursor.cursorFingerprint).toBeDefined();
+      expect(page.cursor.capturedWatermark).toBeDefined();
+    });
+
     it("should reject append when expected offset is mismatched", async () => {
       const f = new TestFixture(transport, authMode);
       await f.connectOrFail();

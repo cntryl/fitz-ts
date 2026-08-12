@@ -126,6 +126,20 @@ void records;
 void page.cursor.lastResourceOffset;
 ```
 
+Stream selectors continue on the cursor axis selected by their canonical shape:
+
+| Selector shape                                                                      | Cursor/order axis |
+| ----------------------------------------------------------------------------------- | ----------------- |
+| `stream://{realm}/{area}/{resource}`                                                | resource          |
+| `stream://{realm}/{area}/*`                                                         | area              |
+| `stream://{realm}/*/{resource}`, `stream://{realm}/*/*`, or `stream://{realm}/**`   | realm             |
+| `stream://*/{area}/{resource}`, `stream://*/{area}/*`, or `stream://*/*/{resource}` | global            |
+| `stream://*/*/*` or `stream://**`                                                   | global            |
+
+Every fixed-depth selector with `*` in the realm segment uses the extended global
+record and cursor layout, including `globalOffset`, `lastGlobalOffset`,
+`cursorFingerprint`, and `capturedWatermark` when those optional values are present.
+
 ## Concurrency Notes
 
 - Different domains can operate concurrently on one client connection.

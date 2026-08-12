@@ -17,7 +17,7 @@ import type {
   RequestPort,
   RetryExecutionPort,
 } from "../base";
-import { StreamCodec, isGlobalSelector } from "./codec";
+import { StreamCodec } from "./codec";
 import {
   StreamSession,
   StreamRecord,
@@ -44,7 +44,7 @@ import {
   MSG_STREAM_UNSUBSCRIBE,
   MSG_STREAM_NOTIFY,
 } from "../../frame/types";
-import { isRouteShape, isStreamSelectorShape } from "../_routes";
+import { classifyStreamSelectorScope, isRouteShape, isStreamSelectorShape } from "../_routes";
 import { restoreMapEntriesAtomically } from "../internal/restore";
 import { createKeyedSingleFlight } from "../internal/keyed-single-flight";
 import { formatStatusName } from "../internal/status";
@@ -276,7 +276,7 @@ export function createStreamClient(connection: StreamConnectionPort): StreamClie
         // `page.items.length > 0` left the loop re-requesting the exact
         // same window forever in that case. Only the yield itself needs to
         // wait for actual records.
-        offset = streamCursorOffset(route, page.cursor) + 1n;
+        offset = streamNextOffset(route, offset, page.cursor);
         cursorFingerprint = page.cursor.cursorFingerprint;
         capturedWatermark = page.cursor.capturedWatermark;
         const records = StreamCodec.flattenStreamReadItems(page.items);
@@ -564,23 +564,28 @@ export function createStreamClient(connection: StreamConnectionPort): StreamClie
   };
 }
 
-function streamCursorOffset(route: string, cursor: StreamReadPage["cursor"]): bigint {
+export function streamNextOffset(
+  route: string,
+  currentOffset: bigint,
+  cursor: StreamReadPage["cursor"],
+): bigint {
   // Reuse the same canonical classifier the codec uses to decide whether a
   // page even carries lastGlobalOffset/cursorFingerprint/capturedWatermark
   // — matching it here (rather than re-guessing from string suffixes) is
   // what keeps both "stream://**" and its "stream://*/*/*" alias treated
   // as global, instead of the alias silently falling through as
   // realm-scoped.
-  if (isGlobalSelector(route)) {
-    return cursor.lastGlobalOffset ?? cursor.lastResourceOffset;
+  const scope = classifyStreamSelectorScope(route);
+  if (scope === "global") {
+    return cursor.lastGlobalOffset === undefined ? currentOffset : cursor.lastGlobalOffset + 1n;
   }
   // `{realm}/**` is the documented alias for `{realm}/*/*` — both must
   // resolve to the realm axis, not fall through to the resource default.
-  if (route.endsWith("/**") || route.endsWith("/*/*")) {
-    return cursor.lastRealmOffset ?? cursor.lastResourceOffset;
+  if (scope === "realm") {
+    return (cursor.lastRealmOffset ?? cursor.lastResourceOffset) + 1n;
   }
-  if (route.endsWith("/*")) return cursor.lastAreaOffset ?? cursor.lastResourceOffset;
-  return cursor.lastResourceOffset;
+  if (scope === "area") return (cursor.lastAreaOffset ?? cursor.lastResourceOffset) + 1n;
+  return cursor.lastResourceOffset + 1n;
 }
 
 export * from "./types";
