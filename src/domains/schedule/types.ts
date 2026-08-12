@@ -8,6 +8,7 @@ import {
   ErrCodeScheduleInvalidSubscription,
   ErrCodeScheduleSubscriptionLimit,
 } from "../../core/errors";
+import { createSubscriptionHandle } from "../internal/subscription-handle";
 
 /**
  * ScheduleEntry represents a schedule returned by a list page
@@ -51,33 +52,9 @@ export interface ScheduleSubscription extends AsyncDisposable {
 
 export function createScheduleSubscription(
   unsubscribeFn: () => Promise<void>,
+  signal?: AbortSignal,
 ): ScheduleSubscription {
-  let active = true;
-  let pending: Promise<void> | undefined;
-  const unsubscribe = async (): Promise<void> => {
-    if (!active) return pending;
-    active = false;
-    pending = unsubscribeFn().catch((error: unknown) => {
-      active = true;
-      throw error;
-    });
-    try {
-      await pending;
-    } finally {
-      pending = undefined;
-    }
-  };
-
-  return {
-    unsubscribe,
-    async [Symbol.asyncDispose](): Promise<void> {
-      try {
-        await unsubscribe();
-      } catch {
-        // Disposal is explicitly best effort.
-      }
-    },
-  };
+  return createSubscriptionHandle<ScheduleSubscription>(unsubscribeFn, signal);
 }
 
 export interface ScheduleCreateResponse {

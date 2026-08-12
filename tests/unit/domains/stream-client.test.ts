@@ -369,7 +369,7 @@ describe("StreamClient", () => {
     });
   });
 
-  it("rejects two-page logical non-progress even when hasMore remains true", async () => {
+  it("allows one stagnant page and rejects two consecutive stagnant pages", async () => {
     const readResponse = encodeWrappedReadResponse(
       [
         {
@@ -386,6 +386,7 @@ describe("StreamClient", () => {
       fromOffset: 0n,
       mode: "replay",
     });
+    await expect(iterator.next()).resolves.toMatchObject({ done: false });
     await expect(iterator.next()).resolves.toMatchObject({ done: false });
     await expect(iterator.next()).rejects.toMatchObject({ code: "STREAM_READ_STALLED" });
   });

@@ -271,13 +271,7 @@ export function createScheduleClient(connection: ScheduleConnectionPort): Schedu
 
     subscription.handlers.set(handlerId, handler);
     pendingNotifications.flush(subId);
-    const handle = createScheduleSubscription(async () => unsubscribe(pattern, handlerId));
-    if (signal) {
-      const onAbort = (): void => void handle[Symbol.asyncDispose]();
-      if (signal.aborted) onAbort();
-      else signal.addEventListener("abort", onAbort, { once: true });
-    }
-    return handle;
+    return createScheduleSubscription(async () => unsubscribe(pattern, handlerId), signal);
   };
 
   const unsubscribe = async (pattern: string, handlerId: number): Promise<void> => {

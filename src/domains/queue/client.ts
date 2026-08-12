@@ -146,6 +146,17 @@ export function createQueueClient(connection: QueueConnectionPort): QueueClient 
 
   const enqueue = async (route: string, options: EnqueueOptions): Promise<void> => {
     assertQueueRoute(route);
+    const runtimeOptions = options as EnqueueOptions & {
+      priority?: unknown;
+      ttlMs?: unknown;
+      delayMs?: unknown;
+    };
+    if ("priority" in runtimeOptions || "ttlMs" in runtimeOptions || "delayMs" in runtimeOptions) {
+      throw new QueueError(
+        "enqueue() does not support priority, ttlMs, or delayMs; use delaySeconds",
+        "UNSUPPORTED_OPTION",
+      );
+    }
     await runWithRetry(
       {
         domain: "queue",
@@ -317,13 +328,7 @@ export function createQueueClient(connection: QueueConnectionPort): QueueClient 
     subscription.handlers.set(handlerId, handler);
     pendingNotifications.flush(subId);
 
-    const handle = createQueueSubscription(async () => unsubscribe(pattern, handlerId));
-    if (signal) {
-      const onAbort = (): void => void handle[Symbol.asyncDispose]();
-      if (signal.aborted) onAbort();
-      else signal.addEventListener("abort", onAbort, { once: true });
-    }
-    return handle;
+    return createQueueSubscription(async () => unsubscribe(pattern, handlerId), signal);
   };
 
   const unsubscribe = async (pattern: string, handlerId: number): Promise<void> => {

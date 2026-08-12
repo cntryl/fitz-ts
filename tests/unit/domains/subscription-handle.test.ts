@@ -4,8 +4,43 @@ import {
   awaitPendingUnsubscribe,
   createGenerationCounter,
   createLiveSubIdGetter,
+  createSubscriptionHandle,
   isCurrentEmptyState,
 } from "../../../src/domains/internal/subscription-handle";
+
+describe("createSubscriptionHandle", () => {
+  it("shares one wire unsubscribe across concurrent callers", async () => {
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let calls = 0;
+    const handle = createSubscriptionHandle(async () => {
+      calls += 1;
+      await gate;
+    });
+
+    const first = handle.unsubscribe();
+    const second = handle.unsubscribe();
+    expect(calls).toBe(1);
+    release();
+    await Promise.all([first, second]);
+    expect(calls).toBe(1);
+  });
+
+  it("uses abort to dispose once and removes the listener after explicit unsubscribe", async () => {
+    const controller = new AbortController();
+    let calls = 0;
+    const handle = createSubscriptionHandle(async () => {
+      calls += 1;
+    }, controller.signal);
+
+    await handle.unsubscribe();
+    controller.abort();
+    await Promise.resolve();
+    expect(calls).toBe(1);
+  });
+});
 
 describe("createGenerationCounter", () => {
   it("returns a strictly increasing sequence starting at 1", () => {

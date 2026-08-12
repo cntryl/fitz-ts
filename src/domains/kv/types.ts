@@ -2,6 +2,8 @@
  * KV domain types.
  */
 
+import { createSubscriptionHandle } from "../internal/subscription-handle";
+
 export type TxMode = "ReadOnly" | "ReadWrite";
 export type DurabilityMode = "Buffered" | "Sync";
 
@@ -37,32 +39,11 @@ export interface KvSubscription extends AsyncDisposable {
   unsubscribe(): Promise<void>;
 }
 
-export function createKvSubscription(unsubscribeFn: () => Promise<void>): KvSubscription {
-  let active = true;
-  let pending: Promise<void> | undefined;
-  const unsubscribe = async (): Promise<void> => {
-    if (!active) return pending;
-    active = false;
-    pending = unsubscribeFn().catch((error: unknown) => {
-      active = true;
-      throw error;
-    });
-    try {
-      await pending;
-    } finally {
-      pending = undefined;
-    }
-  };
-  return {
-    unsubscribe,
-    async [Symbol.asyncDispose](): Promise<void> {
-      try {
-        await unsubscribe();
-      } catch {
-        // Disposal is explicitly best effort.
-      }
-    },
-  };
+export function createKvSubscription(
+  unsubscribeFn: () => Promise<void>,
+  signal?: AbortSignal,
+): KvSubscription {
+  return createSubscriptionHandle<KvSubscription>(unsubscribeFn, signal);
 }
 
 export interface KvBeginResponse {

@@ -255,13 +255,7 @@ export function createKvClient(connection: KvConnectionPort): KvClient {
 
     const handlerId = nextHandlerId++;
     state.handlers.set(handlerId, handler);
-    const handle = createKvSubscription(async () => unsubscribe(pattern, handlerId));
-    if (options?.signal) {
-      const onAbort = (): void => void handle[Symbol.asyncDispose]();
-      if (options.signal.aborted) onAbort();
-      else options.signal.addEventListener("abort", onAbort, { once: true });
-    }
-    return handle;
+    return createKvSubscription(async () => unsubscribe(pattern, handlerId), options?.signal);
   };
 
   const notifications = (

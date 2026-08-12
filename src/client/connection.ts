@@ -102,6 +102,7 @@ export function createConnection(
   const maxInFlightRequests = options.maxInFlightRequests ?? 256;
   const maxRequestQueueSize = options.maxRequestQueueSize ?? 1024;
   const observability = options.observability;
+  const closeReceiveBudgetMs = 200;
 
   let transport: Transport | null = null;
   let state: ConnectionState = ConnectionState.Disconnected;
@@ -263,6 +264,10 @@ export function createConnection(
 
     const activeReceiveLoop = receiveLoop;
     receiveLoop = null;
+    // Observe the receive loop before closing the transport. A custom
+    // transport may reject close() and later reject receive(); neither
+    // rejection may escape teardown as an unhandled promise.
+    const settledReceiveLoop = activeReceiveLoop?.catch(() => undefined);
     const activeTransport = transport;
     transport = null;
     let transportClosed = false;
@@ -274,8 +279,14 @@ export function createConnection(
         () => false,
       );
     }
-    if (activeReceiveLoop && transportClosed) {
-      await activeReceiveLoop.catch(() => undefined);
+    if (settledReceiveLoop && transportClosed) {
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(resolve, closeReceiveBudgetMs);
+        void settledReceiveLoop.then(() => {
+          clearTimeout(timer);
+          resolve();
+        });
+      });
     }
 
     await asyncHandlerDispatcher.drain();

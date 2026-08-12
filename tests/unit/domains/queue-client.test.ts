@@ -413,6 +413,22 @@ describe("QueueClient enqueue", () => {
     ).resolves.toBeUndefined();
     expect(connection.requests).toHaveLength(1);
   });
+
+  it.each(["priority", "ttlMs", "delayMs"])(
+    "rejects removed %s options supplied by untyped callers",
+    async (removedOption) => {
+      const connection = new FakeQueueConnection();
+      const client = createQueueClient(connection);
+
+      await expect(
+        client.enqueue("queue://realm/area/resource", {
+          body: new Uint8Array([1]),
+          [removedOption]: 5,
+        } as never),
+      ).rejects.toMatchObject({ code: "QUEUE_UNSUPPORTED_OPTION" });
+      expect(connection.requests).toHaveLength(0);
+    },
+  );
 });
 
 describe("QueueClient reserve", () => {

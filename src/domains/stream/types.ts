@@ -7,6 +7,7 @@
  */
 
 import "../../core/async-dispose";
+import { createSubscriptionHandle } from "../internal/subscription-handle";
 
 /**
  * Stream record with offset, timestamp, and payload
@@ -149,33 +150,11 @@ export interface StreamSubscription extends AsyncDisposable {
   unsubscribe(): Promise<void>;
 }
 
-export function createStreamSubscription(unsubscribeFn: () => Promise<void>): StreamSubscription {
-  let active = true;
-  let pending: Promise<void> | undefined;
-  const unsubscribe = async (): Promise<void> => {
-    if (!active) return pending;
-    active = false;
-    pending = unsubscribeFn().catch((error: unknown) => {
-      active = true;
-      throw error;
-    });
-    try {
-      await pending;
-    } finally {
-      pending = undefined;
-    }
-  };
-
-  return {
-    unsubscribe,
-    async [Symbol.asyncDispose](): Promise<void> {
-      try {
-        await unsubscribe();
-      } catch {
-        // Disposal is explicitly best effort.
-      }
-    },
-  };
+export function createStreamSubscription(
+  unsubscribeFn: () => Promise<void>,
+  signal?: AbortSignal,
+): StreamSubscription {
+  return createSubscriptionHandle<StreamSubscription>(unsubscribeFn, signal);
 }
 
 /**

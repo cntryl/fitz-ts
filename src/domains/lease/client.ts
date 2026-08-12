@@ -466,13 +466,7 @@ export function createLeaseClient(connection: LeaseConnectionPort): LeaseClient 
     }
 
     subscription.handlers.set(handlerId, handler);
-    const handle = createLeaseSubscription(async () => unsubscribe(route, handlerId));
-    if (signal) {
-      const onAbort = (): void => void handle[Symbol.asyncDispose]();
-      if (signal.aborted) onAbort();
-      else signal.addEventListener("abort", onAbort, { once: true });
-    }
-    return handle;
+    return createLeaseSubscription(async () => unsubscribe(route, handlerId), signal);
   };
 
   const unsubscribe = async (route: string, handlerId: number): Promise<void> => {

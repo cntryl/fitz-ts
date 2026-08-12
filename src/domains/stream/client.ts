@@ -234,7 +234,6 @@ export function createStreamClient(connection: StreamConnectionPort): StreamClie
       let offset = options.fromOffset;
       let cursorFingerprint: bigint | undefined;
       let capturedWatermark: bigint | undefined;
-      let previousContinuationOffset: bigint | undefined;
       let stalledPages = 0;
 
       while (true) {
@@ -260,13 +259,12 @@ export function createStreamClient(connection: StreamConnectionPort): StreamClie
         capturedWatermark = page.cursor.capturedWatermark;
         const records = StreamCodec.flattenStreamReadItems(page.items);
 
-        if (page.cursor.hasMore && previousContinuationOffset === nextOffset) {
+        if (page.cursor.hasMore && nextOffset <= fromOffset) {
           stalledPages += 1;
-          if (stalledPages >= 1) throw new StreamReadStalledError(route, fromOffset);
+          if (stalledPages >= 2) throw new StreamReadStalledError(route, fromOffset);
         } else {
           stalledPages = 0;
         }
-        previousContinuationOffset = page.cursor.hasMore ? nextOffset : undefined;
         offset = nextOffset;
 
         yield Object.freeze({
@@ -418,13 +416,7 @@ export function createStreamClient(connection: StreamConnectionPort): StreamClie
 
     subscription.handlers.set(handlerId, handler);
     pendingNotifications.flush(subId);
-    const handle = createStreamSubscription(async () => unsubscribe(pattern, handlerId));
-    if (signal) {
-      const onAbort = (): void => void handle[Symbol.asyncDispose]();
-      if (signal.aborted) onAbort();
-      else signal.addEventListener("abort", onAbort, { once: true });
-    }
-    return handle;
+    return createStreamSubscription(async () => unsubscribe(pattern, handlerId), signal);
   };
 
   const unsubscribe = async (pattern: string, handlerId: number): Promise<void> => {

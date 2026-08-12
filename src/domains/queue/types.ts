@@ -4,6 +4,7 @@
  */
 
 import type { DisconnectListenerPort, RequestPort } from "../base";
+import { createSubscriptionHandle } from "../internal/subscription-handle";
 import { QueueCodec } from "./codec";
 import { QueueError } from "../../core/errors";
 import { MSG_QUEUE_EXTEND, MSG_QUEUE_COMPLETE } from "../../frame/types";
@@ -104,33 +105,11 @@ export interface QueueSubscription extends AsyncDisposable {
   unsubscribe(): Promise<void>;
 }
 
-export function createQueueSubscription(unsubscribeFn: () => Promise<void>): QueueSubscription {
-  let active = true;
-  let pending: Promise<void> | undefined;
-  const unsubscribe = async (): Promise<void> => {
-    if (!active) return pending;
-    active = false;
-    pending = unsubscribeFn().catch((error: unknown) => {
-      active = true;
-      throw error;
-    });
-    try {
-      await pending;
-    } finally {
-      pending = undefined;
-    }
-  };
-
-  return {
-    unsubscribe,
-    async [Symbol.asyncDispose](): Promise<void> {
-      try {
-        await unsubscribe();
-      } catch {
-        // Disposal is explicitly best effort.
-      }
-    },
-  };
+export function createQueueSubscription(
+  unsubscribeFn: () => Promise<void>,
+  signal?: AbortSignal,
+): QueueSubscription {
+  return createSubscriptionHandle<QueueSubscription>(unsubscribeFn, signal);
 }
 
 /**

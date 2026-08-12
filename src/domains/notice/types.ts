@@ -3,6 +3,8 @@
  * Per fitz-go/internal/domains/notice/notice.go
  */
 
+import { createSubscriptionHandle } from "../internal/subscription-handle";
+
 /**
  * Received notification message
  */
@@ -23,33 +25,11 @@ export interface NoticeSubscription extends AsyncDisposable {
   unsubscribe(): Promise<void>;
 }
 
-export function createNoticeSubscription(unsubscribeFn: () => Promise<void>): NoticeSubscription {
-  let active = true;
-  let pending: Promise<void> | undefined;
-  const unsubscribe = async (): Promise<void> => {
-    if (!active) return pending;
-    active = false;
-    pending = unsubscribeFn().catch((error: unknown) => {
-      active = true;
-      throw error;
-    });
-    try {
-      await pending;
-    } finally {
-      pending = undefined;
-    }
-  };
-
-  return {
-    unsubscribe,
-    async [Symbol.asyncDispose](): Promise<void> {
-      try {
-        await unsubscribe();
-      } catch {
-        // Disposal is explicitly best effort.
-      }
-    },
-  };
+export function createNoticeSubscription(
+  unsubscribeFn: () => Promise<void>,
+  signal?: AbortSignal,
+): NoticeSubscription {
+  return createSubscriptionHandle<NoticeSubscription>(unsubscribeFn, signal);
 }
 
 /**

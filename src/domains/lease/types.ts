@@ -4,6 +4,7 @@
  */
 
 import type { DisconnectListenerPort, RequestPort } from "../base";
+import { createSubscriptionHandle } from "../internal/subscription-handle";
 import { FitzError, LeaseError } from "../../core/errors";
 
 /**
@@ -25,33 +26,11 @@ export interface LeaseSubscription extends AsyncDisposable {
   unsubscribe(): Promise<void>;
 }
 
-export function createLeaseSubscription(unsubscribeFn: () => Promise<void>): LeaseSubscription {
-  let active = true;
-  let pending: Promise<void> | undefined;
-  const unsubscribe = async (): Promise<void> => {
-    if (!active) return pending;
-    active = false;
-    pending = unsubscribeFn().catch((error: unknown) => {
-      active = true;
-      throw error;
-    });
-    try {
-      await pending;
-    } finally {
-      pending = undefined;
-    }
-  };
-
-  return {
-    unsubscribe,
-    async [Symbol.asyncDispose](): Promise<void> {
-      try {
-        await unsubscribe();
-      } catch {
-        // Disposal is explicitly best effort.
-      }
-    },
-  };
+export function createLeaseSubscription(
+  unsubscribeFn: () => Promise<void>,
+  signal?: AbortSignal,
+): LeaseSubscription {
+  return createSubscriptionHandle<LeaseSubscription>(unsubscribeFn, signal);
 }
 
 /**

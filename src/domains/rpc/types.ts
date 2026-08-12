@@ -3,6 +3,8 @@
  * Per fitz-go/internal/domains/rpc/rpc.go
  */
 
+import { createSubscriptionHandle } from "../internal/subscription-handle";
+
 /**
  * Single response frame from a streaming RPC call
  */
@@ -43,24 +45,11 @@ export interface RpcSubscription extends AsyncDisposable {
   unsubscribe(): Promise<void>;
 }
 
-export function createRpcSubscription(unsubscribeFn: () => Promise<void>): RpcSubscription {
-  let active = true;
-  const unsubscribe = async (): Promise<void> => {
-    if (!active) return;
-    await unsubscribeFn();
-    active = false;
-  };
-
-  return {
-    unsubscribe,
-    async [Symbol.asyncDispose](): Promise<void> {
-      try {
-        await unsubscribe();
-      } catch {
-        // Disposal is explicitly best effort.
-      }
-    },
-  };
+export function createRpcSubscription(
+  unsubscribeFn: () => Promise<void>,
+  signal?: AbortSignal,
+): RpcSubscription {
+  return createSubscriptionHandle<RpcSubscription>(unsubscribeFn, signal);
 }
 
 /**
