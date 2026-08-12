@@ -63,5 +63,5 @@ jobs:
             test "$remote_integrity" = "sha512-$local_integrity"
             echo "Registry version already matches the attested artifact"
           else
-            npm publish "$TARBALL" --access public --provenance
+            npm publish "./$TARBALL" --access public --provenance
           fi
