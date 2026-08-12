@@ -129,7 +129,9 @@ jobs:
         with: { subject-path: "${{ steps.pack.outputs.path }}" }
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          { name: npm-tarball-$, { { github.sha } }, path: release/*.tgz, if-no-files-found: error }
+          name: npm-tarball-${{ github.sha }}
+          path: release/*.tgz
+          if-no-files-found: error
 
   verdict:
     if: always()
