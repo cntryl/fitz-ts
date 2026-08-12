@@ -42,7 +42,7 @@ describe("QueueCodec", () => {
       const route = "queue://test/tasks";
       const body = testData("delayed");
 
-      const encoded = QueueCodec.encodeEnqueue(route, body, { delayMs: 2500 });
+      const encoded = QueueCodec.encodeEnqueue(route, body, { delaySeconds: 2 });
       const reader = createBufferReader(encoded);
 
       expect(reader.readRoute()).toBe(route);

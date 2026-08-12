@@ -5,7 +5,14 @@ export default defineConfig({
     "*": "vp check --fix",
   },
   fmt: {
-    ignorePatterns: ["dist/**", "node_modules/**", "coverage/**", ".vitest/**", "artifacts/**"],
+    ignorePatterns: [
+      "dist/**",
+      "node_modules/**",
+      "coverage/**",
+      ".vitest/**",
+      "artifacts/**",
+      "docs/clients/spec/stream-read-conformance.json",
+    ],
   },
   lint: {
     ignorePatterns: ["dist/**", "node_modules/**", "coverage/**", ".vitest/**", "artifacts/**"],
@@ -25,7 +32,7 @@ export default defineConfig({
     deps: {
       neverBundle: ["ws"],
     },
-    sourcemap: true,
+    sourcemap: false,
     dts: false,
   },
   test: {

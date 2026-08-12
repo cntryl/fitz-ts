@@ -303,7 +303,7 @@ describe("Connection hardening integration", () => {
         received.push(Buffer.from(msg.body).toString());
       });
 
-      await publisher.client().notice.publish(route, b("before-reconnect"));
+      await publisher.client().notice.publish(route, { body: b("before-reconnect") });
       await sleep(400);
       expect(received).toContain("before-reconnect");
 
@@ -329,7 +329,7 @@ describe("Connection hardening integration", () => {
         received.push(`reconnected:${Buffer.from(msg.body).toString()}`);
       });
 
-      await publisher.client().notice.publish(route, b("after-reconnect"));
+      await publisher.client().notice.publish(route, { body: b("after-reconnect") });
       await sleep(500);
 
       expect(received).toContain("reconnected:after-reconnect");
@@ -364,10 +364,10 @@ describe("Connection hardening integration", () => {
       const workerSub = await worker
         .client()
         .rpc.registerWorker(route, async (_request, writer) => {
-          await writer.send(b("ok"), true);
+          await writer.end({ body: b("ok") });
         });
 
-      const iterator = await caller.client().rpc.call(route, b("before"), { timeoutMs: 5000 });
+      const iterator = caller.client().rpc.call(route, { body: b("before"), timeoutMs: 5000 });
       const firstFrame = await iterator.next();
       expect(firstFrame.done).toBe(false);
       expect(Buffer.from(firstFrame.value.body).toString()).toBe("ok");
@@ -384,7 +384,10 @@ describe("Connection hardening integration", () => {
         },
       });
 
-      const nextIterator = await caller.client().rpc.call(route, b("after"), { timeoutMs: 5000 });
+      const nextIterator = caller.client().rpc.call(route, {
+        body: b("after"),
+        timeoutMs: 5000,
+      });
       const secondFrame = await nextIterator.next();
       expect(secondFrame.done).toBe(false);
       expect(Buffer.from(secondFrame.value.body).toString()).toBe("ok");
@@ -468,7 +471,7 @@ describe("Client ownership integration", () => {
           received.push(Buffer.from(msg.body).toString());
         });
 
-        await publisher.client().notice.publish(route, b("before"));
+        await publisher.client().notice.publish(route, { body: b("before") });
         await sleep(400);
         expect(received).toEqual(["before"]);
         await proxy.goDown();
@@ -503,7 +506,7 @@ describe("Client ownership integration", () => {
         expect(subscriber.notice).toBe(noticeClient);
         expect(subscriber.lease).toBe(leaseClient);
 
-        await publisher.client().notice.publish(route, b("after"));
+        await publisher.client().notice.publish(route, { body: b("after") });
         await vi.waitFor(() => {
           expect(received.filter((value) => value === "after")).toHaveLength(1);
         });

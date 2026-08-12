@@ -165,7 +165,7 @@ describe("Transport integration", () => {
         });
         await sleep(150);
 
-        await publisher.client().notice.publish(route, Buffer.from("before-disconnect"));
+        await publisher.client().notice.publish(route, { body: Buffer.from("before-disconnect") });
         await sleep(500);
         expect(received).toEqual(["before-disconnect"]);
 
@@ -174,7 +174,7 @@ describe("Transport integration", () => {
         const reconnected = new TestFixture(transport, authMode);
         await reconnected.connectOrFail();
 
-        await publisher.client().notice.publish(route, Buffer.from("after-disconnect"));
+        await publisher.client().notice.publish(route, { body: Buffer.from("after-disconnect") });
         await sleep(750);
 
         expect(received).toEqual(["before-disconnect"]);
@@ -254,14 +254,15 @@ describe("Transport integration", () => {
       const route = worker.uniqueRoute("rpc");
       const sub = await worker.client().rpc.registerWorker(route, async (_req, writer) => {
         await sleep(250);
-        await writer.send(Buffer.from("late"), true);
+        await writer.end({ body: Buffer.from("late") });
       });
       const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
       const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
 
       try {
         const controller = new AbortController();
-        const iterator = await caller.client().rpc.call(route, Buffer.from("block"), {
+        const iterator = caller.client().rpc.call(route, {
+          body: Buffer.from("block"),
           timeoutMs: 10000,
           signal: controller.signal,
         });
@@ -290,14 +291,15 @@ describe("Transport integration", () => {
       const route = worker.uniqueRoute("rpc");
       await worker.client().rpc.registerWorker(route, async (_req, writer) => {
         await sleep(200);
-        await writer.send(Buffer.from("too-late"), true);
+        await writer.end({ body: Buffer.from("too-late") });
       });
       const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
       const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
 
       try {
         const controller = new AbortController();
-        const iterator = await caller.client().rpc.call(route, Buffer.from("block"), {
+        const iterator = caller.client().rpc.call(route, {
+          body: Buffer.from("block"),
           timeoutMs: 10000,
           signal: controller.signal,
         });

@@ -28,10 +28,11 @@ describe("RPC integration", () => {
 
       const route = worker.uniqueRoute("rpc");
       const sub = await worker.client().rpc.registerWorker(route, async (req, writer) => {
-        await writer.send(req.body, true);
+        await writer.end({ body: req.body });
       });
 
-      const iterator = await caller.client().rpc.call(route, b("ping"), {
+      const iterator = caller.client().rpc.call(route, {
+        body: b("ping"),
         timeoutMs: 5000,
       });
       const frames = await collectResponses(iterator);
@@ -48,13 +49,14 @@ describe("RPC integration", () => {
 
       const route = worker.uniqueRoute("rpc");
       const sub = await worker.client().rpc.registerWorker(route, async (_req, writer) => {
-        await writer.send(Uint8Array.of(0), false);
-        await writer.send(Uint8Array.of(1), false);
-        await writer.send(Uint8Array.of(2), false);
-        await writer.send(new Uint8Array(), true);
+        await writer.write({ body: Uint8Array.of(0) });
+        await writer.write({ body: Uint8Array.of(1) });
+        await writer.write({ body: Uint8Array.of(2) });
+        await writer.end();
       });
 
-      const iterator = await caller.client().rpc.call(route, b("stream-me"), {
+      const iterator = caller.client().rpc.call(route, {
+        body: b("stream-me"),
         timeoutMs: 5000,
       });
       const frames = await collectResponses(iterator);
@@ -68,7 +70,8 @@ describe("RPC integration", () => {
       const f = new TestFixture(transport, authMode);
       await f.connectOrFail();
 
-      const iterator = await f.client().rpc.call(f.uniqueRoute("rpc"), b("nobody-home"), {
+      const iterator = f.client().rpc.call(f.uniqueRoute("rpc"), {
+        body: b("nobody-home"),
         timeoutMs: 500,
       });
 
@@ -88,15 +91,16 @@ describe("RPC integration", () => {
 
       const sub1 = await worker1.client().rpc.registerWorker(route, async (req, writer) => {
         seen.w1 += 1;
-        await writer.send(req.body, true);
+        await writer.end({ body: req.body });
       });
       const sub2 = await worker2.client().rpc.registerWorker(route, async (req, writer) => {
         seen.w2 += 1;
-        await writer.send(req.body, true);
+        await writer.end({ body: req.body });
       });
 
       for (let i = 0; i < 4; i += 1) {
-        const iterator = await caller.client().rpc.call(route, b("req"), {
+        const iterator = caller.client().rpc.call(route, {
+          body: b("req"),
           timeoutMs: 5000,
         });
         await collectResponses(iterator);
@@ -115,12 +119,12 @@ describe("RPC integration", () => {
 
       const route = worker.uniqueRoute("rpc");
       const sub = await worker.client().rpc.registerWorker(route, async (req, writer) => {
-        await writer.send(req.body, true);
+        await writer.end({ body: req.body });
       });
 
       const [framesA, framesB] = await Promise.all([
-        caller.client().rpc.call(route, b("req-A"), { timeoutMs: 5000 }).then(collectResponses),
-        caller.client().rpc.call(route, b("req-B"), { timeoutMs: 5000 }).then(collectResponses),
+        collectResponses(caller.client().rpc.call(route, { body: b("req-A"), timeoutMs: 5000 })),
+        collectResponses(caller.client().rpc.call(route, { body: b("req-B"), timeoutMs: 5000 })),
       ]);
 
       expect(framesA[0]?.body).toBe("req-A");
@@ -136,17 +140,19 @@ describe("RPC integration", () => {
 
       const route = worker.uniqueRoute("rpc");
       const sub = await worker.client().rpc.registerWorker(route, async (req, writer) => {
-        await writer.send(req.body, true);
+        await writer.end({ body: req.body });
       });
 
-      const first = await caller.client().rpc.call(route, b("alive"), {
+      const first = caller.client().rpc.call(route, {
+        body: b("alive"),
         timeoutMs: 5000,
       });
       await collectResponses(first);
 
       await sub.unsubscribe();
 
-      const dead = await caller.client().rpc.call(route, b("dead"), {
+      const dead = caller.client().rpc.call(route, {
+        body: b("dead"),
         timeoutMs: 500,
       });
 

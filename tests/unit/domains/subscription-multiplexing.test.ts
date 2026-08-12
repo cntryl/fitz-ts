@@ -256,12 +256,12 @@ describe("Subscription Multiplexing", () => {
       client.subscribe(pattern, async () => undefined),
       client.subscribe(pattern, async () => undefined),
     ]);
-    expect(first.subId).toBe(7n);
-    expect(second.subId).toBe(7n);
+    expect(first).not.toHaveProperty("subId");
+    expect(second).not.toHaveProperty("subId");
     expect(connection.countRequests(MSG_KV_SUBSCRIBE)).toBe(2);
     await connection.reconnect();
-    expect(first.subId).toBe(8n);
-    expect(second.subId).toBe(8n);
+    expect(first).not.toHaveProperty("subId");
+    expect(second).not.toHaveProperty("subId");
     await first.unsubscribe();
     expect(connection.countRequests(MSG_KV_UNSUBSCRIBE)).toBe(0);
     await second.unsubscribe();
@@ -287,8 +287,8 @@ describe("Subscription Multiplexing", () => {
     });
     const [first, second] = await Promise.all([firstPromise, secondPromise]);
 
-    expect(first.subId).toBe(11n);
-    expect(second.subId).toBe(11n);
+    expect(first).not.toHaveProperty("subId");
+    expect(second).not.toHaveProperty("subId");
     expect(connection.countRequests(MSG_NOTICE_SUBSCRIBE)).toBe(1);
 
     connection.emitNotification(
@@ -312,7 +312,7 @@ describe("Subscription Multiplexing", () => {
 
     await connection.reconnect();
     expect(connection.countRequests(MSG_NOTICE_SUBSCRIBE)).toBe(2);
-    expect(second.subId).toBe(12n);
+    expect(second).not.toHaveProperty("subId");
 
     connection.emitNotification(
       MSG_NOTICE_NOTIFY,
@@ -377,8 +377,8 @@ describe("Subscription Multiplexing", () => {
     });
     const [first, second] = await Promise.all([firstPromise, secondPromise]);
 
-    expect(first.subId).toBe(21n);
-    expect(second.subId).toBe(21n);
+    expect(first).not.toHaveProperty("subId");
+    expect(second).not.toHaveProperty("subId");
     expect(connection.countRequests(MSG_QUEUE_SUBSCRIBE)).toBe(1);
 
     connection.emitNotification(MSG_QUEUE_NOTIFY, encodeQueueNotification(21n, pattern));
@@ -430,8 +430,8 @@ describe("Subscription Multiplexing", () => {
     });
     const [first, second] = await Promise.all([firstPromise, secondPromise]);
 
-    expect(first.subId).toBe(31n);
-    expect(second.subId).toBe(31n);
+    expect(first).not.toHaveProperty("subId");
+    expect(second).not.toHaveProperty("subId");
     expect(connection.countRequests(MSG_LEASE_SUBSCRIBE)).toBe(1);
 
     connection.emitNotification(MSG_LEASE_NOTIFY, encodeLeaseNotification(31n, route));
@@ -449,8 +449,8 @@ describe("Subscription Multiplexing", () => {
 
     await connection.reconnect();
     expect(connection.countRequests(MSG_LEASE_SUBSCRIBE)).toBe(2);
-    expect(first.subId).toBe(32n);
-    expect(second.subId).toBe(32n);
+    expect(first).not.toHaveProperty("subId");
+    expect(second).not.toHaveProperty("subId");
 
     connection.emitNotification(MSG_LEASE_NOTIFY, encodeLeaseNotification(32n, route));
     await connection.flushHandlers();
@@ -480,8 +480,8 @@ describe("Subscription Multiplexing", () => {
     });
     const [first, second] = await Promise.all([firstPromise, secondPromise]);
 
-    expect(first.subId).toBe(41n);
-    expect(second.subId).toBe(41n);
+    expect(first).not.toHaveProperty("subId");
+    expect(second).not.toHaveProperty("subId");
     expect(connection.countRequests(MSG_SCHEDULE_SUBSCRIBE)).toBe(1);
 
     connection.emitNotification(
@@ -505,8 +505,8 @@ describe("Subscription Multiplexing", () => {
 
     await connection.reconnect();
     expect(connection.countRequests(MSG_SCHEDULE_SUBSCRIBE)).toBe(2);
-    expect(first.subId).toBe(42n);
-    expect(second.subId).toBe(42n);
+    expect(first).not.toHaveProperty("subId");
+    expect(second).not.toHaveProperty("subId");
 
     connection.emitNotification(
       MSG_SCHEDULE_NOTIFY,
@@ -561,8 +561,8 @@ describe("Subscription Multiplexing", () => {
     });
     const [first, second] = await Promise.all([firstPromise, secondPromise]);
 
-    expect(first.subId).toBe(51n);
-    expect(second.subId).toBe(51n);
+    expect(first).not.toHaveProperty("subId");
+    expect(second).not.toHaveProperty("subId");
     expect(connection.countRequests(MSG_STREAM_SUBSCRIBE)).toBe(1);
 
     connection.emitNotification(

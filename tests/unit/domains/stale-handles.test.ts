@@ -55,7 +55,7 @@ describe("stale handles", () => {
 
     connection.emitDisconnect();
 
-    await expect(item.extend(30)).rejects.toMatchObject({
+    await expect(item.extend({ leaseSeconds: 30 })).rejects.toMatchObject({
       code: "QUEUE_ITEM_CLOSED",
     });
     await expect(item.complete()).rejects.toMatchObject({
@@ -69,7 +69,7 @@ describe("stale handles", () => {
 
     connection.emitDisconnect();
 
-    await expect(lease.extend(30)).rejects.toMatchObject({
+    await expect(lease.extend({ ttlSeconds: 30 })).rejects.toMatchObject({
       code: "LEASE_CLOSED",
     });
     await expect(lease.release()).rejects.toMatchObject({
@@ -81,7 +81,7 @@ describe("stale handles", () => {
     const connection = new LeaseConnection();
     const lease = createLease(1n, 2n, "lease://realm/area/resource", connection);
 
-    await Promise.all([lease.extend(30), lease.extend(30)]);
+    await Promise.all([lease.extend({ ttlSeconds: 30 }), lease.extend({ ttlSeconds: 30 })]);
 
     expect(connection.tokens).toEqual([1n, 2n]);
   });

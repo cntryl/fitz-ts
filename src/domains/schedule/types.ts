@@ -14,7 +14,6 @@ import {
  * Per CLIENT_SPEC: route, cron, payload
  */
 export interface ScheduleEntry {
-  id: string; // Route as identity
   route: string;
   cron: string;
   deliveryMode: ScheduleDeliveryMode;
@@ -46,23 +45,38 @@ export type ScheduleHandler = (notification: ScheduleNotification) => void | Pro
 /**
  * ScheduleSubscription represents an active subscription to schedule fire notifications
  */
-export type ScheduleSubscription = ReturnType<typeof createScheduleSubscription>;
+export interface ScheduleSubscription extends AsyncDisposable {
+  unsubscribe(): Promise<void>;
+}
 
 export function createScheduleSubscription(
-  getSubId: () => bigint,
-  pattern: string,
   unsubscribeFn: () => Promise<void>,
-) {
+): ScheduleSubscription {
+  let active = true;
+  let pending: Promise<void> | undefined;
   const unsubscribe = async (): Promise<void> => {
-    return unsubscribeFn();
+    if (!active) return pending;
+    active = false;
+    pending = unsubscribeFn().catch((error: unknown) => {
+      active = true;
+      throw error;
+    });
+    try {
+      await pending;
+    } finally {
+      pending = undefined;
+    }
   };
 
   return {
-    get subId(): bigint {
-      return getSubId();
-    },
-    pattern,
     unsubscribe,
+    async [Symbol.asyncDispose](): Promise<void> {
+      try {
+        await unsubscribe();
+      } catch {
+        // Disposal is explicitly best effort.
+      }
+    },
   };
 }
 
@@ -73,7 +87,7 @@ export interface ScheduleCreateResponse {
 export type ScheduleCancelResponse = Record<string, never>;
 
 export interface ScheduleListPage {
-  entries: ScheduleEntry[];
+  entries: readonly ScheduleEntry[];
   totalCount: bigint;
 }
 

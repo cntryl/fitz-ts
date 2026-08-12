@@ -19,23 +19,36 @@ export type NoticeHandler = (msg: NoticeMsg) => Promise<void> | void;
 /**
  * Active notice subscription
  */
-export type NoticeSubscription = ReturnType<typeof createNoticeSubscription>;
+export interface NoticeSubscription extends AsyncDisposable {
+  unsubscribe(): Promise<void>;
+}
 
-export function createNoticeSubscription(
-  getSubId: () => bigint,
-  pattern: string,
-  unsubscribeFn: () => Promise<void>,
-) {
+export function createNoticeSubscription(unsubscribeFn: () => Promise<void>): NoticeSubscription {
+  let active = true;
+  let pending: Promise<void> | undefined;
   const unsubscribe = async (): Promise<void> => {
-    await unsubscribeFn();
+    if (!active) return pending;
+    active = false;
+    pending = unsubscribeFn().catch((error: unknown) => {
+      active = true;
+      throw error;
+    });
+    try {
+      await pending;
+    } finally {
+      pending = undefined;
+    }
   };
 
   return {
-    get subId(): bigint {
-      return getSubId();
-    },
-    pattern,
     unsubscribe,
+    async [Symbol.asyncDispose](): Promise<void> {
+      try {
+        await unsubscribe();
+      } catch {
+        // Disposal is explicitly best effort.
+      }
+    },
   };
 }
 

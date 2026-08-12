@@ -200,7 +200,10 @@ describe("lease acquisition", () => {
     const connection = new FakeLeaseConnection([acquireResponse(2, 0n)]);
     const client = createLeaseClient(connection as unknown as Connection);
 
-    const pending = client.acquire("lease://realm/area/resource", 30, { waitSeconds: 12 });
+    const pending = client.acquire("lease://realm/area/resource", {
+      ttlSeconds: 30,
+      waitSeconds: 12,
+    });
     await Promise.resolve();
     connection.handlers.get(MSG_LEASE_ACQUIRE)?.(acquireResponse(0, 42n));
 
@@ -218,8 +221,8 @@ describe("lease acquisition", () => {
     const connection = new FakeLeaseConnection([acquireResponse(2, 0n), acquireResponse(0, 99n)]);
     const client = createLeaseClient(connection as unknown as Connection);
 
-    const first = client.acquire("lease://realm/area/first", 30, { waitSeconds: 12 });
-    const second = client.acquire("lease://realm/area/second", 30);
+    const first = client.acquire("lease://realm/area/first", { ttlSeconds: 30, waitSeconds: 12 });
+    const second = client.acquire("lease://realm/area/second", { ttlSeconds: 30 });
     await Promise.resolve();
     await Promise.resolve();
     expect(connection.requests).toHaveLength(1);
@@ -233,7 +236,10 @@ describe("lease acquisition", () => {
   it("should preserve broker message given deferred timeout when acquisition completes", async () => {
     const connection = new FakeLeaseConnection([acquireResponse(2, 0n)]);
     const client = createLeaseClient(connection as unknown as Connection);
-    const pending = client.acquire("lease://realm/area/resource", 30, { waitSeconds: 1 });
+    const pending = client.acquire("lease://realm/area/resource", {
+      ttlSeconds: 30,
+      waitSeconds: 1,
+    });
     await Promise.resolve();
     const message = new TextEncoder().encode("lease wait timed out");
     const error = new Uint8Array(1 + 4 + 4 + message.length);
@@ -260,10 +266,14 @@ describe("withLease", () => {
     connection.respond(MSG_LEASE_RELEASE, plainSuccessResponse());
     const client = createLeaseClient(connection as unknown as Connection);
 
-    await client.withLease("lease://realm/area/resource", 30, (_signal, authority) => {
-      expect(authority.fencingToken).toBe(42n);
-      expect(Object.isFrozen(authority)).toBe(true);
-    });
+    await client.withLease(
+      "lease://realm/area/resource",
+      (_signal, authority) => {
+        expect(authority.fencingToken).toBe(42n);
+        expect(Object.isFrozen(authority)).toBe(true);
+      },
+      { ttlSeconds: 30 },
+    );
   });
 
   it("uses the token returned by an AlreadyHeld acquisition", async () => {
@@ -272,9 +282,13 @@ describe("withLease", () => {
     connection.respond(MSG_LEASE_RELEASE, plainSuccessResponse());
     const client = createLeaseClient(connection as unknown as Connection);
 
-    await client.withLease("lease://realm/area/resource", 30, (_signal, authority) => {
-      expect(authority.fencingToken).toBe(43n);
-    });
+    await client.withLease(
+      "lease://realm/area/resource",
+      (_signal, authority) => {
+        expect(authority.fencingToken).toBe(43n);
+      },
+      { ttlSeconds: 30 },
+    );
   });
 
   it("passes the final granted token after a queued acquisition", async () => {
@@ -284,11 +298,10 @@ describe("withLease", () => {
     let observedToken: bigint | undefined;
     const pending = client.withLease(
       "lease://realm/area/resource",
-      30,
       (_signal, authority) => {
         observedToken = authority.fencingToken;
       },
-      { waitForAvailability: true, waitSeconds: 12 },
+      { ttlSeconds: 30, waitSeconds: 12 },
     );
     await Promise.resolve();
     connection.handlers.get(MSG_LEASE_ACQUIRE)?.(acquireResponse(0, 42n));
@@ -315,12 +328,16 @@ describe("withLease", () => {
       callbackStarted = resolve;
     });
 
-    const pending = client.withLease(route, 3, async (_signal, authority) => {
-      callbackStarted();
-      expect(authority.fencingToken).toBe(42n);
-      await callbackCanFinish;
-      expect(authority.fencingToken).toBe(42n);
-    });
+    const pending = client.withLease(
+      route,
+      async (_signal, authority) => {
+        callbackStarted();
+        expect(authority.fencingToken).toBe(42n);
+        await callbackCanFinish;
+        expect(authority.fencingToken).toBe(42n);
+      },
+      { ttlSeconds: 3 },
+    );
 
     await started;
     await vi.advanceTimersByTimeAsync(1000);
@@ -341,9 +358,13 @@ describe("withLease", () => {
     let invoked = false;
 
     await expect(
-      client.withLease("lease://realm/area/resource", 30, () => {
-        invoked = true;
-      }),
+      client.withLease(
+        "lease://realm/area/resource",
+        () => {
+          invoked = true;
+        },
+        { ttlSeconds: 30 },
+      ),
     ).rejects.toThrow("lease held");
     expect(invoked).toBe(false);
   });
@@ -355,11 +376,10 @@ describe("withLease", () => {
 
     const pending = client.withLease(
       "lease://realm/area/resource",
-      30,
       () => {
         invoked = true;
       },
-      { waitForAvailability: true, waitSeconds: 1 },
+      { ttlSeconds: 30, waitSeconds: 1 },
     );
     await Promise.resolve();
     connection.handlers.get(MSG_LEASE_ACQUIRE)?.(errorResponse(5006, "lease wait timed out"));
@@ -379,11 +399,10 @@ describe("withLease", () => {
     await expect(
       client.withLease(
         "lease://realm/area/resource",
-        30,
         () => {
           invoked = true;
         },
-        { signal: controller.signal },
+        { ttlSeconds: 30, signal: controller.signal },
       ),
     ).rejects.toBe(reason);
     expect(invoked).toBe(false);
@@ -430,7 +449,7 @@ describe("withLease", () => {
     const connection = new FailingReleaseConnection();
     const client = createLeaseClient(connection as unknown as Connection);
 
-    const pending = client.withLease("lease://realm/area/resource", 30, () => "ok");
+    const pending = client.withLease("lease://realm/area/resource", () => "ok", { ttlSeconds: 30 });
 
     // Pre-fix, isManagedCancellation() misclassified this as a benign
     // cancellation (since `lifecycle.signal` is always aborted by the time
@@ -451,15 +470,19 @@ describe("withLease", () => {
       releaseCallbackStarted = resolve;
     });
 
-    const pending = client.withLease("lease://realm/area/resource", 30, async (signal) => {
-      releaseCallbackStarted();
-      await new Promise<void>((resolve) => {
-        signal.addEventListener("abort", () => {
-          observedAbort = true;
-          resolve();
+    const pending = client.withLease(
+      "lease://realm/area/resource",
+      async (signal) => {
+        releaseCallbackStarted();
+        await new Promise<void>((resolve) => {
+          signal.addEventListener("abort", () => {
+            observedAbort = true;
+            resolve();
+          });
         });
-      });
-    });
+      },
+      { ttlSeconds: 30 },
+    );
 
     // Wait until acquire() has fully resolved and the callback has actually
     // started (registered its abort listener) before disconnecting — not
@@ -506,7 +529,7 @@ describe("lease subscribe/unsubscribe", () => {
     // B's subscribe() only resolved once the unsubscribe settled, and it
     // sent its own fresh wire SUBSCRIBE — a genuinely new subId, not a
     // reuse of A's now-torn-down subscription.
-    expect(subB.subId).toBe(99n);
+    expect(subB).not.toHaveProperty("subId");
 
     connection.emitNotification(
       MSG_LEASE_NOTIFY,
@@ -556,16 +579,16 @@ describe("lease subscribe/unsubscribe", () => {
     const client = createLeaseClient(connection as unknown as Connection);
 
     const subA = await client.subscribe("lease://realm/area/resource", async () => undefined);
-    expect(subA.subId).toBe(1n);
+    expect(subA).not.toHaveProperty("subId");
 
     connection.respond(MSG_LEASE_UNSUBSCRIBE, plainSuccessResponse());
     await subA.unsubscribe();
 
     connection.respond(MSG_LEASE_SUBSCRIBE, subscribeResponse(2n));
     const subB = await client.subscribe("lease://realm/area/resource", async () => undefined);
-    expect(subB.subId).toBe(2n);
+    expect(subB).not.toHaveProperty("subId");
 
-    expect(subA.subId).toBe(1n);
+    expect(subA).not.toHaveProperty("subId");
 
     connection.respond(MSG_LEASE_UNSUBSCRIBE, plainSuccessResponse());
     await subB.unsubscribe();
@@ -580,12 +603,12 @@ describe("lease subscribe/unsubscribe", () => {
       "lease://realm/area/resource",
       async () => undefined,
     );
-    expect(subscription.subId).toBe(1n);
+    expect(subscription).not.toHaveProperty("subId");
 
     connection.respond(MSG_LEASE_SUBSCRIBE, subscribeResponse(2n));
     await connection.reconnect();
 
-    expect(subscription.subId).toBe(2n);
+    expect(subscription).not.toHaveProperty("subId");
 
     connection.respond(MSG_LEASE_UNSUBSCRIBE, plainSuccessResponse());
     await subscription.unsubscribe();

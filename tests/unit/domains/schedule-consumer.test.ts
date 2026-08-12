@@ -84,12 +84,12 @@ class FakeScheduleConsumerConnection {
   }
 }
 
-describe("ScheduleClient waitForNotifications", () => {
+describe("ScheduleClient notifications", () => {
   it("yields notifications in order", async () => {
     const connection = new FakeScheduleConsumerConnection();
     const client = createScheduleClient(connection);
     const iterator = client
-      .waitForNotifications("schedule://realm/area/resource/run")
+      .notifications("schedule://realm/area/resource/run")
       [Symbol.asyncIterator]();
 
     const first = iterator.next();
@@ -117,7 +117,7 @@ describe("ScheduleClient waitForNotifications", () => {
     const connection = new FakeScheduleConsumerConnection();
     const client = createScheduleClient(connection);
     const iterator = client
-      .waitForNotifications("schedule://realm/area/resource/run")
+      .notifications("schedule://realm/area/resource/run")
       [Symbol.asyncIterator]();
 
     const pending = iterator.next();
@@ -138,7 +138,7 @@ describe("ScheduleClient waitForNotifications", () => {
     const client = createScheduleClient(connection);
     const controller = new AbortController();
     const iterator = client
-      .waitForNotifications("schedule://realm/area/resource/run", {
+      .notifications("schedule://realm/area/resource/run", {
         signal: controller.signal,
       })
       [Symbol.asyncIterator]();
@@ -149,7 +149,7 @@ describe("ScheduleClient waitForNotifications", () => {
     });
     controller.abort();
 
-    await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+    await expect(pending).resolves.toMatchObject({ done: true });
     expect(connection.unsubscribeCount).toBe(1);
   });
 
@@ -157,16 +157,12 @@ describe("ScheduleClient waitForNotifications", () => {
     const connection = new FakeScheduleConsumerConnection();
     const client = createScheduleClient(connection);
     const iterator = client
-      .waitForNotifications("schedule://realm/area/resource/run")
+      .notifications("schedule://realm/area/resource/run")
       [Symbol.asyncIterator]();
 
     const pending = iterator.next();
-    // Wait until waitForNotifications has actually reached its own
-    // onDisconnect registration (which happens after the subscribe() call
-    // it awaits internally resolves) — not just until the notify handler
-    // is registered, which happens earlier, inside subscribe() itself.
     await vi.waitFor(() => {
-      expect(connection.disconnectListeners.size).toBeGreaterThan(0);
+      expect(connection.handlers.has(MSG_SCHEDULE_NOTIFY)).toBe(true);
     });
 
     connection.disconnect();
@@ -191,12 +187,12 @@ describe("ScheduleClient waitForNotifications", () => {
     const connection = new FakeScheduleConsumerConnection();
     const client = createScheduleClient(connection);
     const iterator = client
-      .waitForNotifications("schedule://realm/area/resource/run")
+      .notifications("schedule://realm/area/resource/run")
       [Symbol.asyncIterator]();
 
     const pending = iterator.next();
     await vi.waitFor(() => {
-      expect(connection.disconnectListeners.size).toBeGreaterThan(0);
+      expect(connection.handlers.has(MSG_SCHEDULE_NOTIFY)).toBe(true);
     });
 
     // A disconnect immediately followed by a successful reconnect must not
@@ -250,7 +246,7 @@ describe("ScheduleClient subscribe/unsubscribe", () => {
     // B's subscribe() only resolved once the unsubscribe settled, and it
     // sent its own fresh wire SUBSCRIBE — a genuinely new subId, not a
     // reuse of A's now-torn-down subscription.
-    expect(subB.subId).toBe(22n);
+    expect(subB).not.toHaveProperty("subId");
 
     connection.notify(new Uint8Array([9]), 22n);
     await Promise.resolve();
@@ -267,12 +263,12 @@ describe("ScheduleClient subscribe/unsubscribe", () => {
     const client = createScheduleClient(connection);
 
     const subscription = await client.subscribe("schedule://realm/area/*/*", async () => undefined);
-    expect(subscription.subId).toBe(1n);
+    expect(subscription).not.toHaveProperty("subId");
 
     connection.subscribeSubId = 2n;
     await connection.reconnect();
 
-    expect(subscription.subId).toBe(2n);
+    expect(subscription).not.toHaveProperty("subId");
   });
 });
 

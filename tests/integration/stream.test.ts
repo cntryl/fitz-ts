@@ -6,6 +6,20 @@ import type { StreamFilterSet } from "../../src/domains/stream/types";
 
 const b = (value: string) => Buffer.from(value);
 
+async function collectBatches(
+  iterator: AsyncIterableIterator<import("../../src").StreamReadBatch>,
+) {
+  const batches: import("../../src").StreamReadBatch[] = [];
+  for await (const batch of iterator) batches.push(batch);
+  return batches;
+}
+
+async function collectRecords(
+  iterator: AsyncIterableIterator<import("../../src").StreamReadBatch>,
+) {
+  return (await collectBatches(iterator)).flatMap((batch) => batch.records);
+}
+
 describe("Stream integration", () => {
   runWithBothTransports(({ transport, authMode }) => {
     it("should append records and commit a stream session", async () => {
@@ -13,9 +27,9 @@ describe("Stream integration", () => {
       await f.connectOrFail();
 
       const session = await f.client().stream.begin(f.uniqueRoute("stream"));
-      const offset1 = await session.append(0n, b("record-1"));
-      const offset2 = await session.append(offset1 + 1n, b("record-2"));
-      await session.commit("Sync");
+      const offset1 = await session.append({ expectedOffset: 0n, body: b("record-1") });
+      const offset2 = await session.append({ expectedOffset: offset1 + 1n, body: b("record-2") });
+      await session.commit({ mode: "Sync" });
 
       expect(offset1).toBeGreaterThanOrEqual(0n);
       expect(offset2).toBeGreaterThanOrEqual(offset1);
@@ -27,12 +41,14 @@ describe("Stream integration", () => {
 
       const route = f.uniqueRoute("stream");
       const session = await f.client().stream.begin(route);
-      await session.append(0n, Uint8Array.of(0));
-      await session.append(1n, Uint8Array.of(1));
-      await session.append(2n, Uint8Array.of(2));
-      await session.commit("Sync");
+      await session.append({ expectedOffset: 0n, body: Uint8Array.of(0) });
+      await session.append({ expectedOffset: 1n, body: Uint8Array.of(1) });
+      await session.append({ expectedOffset: 2n, body: Uint8Array.of(2) });
+      await session.commit({ mode: "Sync" });
 
-      const records = await f.client().stream.read(route, 0n, 10);
+      const records = await collectRecords(
+        f.client().stream.read(route, { fromOffset: 0n, mode: "replay", batchSize: 10 }),
+      );
       expect(records.length).toBeGreaterThanOrEqual(3);
       for (let i = 1; i < records.length; i += 1) {
         expect(records[i].offset).toBeGreaterThan(records[i - 1].offset);
@@ -45,14 +61,21 @@ describe("Stream integration", () => {
 
       const route = f.uniqueRoute("stream");
       const session = await f.client().stream.begin(route);
-      await session.append(0n, b("alpha"), { discriminator: "proj.alpha" });
-      await session.append(1n, b("beta"), { discriminator: "audit.beta" });
-      await session.commit("Sync");
+      await session.append({ expectedOffset: 0n, body: b("alpha"), discriminator: "proj.alpha" });
+      await session.append({ expectedOffset: 1n, body: b("beta"), discriminator: "audit.beta" });
+      await session.commit({ mode: "Sync" });
 
       const filter: StreamFilterSet = {
         clauses: [{ kind: "Equals", value: "proj.alpha" }],
       };
-      const records = await f.client().stream.read(route, 0n, 10, { filter });
+      const records = await collectRecords(
+        f.client().stream.read(route, {
+          fromOffset: 0n,
+          mode: "replay",
+          batchSize: 10,
+          filter,
+        }),
+      );
 
       expect(records).toHaveLength(1);
       expect(Buffer.from(records[0].body).toString()).toBe("alpha");
@@ -64,15 +87,25 @@ describe("Stream integration", () => {
 
       const route = f.uniqueRoute("stream");
       const session = await f.client().stream.begin(route);
-      await session.append(0n, b("alpha"), { discriminator: "proj.alpha" });
-      await session.append(1n, b("beta"), { discriminator: "audit.beta" });
-      await session.commit("Sync");
+      await session.append({ expectedOffset: 0n, body: b("alpha"), discriminator: "proj.alpha" });
+      await session.append({ expectedOffset: 1n, body: b("beta"), discriminator: "audit.beta" });
+      await session.commit({ mode: "Sync" });
 
       const filter: StreamFilterSet = {
         clauses: [{ kind: "Equals", value: "proj.alpha" }],
       };
 
-      const page = await f.client().stream.readPage(route, 0n, 10, { filter });
+      const result = await f
+        .client()
+        .stream.read(route, {
+          fromOffset: 0n,
+          mode: "replay",
+          batchSize: 10,
+          filter,
+        })
+        .next();
+      expect(result.done).toBe(false);
+      const page = result.value!;
       expect(page.items).toHaveLength(2);
       expect(page.items[0]).toMatchObject({ kind: "event" });
       expect(page.items[1]).toEqual({
@@ -81,12 +114,17 @@ describe("Stream integration", () => {
         offset: 1n,
         reason: "server_filter",
       });
-      expect(page.cursor).toMatchObject({
-        lastResourceOffset: 1n,
-        hasMore: false,
-      });
+      expect(page.nextOffset).toBe(2n);
+      expect(page.caughtUp).toBe(true);
 
-      const records = await f.client().stream.read(route, 0n, 10, { filter });
+      const records = await collectRecords(
+        f.client().stream.read(route, {
+          fromOffset: 0n,
+          mode: "replay",
+          batchSize: 10,
+          filter,
+        }),
+      );
       expect(records).toHaveLength(1);
       expect(Buffer.from(records[0].body).toString()).toBe("alpha");
     });
@@ -105,23 +143,38 @@ describe("Stream integration", () => {
       ];
       for (const [index, route] of routes.entries()) {
         const session = await f.client().stream.begin(route);
-        await session.append(0n, b(`record-${index}`));
-        await session.commit("Sync");
+        await session.append({ expectedOffset: 0n, body: b(`record-${index}`) });
+        await session.commit({ mode: "Sync" });
       }
 
       // Act
-      const page = await f.client().stream.readPage(`stream://*/${area}/${resource}`, 0n, 100);
+      const result = await f
+        .client()
+        .stream.read(`stream://*/${area}/${resource}`, {
+          fromOffset: 0n,
+          mode: "replay",
+          batchSize: 100,
+        })
+        .next();
+      expect(result.done).toBe(false);
+      const page = result.value!;
 
       // Assert
-      const records = page.items.flatMap((item) => (item.kind === "event" ? [item.record] : []));
-      expect(records.map((record) => Buffer.from(record.body).toString())).toEqual([
-        "record-0",
-        "record-1",
-      ]);
-      expect(records.every((record) => record.globalOffset !== undefined)).toBe(true);
-      expect(page.cursor.lastGlobalOffset).toBeDefined();
-      expect(page.cursor.cursorFingerprint).toBeDefined();
-      expect(page.cursor.capturedWatermark).toBeDefined();
+      const records = page.items.flatMap((item: import("../../src").StreamReadItem) =>
+        item.kind === "event" ? [item.record] : [],
+      );
+      expect(
+        records.map((record: import("../../src").StreamRecord) =>
+          Buffer.from(record.body).toString(),
+        ),
+      ).toEqual(["record-0", "record-1"]);
+      expect(
+        records.every(
+          (record: import("../../src").StreamRecord) => record.globalOffset !== undefined,
+        ),
+      ).toBe(true);
+      expect(page.nextOffset).toBeGreaterThan(0n);
+      expect(page.caughtUp).toBe(true);
     });
 
     it("should reject append when expected offset is mismatched", async () => {
@@ -130,11 +183,13 @@ describe("Stream integration", () => {
 
       const route = f.uniqueRoute("stream");
       const session = await f.client().stream.begin(route);
-      await session.append(0n, b("first"));
-      await session.commit("Sync");
+      await session.append({ expectedOffset: 0n, body: b("first") });
+      await session.commit({ mode: "Sync" });
 
       const wrongSession = await f.client().stream.begin(route);
-      await expect(wrongSession.append(0n, b("second"))).rejects.toBeTruthy();
+      await expect(
+        wrongSession.append({ expectedOffset: 0n, body: b("second") }),
+      ).rejects.toBeTruthy();
     });
 
     it("should discard uncommitted appends on rollback", async () => {
@@ -143,10 +198,12 @@ describe("Stream integration", () => {
 
       const route = f.uniqueRoute("stream");
       const session = await f.client().stream.begin(route);
-      await session.append(0n, b("ephemeral"));
+      await session.append({ expectedOffset: 0n, body: b("ephemeral") });
       await session.rollback();
 
-      const records = await f.client().stream.read(route, 0n, 10);
+      const records = await collectRecords(
+        f.client().stream.read(route, { fromOffset: 0n, mode: "replay", batchSize: 10 }),
+      );
       expect(records).toEqual([]);
     });
 
@@ -156,9 +213,9 @@ describe("Stream integration", () => {
 
       const route = f.uniqueRoute("stream");
       const session = await f.client().stream.begin(route);
-      await session.append(0n, b("first"));
-      await session.append(1n, b("last-one"));
-      await session.commit("Sync");
+      await session.append({ expectedOffset: 0n, body: b("first") });
+      await session.append({ expectedOffset: 1n, body: b("last-one") });
+      await session.commit({ mode: "Sync" });
 
       const record = await f.client().stream.peek(route);
       expect(record).not.toBeNull();
@@ -175,8 +232,8 @@ describe("Stream integration", () => {
 
       const route = f.uniqueRoute("stream");
       const session = await f.client().stream.begin(route);
-      await session.append(0n, b("data"));
-      await session.commit("Sync");
+      await session.append({ expectedOffset: 0n, body: b("data") });
+      await session.commit({ mode: "Sync" });
 
       const metadata = await f.client().stream.metadata(route);
       expect(metadata.recordCount).toBeGreaterThanOrEqual(1n);
@@ -188,12 +245,16 @@ describe("Stream integration", () => {
 
       const route = f.uniqueRoute("stream");
       const session = await f.client().stream.begin(route);
-      await session.append(0n, b("only"));
-      await session.commit("Sync");
+      await session.append({ expectedOffset: 0n, body: b("only") });
+      await session.commit({ mode: "Sync" });
 
-      const read = f.client().stream.read(route, 999999n, 10);
+      const read = f.client().stream.read(route, {
+        fromOffset: 999999n,
+        mode: "replay",
+        batchSize: 10,
+      });
       try {
-        const records = await read;
+        const records = await collectRecords(read);
         expect(records).toEqual([]);
       } catch (error) {
         expect(error).toBeTruthy();
@@ -242,8 +303,8 @@ describe("Stream integration", () => {
       });
 
       const session = await f.client().stream.begin(route);
-      await session.append(0n, b("notify"));
-      await session.commit("Sync");
+      await session.append({ expectedOffset: 0n, body: b("notify") });
+      await session.commit({ mode: "Sync" });
 
       await expect(notification).resolves.toMatchObject({
         route,

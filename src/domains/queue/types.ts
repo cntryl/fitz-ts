@@ -12,7 +12,12 @@ import { MSG_QUEUE_EXTEND, MSG_QUEUE_COMPLETE } from "../../frame/types";
  * Queue item represents a reserved queue message.
  * It carries the route and token required for `extend()` and `complete()`.
  */
-export type QueueItem = ReturnType<typeof createQueueItem>;
+export interface QueueItem {
+  readonly route: string;
+  readonly body: Uint8Array;
+  extend(options: { leaseSeconds: number; signal?: AbortSignal }): Promise<void>;
+  complete(options?: { signal?: AbortSignal }): Promise<void>;
+}
 
 export function createQueueItem(
   id: bigint,
@@ -34,10 +39,10 @@ export function createQueueItem(
     }
   };
 
-  const extend = async (leaseSecs: number, signal?: AbortSignal): Promise<void> => {
+  const extend = async (options: { leaseSeconds: number; signal?: AbortSignal }): Promise<void> => {
     ensureOpen();
-    const payload = QueueCodec.encodeExtend(route, id, token, leaseSecs);
-    const response = await connection.request(MSG_QUEUE_EXTEND, payload, signal);
+    const payload = QueueCodec.encodeExtend(route, id, token, options.leaseSeconds);
+    const response = await connection.request(MSG_QUEUE_EXTEND, payload, options.signal);
     const decoded = QueueCodec.decodeExtendResponse(response);
 
     if (decoded.status !== QueueStatus.Ok) {
@@ -52,10 +57,10 @@ export function createQueueItem(
     }
   };
 
-  const complete = async (signal?: AbortSignal): Promise<void> => {
+  const complete = async (options: { signal?: AbortSignal } = {}): Promise<void> => {
     ensureOpen();
     const requestPayload = QueueCodec.encodeComplete(route, id, token);
-    const response = await connection.request(MSG_QUEUE_COMPLETE, requestPayload, signal);
+    const response = await connection.request(MSG_QUEUE_COMPLETE, requestPayload, options.signal);
     const decoded = QueueCodec.decodeCompleteResponse(response);
 
     if (decoded.status !== QueueStatus.Ok) {
@@ -95,23 +100,36 @@ export type AvailabilityHandler = (notification: AvailabilityNotification) => vo
 /**
  * Queue availability subscription.
  */
-export type QueueSubscription = ReturnType<typeof createQueueSubscription>;
+export interface QueueSubscription extends AsyncDisposable {
+  unsubscribe(): Promise<void>;
+}
 
-export function createQueueSubscription(
-  getSubId: () => bigint,
-  pattern: string,
-  unsubscribeFn: () => Promise<void>,
-) {
+export function createQueueSubscription(unsubscribeFn: () => Promise<void>): QueueSubscription {
+  let active = true;
+  let pending: Promise<void> | undefined;
   const unsubscribe = async (): Promise<void> => {
-    await unsubscribeFn();
+    if (!active) return pending;
+    active = false;
+    pending = unsubscribeFn().catch((error: unknown) => {
+      active = true;
+      throw error;
+    });
+    try {
+      await pending;
+    } finally {
+      pending = undefined;
+    }
   };
 
   return {
-    get subId(): bigint {
-      return getSubId();
-    },
-    pattern,
     unsubscribe,
+    async [Symbol.asyncDispose](): Promise<void> {
+      try {
+        await unsubscribe();
+      } catch {
+        // Disposal is explicitly best effort.
+      }
+    },
   };
 }
 
@@ -131,19 +149,9 @@ export enum QueueStatus {
  * Options for enqueue operations.
  */
 export interface EnqueueOptions {
-  /**
-   * @deprecated Not yet wire-supported — the ENQUEUE frame has no byte
-   * range for priority. Setting this throws synchronously rather than
-   * silently being ignored.
-   */
-  priority?: number;
-  delayMs?: number;
-  /**
-   * @deprecated Not yet wire-supported — the ENQUEUE frame has no byte
-   * range for a TTL. Setting this throws synchronously rather than
-   * silently being ignored.
-   */
-  ttlMs?: number;
+  body: Uint8Array;
+  delaySeconds?: number;
+  signal?: AbortSignal;
 }
 
 /**

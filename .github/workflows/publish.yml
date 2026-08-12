@@ -2,71 +2,64 @@ name: Publish Package
 
 on:
   workflow_dispatch:
+    inputs:
+      sha:
+        description: Exact commit SHA from main to publish
+        required: true
+        type: string
 
 permissions:
+  actions: read
   contents: write
   id-token: write
-  packages: read
 
 jobs:
-  ci:
-    name: CI
-    uses: ./.github/workflows/ci.yml
-    permissions:
-      contents: read
-
   publish:
-    name: Publish
-    needs: ci
     runs-on: ubuntu-latest
-    timeout-minutes: 10
-
+    environment: npm
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v6
-
-      - name: Setup Node
-        uses: actions/setup-node@v6
-        with:
-          node-version: "lts/*"
-          cache: "npm"
-
-      - name: Compute release tag
-        id: version
-        uses: askrjs/actions/actions/compute-release-tag@main
-
-      - name: Check whether tag exists
-        id: tag_status
-        uses: askrjs/actions/actions/check-tag-exists@main
-        with:
-          tag: ${{ steps.version.outputs.tag }}
-
-      - name: Checkout existing tag
-        if: steps.tag_status.outputs.exists == 'true'
-        shell: bash
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with: { ref: "${{ inputs.sha }}", fetch-depth: 0 }
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with: { node-version: "24", registry-url: "https://registry.npmjs.org" }
+      - name: Verify exact main SHA and successful CI
+        env: { GH_TOKEN: "${{ github.token }}", RELEASE_SHA: "${{ inputs.sha }}" }
         run: |
-          tag='${{ steps.version.outputs.tag }}'
-          git fetch origin "refs/tags/$tag:refs/tags/$tag"
-          git checkout "$tag"
-
-      - name: Create release tag
-        if: steps.tag_status.outputs.exists != 'true'
-        uses: askrjs/actions/actions/create-tag@main
+          test "$(git rev-parse HEAD)" = "$RELEASE_SHA"
+          git merge-base --is-ancestor "$RELEASE_SHA" origin/main
+          run_id=$(gh run list --workflow CI --commit "$RELEASE_SHA" --status success --json databaseId --jq '.[0].databaseId')
+          test -n "$run_id"
+          echo "RUN_ID=$run_id" >> "$GITHUB_ENV"
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
         with:
-          tag: ${{ steps.version.outputs.tag }}
-
-      - name: Checkout created tag
-        if: steps.tag_status.outputs.exists != 'true'
-        shell: bash
+          {
+            name: "npm-tarball-${{ inputs.sha }}",
+            run-id: "${{ env.RUN_ID }}",
+            github-token: "${{ github.token }}",
+            path: release,
+          }
+      - name: Verify artifact and tag
         run: |
-          tag='${{ steps.version.outputs.tag }}'
-          git checkout "$tag"
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Build release
-        run: npm run build
-
-      - name: Publish to npm
-        run: npm publish --provenance --access public
+          tarball=$(find release -name '*.tgz' -type f)
+          test -n "$tarball"
+          version=$(node -p 'require("./package.json").version')
+          test "$version" = "0.0.18"
+          tag="v$version"
+          if git rev-parse "$tag" >/dev/null 2>&1; then
+            test "$(git rev-list -n1 "$tag")" = '${{ inputs.sha }}'
+          else
+            git tag -a "$tag" '${{ inputs.sha }}' -m "$tag"
+            git push origin "$tag"
+          fi
+          echo "TARBALL=$tarball" >> "$GITHUB_ENV"
+      - name: Publish exact attested artifact
+        env: { NODE_AUTH_TOKEN: "${{ secrets.NPM_TOKEN }}" }
+        run: |
+          remote_integrity=$(npm view @cntryl/fitz@0.0.18 dist.integrity 2>/dev/null || true)
+          local_integrity=$(openssl dgst -sha512 -binary "$TARBALL" | openssl base64 -A)
+          if test -n "$remote_integrity"; then
+            test "$remote_integrity" = "sha512-$local_integrity"
+            echo "Registry version already matches the attested artifact"
+          else
+            npm publish "$TARBALL" --access public --provenance
+          fi

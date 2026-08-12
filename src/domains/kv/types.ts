@@ -8,6 +8,7 @@ export type DurabilityMode = "Buffered" | "Sync";
 export interface KvBeginOptions {
   mode?: TxMode;
   durability: DurabilityMode;
+  signal?: AbortSignal;
 }
 
 export interface KvScanOptions {
@@ -15,12 +16,13 @@ export interface KvScanOptions {
   endKey?: Uint8Array;
   limit?: number;
   reverse?: boolean;
+  signal?: AbortSignal;
 }
 
 export type KvGetResult = { type: "found"; value: Uint8Array } | { type: "not-found" };
 
 export interface KvScanPage {
-  entries: Array<{ key: Uint8Array; value: Uint8Array }>;
+  entries: readonly { key: Uint8Array; value: Uint8Array }[];
   hasMore: boolean;
 }
 
@@ -31,19 +33,35 @@ export interface KvNotification {
 
 export type KvHandler = (notification: KvNotification) => void | Promise<void>;
 
-export type KvSubscription = ReturnType<typeof createKvSubscription>;
+export interface KvSubscription extends AsyncDisposable {
+  unsubscribe(): Promise<void>;
+}
 
-export function createKvSubscription(
-  getSubId: () => bigint,
-  pattern: string,
-  unsubscribeFn: () => Promise<void>,
-) {
+export function createKvSubscription(unsubscribeFn: () => Promise<void>): KvSubscription {
+  let active = true;
+  let pending: Promise<void> | undefined;
+  const unsubscribe = async (): Promise<void> => {
+    if (!active) return pending;
+    active = false;
+    pending = unsubscribeFn().catch((error: unknown) => {
+      active = true;
+      throw error;
+    });
+    try {
+      await pending;
+    } finally {
+      pending = undefined;
+    }
+  };
   return {
-    get subId(): bigint {
-      return getSubId();
+    unsubscribe,
+    async [Symbol.asyncDispose](): Promise<void> {
+      try {
+        await unsubscribe();
+      } catch {
+        // Disposal is explicitly best effort.
+      }
     },
-    pattern,
-    unsubscribe: unsubscribeFn,
   };
 }
 

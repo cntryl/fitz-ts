@@ -12,11 +12,13 @@ describe("Schedule integration", () => {
       const f = new TestFixture(transport, authMode);
       await f.connectOrFail();
 
-      const id = await f
-        .client()
-        .schedule.create(f.uniqueRoute("schedule"), "*/5 * * * *", "Broadcast", b("task-payload"));
-
-      expect(id.length).toBeGreaterThan(0);
+      await expect(
+        f.client().schedule.create(f.uniqueRoute("schedule"), {
+          cron: "*/5 * * * *",
+          deliveryMode: "Broadcast",
+          payload: b("task-payload"),
+        }),
+      ).resolves.toBeUndefined();
     });
 
     it("should reject invalid cron syntax", async () => {
@@ -24,9 +26,11 @@ describe("Schedule integration", () => {
       await f.connectOrFail();
 
       await expect(
-        f
-          .client()
-          .schedule.create(f.uniqueRoute("schedule"), "not a cron", "Broadcast", b("payload")),
+        f.client().schedule.create(f.uniqueRoute("schedule"), {
+          cron: "not a cron",
+          deliveryMode: "Broadcast",
+          payload: b("payload"),
+        }),
       ).rejects.toBeTruthy();
     });
 
@@ -35,7 +39,11 @@ describe("Schedule integration", () => {
       await f.connectOrFail();
 
       const route = f.uniqueRoute("schedule");
-      await f.client().schedule.create(route, "0 9 * * 1", "Broadcast", b("weekly"));
+      await f.client().schedule.create(route, {
+        cron: "0 9 * * 1",
+        deliveryMode: "Broadcast",
+        payload: b("weekly"),
+      });
       await expect(f.client().schedule.cancel(route)).resolves.toBeUndefined();
     });
 
@@ -45,12 +53,19 @@ describe("Schedule integration", () => {
 
       const route = f.uniqueRoute("schedule");
       const secondRoute = route.replace(/\/run$/, "/send");
-      await f.client().schedule.create(route, "0 9 * * 1", "Broadcast", b("s1"));
-      await f.client().schedule.create(secondRoute, "0 12 * * *", "Broadcast", b("s2"));
+      await f
+        .client()
+        .schedule.create(route, { cron: "0 9 * * 1", deliveryMode: "Broadcast", payload: b("s1") });
+      await f.client().schedule.create(secondRoute, {
+        cron: "0 12 * * *",
+        deliveryMode: "Broadcast",
+        payload: b("s2"),
+      });
 
-      const page = await f.client().schedule.listPage(undefined, 100n);
-      expect(Array.isArray(page.entries)).toBe(true);
-      expect(typeof page.totalCount).toBe("bigint");
+      const selector = route.replace(/\/[^/]+$/, "/*");
+      const first = await f.client().schedule.entries(selector, { pageSize: 100n }).next();
+      expect(first.done).toBe(false);
+      expect(Array.isArray(first.value)).toBe(true);
     });
 
     it("should tolerate cancel of a nonexistent schedule", async () => {
@@ -101,7 +116,11 @@ describe("Schedule integration", () => {
     });
 
     try {
-      await f.client().schedule.create(route, "* * * * *", "Broadcast", b("every-minute"));
+      await f.client().schedule.create(route, {
+        cron: "* * * * *",
+        deliveryMode: "Broadcast",
+        payload: b("every-minute"),
+      });
       await secondNotification;
 
       expect(receivedAt[1] - receivedAt[0]).toBeGreaterThanOrEqual(50_000);
@@ -139,7 +158,11 @@ describe("Schedule integration", () => {
     });
 
     try {
-      await f.client().schedule.create(route, cron, "Broadcast", b("constrained"));
+      await f.client().schedule.create(route, {
+        cron: cron,
+        deliveryMode: "Broadcast",
+        payload: b("constrained"),
+      });
       await notification;
 
       expect(new Date().getUTCHours()).toBe(hour);
@@ -163,7 +186,11 @@ describe("Schedule integration", () => {
     });
 
     try {
-      await f.client().schedule.create(route, "* * * * *", "Broadcast", b("not-yet"));
+      await f.client().schedule.create(route, {
+        cron: "* * * * *",
+        deliveryMode: "Broadcast",
+        payload: b("not-yet"),
+      });
       await sleep(2_000);
 
       expect(notifications).toBe(0);
@@ -183,9 +210,11 @@ describe("Schedule integration", () => {
       await f.connectOrFail();
 
       await expect(
-        f
-          .client()
-          .schedule.create(f.uniqueRoute("schedule"), "* * * * *", "Broadcast", b("forbidden")),
+        f.client().schedule.create(f.uniqueRoute("schedule"), {
+          cron: "* * * * *",
+          deliveryMode: "Broadcast",
+          payload: b("forbidden"),
+        }),
       ).rejects.toBeTruthy();
     });
   });

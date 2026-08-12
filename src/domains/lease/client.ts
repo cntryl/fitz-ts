@@ -5,6 +5,7 @@
 import { createDomainClient } from "../base";
 import type {
   AsyncDispatchPort,
+  BackgroundErrorPort,
   DisconnectListenerPort,
   NotificationPort,
   ReconnectListenerPort,
@@ -30,7 +31,6 @@ import {
 import {
   awaitPendingUnsubscribe,
   createGenerationCounter,
-  createLiveSubIdGetter,
   isCurrentEmptyState,
 } from "../internal/subscription-handle";
 import { LeaseCodec } from "./codec";
@@ -61,6 +61,7 @@ type LeaseSubscriptionState = {
 };
 
 type LeaseConnectionPort = RequestPort &
+  Partial<BackgroundErrorPort> &
   ReconnectListenerPort &
   DisconnectListenerPort &
   NotificationPort &
@@ -78,7 +79,7 @@ export interface LeaseClient {
    * `acquire()` for a completely unrelated route cannot even send its
    * request until this call's full lifecycle has resolved.
    */
-  acquire(route: string, ttlSecs: number, options?: LeaseAcquireOptions): Promise<Lease>;
+  acquire(route: string, options: LeaseAcquireOptions): Promise<Lease>;
   /**
    * Acquires a lease, runs `callback` while holding it, and releases it
    * afterward. Subject to the same cross-route serialization as
@@ -86,13 +87,16 @@ export interface LeaseClient {
    */
   withLease<T>(
     route: string,
-    ttlSecs: number,
     callback: (signal: AbortSignal, authority: LeaseAuthority) => T | Promise<T>,
-    options?: WithLeaseOptions,
+    options: WithLeaseOptions,
   ): Promise<T>;
-  query(route: string): Promise<LeaseInfo>;
-  subscribe(route: string, handler: ChangeHandler): Promise<LeaseSubscription>;
-  subscribeIterator(
+  query(route: string, options?: { signal?: AbortSignal }): Promise<LeaseInfo>;
+  subscribe(
+    route: string,
+    handler: ChangeHandler,
+    options?: { signal?: AbortSignal },
+  ): Promise<LeaseSubscription>;
+  notifications(
     route: string,
     options?: SubscriptionIteratorOptions,
   ): AsyncIterable<ChangeNotification>;
@@ -154,7 +158,7 @@ export function createLeaseClient(connection: LeaseConnectionPort): LeaseClient 
   const runAcquire = async (
     route: string,
     ttlSecs: number,
-    options: LeaseAcquireOptions = {},
+    options: LeaseAcquireOptions,
   ): Promise<{ lease: Lease; authority: LeaseAuthority }> => {
     assertExactLeaseRoute(route);
     assertLeaseTtl(ttlSecs);
@@ -220,7 +224,7 @@ export function createLeaseClient(connection: LeaseConnectionPort): LeaseClient 
   const acquireWithAuthority = (
     route: string,
     ttlSecs: number,
-    options: LeaseAcquireOptions = {},
+    options: LeaseAcquireOptions,
   ): Promise<{ lease: Lease; authority: LeaseAuthority }> => {
     const result = acquisitionTail.then(() => runAcquire(route, ttlSecs, options));
     acquisitionTail = result.then(
@@ -230,18 +234,15 @@ export function createLeaseClient(connection: LeaseConnectionPort): LeaseClient 
     return result;
   };
 
-  const acquire = async (
-    route: string,
-    ttlSecs: number,
-    options: LeaseAcquireOptions = {},
-  ): Promise<Lease> => (await acquireWithAuthority(route, ttlSecs, options)).lease;
+  const acquire = async (route: string, options: LeaseAcquireOptions): Promise<Lease> =>
+    (await acquireWithAuthority(route, options.ttlSeconds, options)).lease;
 
   const withLease = async <T>(
     route: string,
-    ttlSecs: number,
     callback: (signal: AbortSignal, authority: LeaseAuthority) => T | Promise<T>,
-    options: WithLeaseOptions = {},
+    options: WithLeaseOptions,
   ): Promise<T> => {
+    const ttlSecs = options.ttlSeconds;
     assertExactLeaseRoute(route);
     assertLeaseTtl(ttlSecs);
     if (options.signal?.aborted) {
@@ -249,7 +250,8 @@ export function createLeaseClient(connection: LeaseConnectionPort): LeaseClient 
     }
 
     const { lease, authority } = await acquireWithAuthority(route, ttlSecs, {
-      waitSeconds: options.waitForAvailability ? (options.waitSeconds ?? 30) : 0,
+      ttlSeconds: ttlSecs,
+      waitSeconds: options.waitSeconds ?? 0,
       signal: options.signal,
     });
 
@@ -286,7 +288,7 @@ export function createLeaseClient(connection: LeaseConnectionPort): LeaseClient 
           return;
         }
         try {
-          await lease.extend(ttlSecs);
+          await lease.extend({ ttlSeconds: ttlSecs });
         } catch (error) {
           leaseLoss = error;
           lifecycle.abort(
@@ -314,7 +316,7 @@ export function createLeaseClient(connection: LeaseConnectionPort): LeaseClient 
         const cleanup = new AbortController();
         timer = setTimeout(() => cleanup.abort(), 5000);
         try {
-          await lease.release(cleanup.signal);
+          await lease.release({ signal: cleanup.signal });
         } catch (error) {
           releaseFailure = error;
         } finally {
@@ -363,7 +365,10 @@ export function createLeaseClient(connection: LeaseConnectionPort): LeaseClient 
     }
   };
 
-  const query = async (route: string): Promise<LeaseInfo> => {
+  const query = async (
+    route: string,
+    options: { signal?: AbortSignal } = {},
+  ): Promise<LeaseInfo> => {
     assertExactLeaseRoute(route);
     return runWithRetry(
       {
@@ -373,7 +378,7 @@ export function createLeaseClient(connection: LeaseConnectionPort): LeaseClient 
       },
       async () => {
         const payload = LeaseCodec.encodeQuery(route);
-        const response = await requestFrame(MSG_LEASE_QUERY, payload);
+        const response = await requestFrame(MSG_LEASE_QUERY, payload, options.signal);
         const decoded = LeaseCodec.decodeQueryResponse(response);
         if (decoded.status !== 0) {
           throw new LeaseError(
@@ -394,7 +399,11 @@ export function createLeaseClient(connection: LeaseConnectionPort): LeaseClient 
     );
   };
 
-  const subscribe = async (route: string, handler: ChangeHandler): Promise<LeaseSubscription> => {
+  const subscribe = async (
+    route: string,
+    handler: ChangeHandler,
+    options?: { signal?: AbortSignal },
+  ): Promise<LeaseSubscription> => {
     assertExactLeaseRoute(route);
     initNotifyHandler();
 
@@ -409,15 +418,15 @@ export function createLeaseClient(connection: LeaseConnectionPort): LeaseClient 
           await awaitPendingUnsubscribe(existing);
           continue;
         }
-        return addLocalSubscription(route, existing.subId, handler);
+        return addLocalSubscription(route, existing.subId, handler, options?.signal);
       }
 
       const subId = await registerSingleFlight(route, () => subscribeWire(route));
-      return addLocalSubscription(route, subId, handler);
+      return addLocalSubscription(route, subId, handler, options?.signal);
     }
   };
 
-  const subscribeIterator = (
+  const notifications = (
     route: string,
     iteratorOptions?: SubscriptionIteratorOptions,
   ): AsyncIterable<ChangeNotification> =>
@@ -447,6 +456,7 @@ export function createLeaseClient(connection: LeaseConnectionPort): LeaseClient 
     route: string,
     subId: bigint,
     handler: ChangeHandler,
+    signal?: AbortSignal,
   ): LeaseSubscription => {
     const handlerId = nextHandlerId++;
     let subscription = subscriptionsByRoute.get(route);
@@ -456,13 +466,13 @@ export function createLeaseClient(connection: LeaseConnectionPort): LeaseClient 
     }
 
     subscription.handlers.set(handlerId, handler);
-    return createLeaseSubscription(
-      createLiveSubIdGetter(subscriptionsByRoute, route, subId, subscription.generation),
-      route,
-      async () => {
-        await unsubscribe(route, handlerId);
-      },
-    );
+    const handle = createLeaseSubscription(async () => unsubscribe(route, handlerId));
+    if (signal) {
+      const onAbort = (): void => void handle[Symbol.asyncDispose]();
+      if (signal.aborted) onAbort();
+      else signal.addEventListener("abort", onAbort, { once: true });
+    }
+    return handle;
   };
 
   const unsubscribe = async (route: string, handlerId: number): Promise<void> => {
@@ -532,8 +542,10 @@ export function createLeaseClient(connection: LeaseConnectionPort): LeaseClient 
             await handler(notification);
           });
         }
-      } catch {
-        // Best-effort notification dispatch.
+      } catch (error) {
+        connection.reportBackgroundError?.("fitz.lease.notification_malformed", error, {
+          messageType: MSG_LEASE_NOTIFY,
+        });
       }
     });
   };
@@ -543,7 +555,7 @@ export function createLeaseClient(connection: LeaseConnectionPort): LeaseClient 
     withLease,
     query,
     subscribe,
-    subscribeIterator,
+    notifications,
   };
 }
 

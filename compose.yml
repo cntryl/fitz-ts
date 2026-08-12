@@ -11,12 +11,12 @@
 # - Auth HTTP:    http://127.0.0.1:${FITZ_AUTH_HOST_HTTP_PORT:-4090}/
 # - Auth WS:      ws://127.0.0.1:${FITZ_AUTH_HOST_HTTP_PORT:-4090}/ws
 # - Auth TCP:     tcp://127.0.0.1:${FITZ_AUTH_HOST_TCP_PORT:-4091}
-# - Anon HTTP:    http://127.0.0.1:${FITZ_ANON_HOST_HTTP_PORT:-4190}/
-# - Anon WS:      ws://127.0.0.1:${FITZ_ANON_HOST_HTTP_PORT:-4190}/ws
+# - Anon HTTP:    http://127.0.0.1:${FITZ_ANON_HOST_HTTP_PORT:-4290}/
+# - Anon WS:      ws://127.0.0.1:${FITZ_ANON_HOST_HTTP_PORT:-4290}/ws
 # - Anon TCP:     tcp://127.0.0.1:${FITZ_ANON_HOST_TCP_PORT:-4191}
 
 x-broker-common: &broker-common
-  image: ghcr.io/cntryl/fitz:latest
+  image: "${FITZ_BROKER_IMAGE:-ghcr.io/cntryl/fitz@sha256:3c128b890f7e6ff504d07f7ff5764ebd51cbf68495647d165d99b6b9f19755d5}"
   restart: unless-stopped
   stop_grace_period: 15s
   healthcheck:
@@ -44,14 +44,14 @@ services:
       FITZ_JWT_HMAC_SECRET: "${FITZ_JWT_HMAC_SECRET:-dev-test-secret}"
       FITZ_JWT_AUDIENCE: "fitz"
       FITZ_ROUTE_FAMILY_MAP: "dev=1"
-      FITZ_WS_ALLOWED_ORIGINS: "http://localhost:${FITZ_AUTH_HOST_HTTP_PORT:-4090},http://127.0.0.1:${FITZ_AUTH_HOST_HTTP_PORT:-4090}"
+      FITZ_WS_ALLOWED_ORIGINS: "http://localhost:${FITZ_AUTH_HOST_HTTP_PORT:-4090},http://127.0.0.1:${FITZ_AUTH_HOST_HTTP_PORT:-4090},http://127.0.0.1:4173"
     volumes:
       - fitz_auth_data:/data
   fitz-anon:
     <<: *broker-common
     container_name: fitz-anon
     ports:
-      - "127.0.0.1:${FITZ_ANON_HOST_HTTP_PORT:-4190}:${FITZ_ANON_HTTP_PORT:-4090}"
+      - "127.0.0.1:${FITZ_ANON_HOST_HTTP_PORT:-4290}:${FITZ_ANON_HTTP_PORT:-4090}"
       - "127.0.0.1:${FITZ_ANON_HOST_TCP_PORT:-4191}:${FITZ_ANON_TCP_PORT:-4091}"
     environment:
       <<: *broker-common-env
@@ -59,6 +59,7 @@ services:
       FITZ_ADMIN_AUTH_MODE: "open"
       FITZ_HTTP_PORT: "${FITZ_ANON_HTTP_PORT:-4090}"
       FITZ_TCP_PORT: "${FITZ_ANON_TCP_PORT:-4091}"
+      FITZ_WS_ALLOWED_ORIGINS: "http://127.0.0.1:4173,http://localhost:4173"
     volumes:
       - fitz_anon_data:/data
 

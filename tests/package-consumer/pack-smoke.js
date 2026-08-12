@@ -63,6 +63,18 @@ if (!tarballName) {
 }
 
 const tarballPath = path.join(artifactsDir, tarballName);
+const packMetadata = JSON.parse(
+  execFileSync("npm", ["pack", "--json", "--dry-run"], {
+    cwd: repoRoot,
+    encoding: "utf8",
+  }),
+)[0];
+if (packMetadata.entryCount > 20) {
+  throw new Error(`tarball contains ${packMetadata.entryCount} files; maximum is 20`);
+}
+if (packMetadata.unpackedSize > 2_500_000) {
+  throw new Error(`tarball unpacks to ${packMetadata.unpackedSize} bytes; maximum is 2500000`);
+}
 
 run("npm", ["init", "-y"], { cwd: smokeDir, stdio: "ignore" });
 run("npm", ["install", tarballPath], { cwd: smokeDir });
@@ -106,17 +118,17 @@ writeSmokeFile(
     import { createClient, type LeaseAuthority } from "@cntryl/fitz";
 
     const client = createClient({ url: "tcp://localhost:4090", transport: "tcp" });
-    client.lease.withLease("lease://realm/area/resource", 30, async signal => {
+    client.lease.withLease("lease://realm/area/resource", async signal => {
       signal.aborted satisfies boolean;
-    });
-    client.lease.withLease("lease://realm/area/resource", 30, async (_signal, authority) => {
+    }, { ttlSeconds: 30 });
+    client.lease.withLease("lease://realm/area/resource", async (_signal, authority) => {
       const snapshot: LeaseAuthority = authority;
       const token: bigint = snapshot.fencingToken;
       // @ts-expect-error Admission fencing tokens are bigint, never number.
       const invalid: number = snapshot.fencingToken;
       void token;
       void invalid;
-    });
+    }, { ttlSeconds: 30 });
   `,
 );
 
@@ -126,16 +138,16 @@ writeSmokeFile(
     import fitz = require("@cntryl/fitz/node");
 
     const client = fitz.createClient({ url: "tcp://localhost:4090", transport: "tcp" });
-    client.lease.withLease("lease://realm/area/resource", 30, async signal => {
+    client.lease.withLease("lease://realm/area/resource", async signal => {
       signal.aborted satisfies boolean;
-    });
-    client.lease.withLease("lease://realm/area/resource", 30, async (_signal, authority) => {
+    }, { ttlSeconds: 30 });
+    client.lease.withLease("lease://realm/area/resource", async (_signal, authority) => {
       const token: bigint = authority.fencingToken;
       // @ts-expect-error Admission fencing tokens are bigint, never number.
       const invalid: number = authority.fencingToken;
       void token;
       void invalid;
-    });
+    }, { ttlSeconds: 30 });
   `,
 );
 
@@ -149,7 +161,7 @@ writeSmokeFile(
         "target": "es2022",
         "strict": true,
         "noEmit": true,
-        "lib": ["es2022", "dom"]
+        "lib": ["es2022", "dom", "esnext.disposable"]
       },
       "include": ["typecheck-node-esm.mts", "typecheck-node-cjs.cts"]
     }
@@ -177,10 +189,10 @@ writeSmokeFile(
     const client = createClient({ url: "ws://example.test/ws", transport: "ws" });
 
     client.config.transport satisfies "ws" | "auto";
-    client.lease.withLease("lease://realm/area/resource", 30, async (_signal, authority) => {
+    client.lease.withLease("lease://realm/area/resource", async (_signal, authority) => {
       const snapshot: LeaseAuthority = authority;
       snapshot.fencingToken satisfies bigint;
-    });
+    }, { ttlSeconds: 30 });
 
     // @ts-expect-error Browser-resolved root import must reject TCP transport.
     createClient({ url: "tcp://example.test:4090", transport: "tcp" });
@@ -227,7 +239,7 @@ writeSmokeFile(
         "target": "es2022",
         "strict": true,
         "noEmit": true,
-        "lib": ["es2022", "dom"]
+        "lib": ["es2022", "dom", "esnext.disposable"]
       },
       "include": ["typecheck-root-browser.ts"]
     }
@@ -244,7 +256,7 @@ writeSmokeFile(
         "target": "es2022",
         "strict": true,
         "noEmit": true,
-        "lib": ["es2022", "dom"]
+        "lib": ["es2022", "dom", "esnext.disposable"]
       },
       "include": ["typecheck-browser-subpath.ts"]
     }

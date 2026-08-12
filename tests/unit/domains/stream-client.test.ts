@@ -129,6 +129,13 @@ describe("StreamClient", () => {
     ).toBe(3n);
   });
 
+  it.each([
+    ["stream://realm/*/*", { lastResourceOffset: 17n, hasMore: true }],
+    ["stream://realm/area/*", { lastResourceOffset: 17n, hasMore: true }],
+  ] as const)("does not fabricate %s progress from a resource cursor", (selector, cursor) => {
+    expect(streamNextOffset(selector, 3n, cursor)).toBe(3n);
+  });
+
   it("should invalidate a stream handle given disconnect when the old handle is reused", async () => {
     const connection = new FakeStreamConnection();
     const client = createStreamClient(connection as unknown as Connection);
@@ -136,7 +143,9 @@ describe("StreamClient", () => {
     const session = await client.begin("stream://realm/area/resource");
     connection.disconnect();
 
-    await expect(session.append(0n, new Uint8Array([1]))).rejects.toMatchObject({
+    await expect(
+      session.append({ expectedOffset: 0n, body: new Uint8Array([1]) }),
+    ).rejects.toMatchObject({
       code: "STREAM_SESSION_CLOSED",
     });
   });
@@ -147,7 +156,11 @@ describe("StreamClient", () => {
 
     const session = await client.begin("stream://realm/area/resource");
     const controller = new AbortController();
-    const pending = session.append(0n, new Uint8Array([1]), controller.signal);
+    const pending = session.append({
+      expectedOffset: 0n,
+      body: new Uint8Array([1]),
+      signal: controller.signal,
+    });
 
     await Promise.resolve();
     controller.abort();
@@ -161,7 +174,9 @@ describe("StreamClient", () => {
     const client = createStreamClient(connection as unknown as Connection);
 
     const session = await client.begin("stream://realm/area/resource");
-    const offset = await session.append(0n, new Uint8Array([1, 2]), {
+    const offset = await session.append({
+      expectedOffset: 0n,
+      body: new Uint8Array([1, 2]),
       discriminator: "proj.alpha",
     });
 
@@ -185,7 +200,7 @@ describe("StreamClient", () => {
     connection.respond(MSG_STREAM_COMMIT, new Uint8Array([7]));
     connection.respond(MSG_STREAM_ROLLBACK, new Uint8Array([0]));
 
-    await expect(session.commit("Sync")).rejects.toMatchObject({
+    await expect(session.commit({ mode: "Sync" })).rejects.toMatchObject({
       domainCode: 7,
     });
     expect(session.isOpen()).toBe(true);
@@ -215,9 +230,16 @@ describe("StreamClient", () => {
       clauses: [{ kind: "Equals", value: "proj.alpha" }],
     };
 
-    const records = await client.read("stream://realm/area/resource", 5n, 10, { filter });
+    const result = await client
+      .read("stream://realm/area/resource", {
+        fromOffset: 5n,
+        mode: "replay",
+        batchSize: 10,
+        filter,
+      })
+      .next();
 
-    expect(records).toEqual([]);
+    expect(result.value?.records).toEqual([]);
     const reader = createBufferReader(connection.lastPayload ?? new Uint8Array());
     expect(reader.readRoute()).toBe("stream://realm/area/resource");
     expect(reader.readU64BE()).toBe(5n);
@@ -260,9 +282,16 @@ describe("StreamClient", () => {
     const connection = new FakeStreamConnection("success", readResponse);
     const client = createStreamClient(connection as unknown as Connection);
 
-    const page = await client.readPage("stream://realm/area/resource", 4n, 10);
-    expect(page.items).toHaveLength(2);
-    expect(page.items[0]).toEqual({
+    const result = await client
+      .read("stream://realm/area/resource", {
+        fromOffset: 4n,
+        mode: "replay",
+        batchSize: 10,
+      })
+      .next();
+    const batch = result.value!;
+    expect(batch.items).toHaveLength(2);
+    expect(batch.items[0]).toEqual({
       kind: "event",
       route: "stream://realm/area/resource",
       record: {
@@ -274,23 +303,16 @@ describe("StreamClient", () => {
         timestamp: 99n,
       },
     });
-    expect(page.items[1]).toEqual({
+    expect(batch.items[1]).toEqual({
       kind: "filtered",
       route: "stream://realm/area/resource",
       offset: 5n,
       reason: "server_filter",
     });
-    expect(page.cursor).toEqual({
-      lastResourceOffset: 5n,
-      lastAreaOffset: 8n,
-      lastRealmOffset: 12n,
-      hasMore: false,
-    });
-
-    const records = await client.read("stream://realm/area/resource", 4n, 10);
-    expect(records).toHaveLength(1);
-    expect(records[0].offset).toBe(4n);
-    expect(Array.from(records[0].body)).toEqual([1, 2, 3]);
+    expect(batch).toMatchObject({ fromOffset: 4n, nextOffset: 6n, caughtUp: true });
+    expect(batch.records).toHaveLength(1);
+    expect(batch.records[0]?.offset).toBe(4n);
+    expect(Array.from(batch.records[0]!.body)).toEqual([1, 2, 3]);
   });
 
   it("returns concrete routes for every wildcard stream read item", async () => {
@@ -314,7 +336,15 @@ describe("StreamClient", () => {
     const connection = new FakeStreamConnection("success", readResponse);
     const client = createStreamClient(connection as unknown as Connection);
 
-    const page = await client.readPage("stream://realm/area/*", 0n, 2);
+    const page = (
+      await client
+        .read("stream://realm/area/*", {
+          fromOffset: 0n,
+          mode: "replay",
+          batchSize: 2,
+        })
+        .next()
+    ).value!;
 
     expect(page.items[0]).toMatchObject({
       route: "stream://realm/area/orders",
@@ -333,13 +363,13 @@ describe("StreamClient", () => {
     // map to formatStatusName and always fell back to "Unknown(7)".
     connection.respond(MSG_STREAM_COMMIT, new Uint8Array([7]));
 
-    await expect(session.commit("Sync")).rejects.toMatchObject({
+    await expect(session.commit({ mode: "Sync" })).rejects.toMatchObject({
       domainCode: 7,
       message: "COMMIT failed: ExpectedOffsetMismatch",
     });
   });
 
-  it("rejects an unbounded consume() that the broker truncated to one page", async () => {
+  it("rejects two-page logical non-progress even when hasMore remains true", async () => {
     const readResponse = encodeWrappedReadResponse(
       [
         {
@@ -352,12 +382,15 @@ describe("StreamClient", () => {
     const connection = new FakeStreamConnection("success", readResponse);
     const client = createStreamClient(connection as unknown as Connection);
 
-    await expect(client.consume("stream://realm/area/resource", 0n)).rejects.toMatchObject({
-      code: "STREAM_CONSUME_TRUNCATED",
+    const iterator = client.read("stream://realm/area/resource", {
+      fromOffset: 0n,
+      mode: "replay",
     });
+    await expect(iterator.next()).resolves.toMatchObject({ done: false });
+    await expect(iterator.next()).rejects.toMatchObject({ code: "STREAM_READ_STALLED" });
   });
 
-  it("does not treat an explicit limit as truncation in consume()", async () => {
+  it("returns a lazy batch iterator with an explicit batch size", async () => {
     const readResponse = encodeWrappedReadResponse(
       [
         {
@@ -370,12 +403,14 @@ describe("StreamClient", () => {
     const connection = new FakeStreamConnection("success", readResponse);
     const client = createStreamClient(connection as unknown as Connection);
 
-    const iterable = await client.consume("stream://realm/area/resource", 0n, 1);
-    const records: Array<{ offset: bigint }> = [];
-    for await (const record of iterable) {
-      records.push(record);
-    }
-    expect(records.map((record) => record.offset)).toEqual([0n]);
+    const iterator = client.read("stream://realm/area/resource", {
+      fromOffset: 0n,
+      mode: "replay",
+      batchSize: 1,
+    });
+    const first = await iterator.next();
+    expect(first.value?.records.map((record: { offset: bigint }) => record.offset)).toEqual([0n]);
+    await iterator.return?.();
   });
 
   it("matches the server stream selector grammar", async () => {
@@ -395,9 +430,17 @@ describe("StreamClient", () => {
       ) as unknown as Connection,
     );
 
-    await expect(client.readPage("stream://**", 0n, 1)).resolves.toBeDefined();
-    await expect(realmClient.readPage("stream://realm/*/*", 0n, 1)).resolves.toBeDefined();
-    await expect(client.readPage("stream://*/area/*", 0n, 1)).resolves.toBeDefined();
+    await expect(
+      client.read("stream://**", { fromOffset: 0n, mode: "replay", batchSize: 1 }).next(),
+    ).resolves.toBeDefined();
+    await expect(
+      realmClient
+        .read("stream://realm/*/*", { fromOffset: 0n, mode: "replay", batchSize: 1 })
+        .next(),
+    ).resolves.toBeDefined();
+    await expect(
+      client.read("stream://*/area/*", { fromOffset: 0n, mode: "replay", batchSize: 1 }).next(),
+    ).resolves.toBeDefined();
   });
 });
 

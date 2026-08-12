@@ -5,6 +5,7 @@
 import { createDomainClient } from "../base";
 import type {
   AsyncDispatchPort,
+  BackgroundErrorPort,
   DisconnectListenerPort,
   NotificationPort,
   ReconnectListenerPort,
@@ -41,7 +42,6 @@ import {
 import {
   awaitPendingUnsubscribe,
   createGenerationCounter,
-  createLiveSubIdGetter,
   isCurrentEmptyState,
 } from "../internal/subscription-handle";
 
@@ -51,6 +51,7 @@ type KvConnectionPort = RequestPort &
   ReconnectListenerPort &
   NotificationPort &
   AsyncDispatchPort &
+  Partial<BackgroundErrorPort> &
   Partial<ReconnectRestoreRequestPort>;
 
 type KvSubscriptionState = {
@@ -65,8 +66,12 @@ type KvSubscriptionState = {
 
 export interface KvClient {
   begin(route: string, options: KvBeginOptions): Promise<KvTransaction>;
-  subscribe(pattern: string, handler: KvHandler): Promise<KvSubscription>;
-  subscribeIterator(
+  subscribe(
+    pattern: string,
+    handler: KvHandler,
+    options?: { signal?: AbortSignal },
+  ): Promise<KvSubscription>;
+  notifications(
     pattern: string,
     options?: SubscriptionIteratorOptions,
   ): AsyncIterable<KvNotification>;
@@ -117,7 +122,7 @@ export function createKvClient(connection: KvConnectionPort): KvClient {
     }
 
     const payload = KvCodec.encodeBegin(route, options.mode ?? "ReadWrite", options.durability);
-    const response = await requestFrame(MSG_KV_BEGIN, payload);
+    const response = await requestFrame(MSG_KV_BEGIN, payload, options.signal);
     const decoded = KvCodec.decodeBeginResponse(response);
 
     if (decoded.status !== KvStatus.Ok || decoded.txId === undefined) {
@@ -198,13 +203,19 @@ export function createKvClient(connection: KvConnectionPort): KvClient {
         for (const handler of state.handlers.values()) {
           connection.dispatchAsyncHandler(async () => handler(notification));
         }
-      } catch {
-        // Malformed notifications are dropped without disrupting the receive loop.
+      } catch (error) {
+        connection.reportBackgroundError?.("fitz.kv.notification_malformed", error, {
+          messageType: MSG_KV_NOTIFY,
+        });
       }
     });
   };
 
-  const subscribe = async (pattern: string, handler: KvHandler): Promise<KvSubscription> => {
+  const subscribe = async (
+    pattern: string,
+    handler: KvHandler,
+    options?: { signal?: AbortSignal },
+  ): Promise<KvSubscription> => {
     if (!isRegistrationPatternShape(pattern, "kv", 3)) {
       throw new KvError(
         `Invalid kv subscription pattern: ${pattern} (must match a three-segment KV route)`,
@@ -244,14 +255,16 @@ export function createKvClient(connection: KvConnectionPort): KvClient {
 
     const handlerId = nextHandlerId++;
     state.handlers.set(handlerId, handler);
-    return createKvSubscription(
-      createLiveSubIdGetter(subscriptionsByPattern, pattern, state.subId, state.generation),
-      pattern,
-      async () => unsubscribe(pattern, handlerId),
-    );
+    const handle = createKvSubscription(async () => unsubscribe(pattern, handlerId));
+    if (options?.signal) {
+      const onAbort = (): void => void handle[Symbol.asyncDispose]();
+      if (options.signal.aborted) onAbort();
+      else options.signal.addEventListener("abort", onAbort, { once: true });
+    }
+    return handle;
   };
 
-  const subscribeIterator = (
+  const notifications = (
     pattern: string,
     iteratorOptions?: SubscriptionIteratorOptions,
   ): AsyncIterable<KvNotification> =>
@@ -260,7 +273,7 @@ export function createKvClient(connection: KvConnectionPort): KvClient {
   return {
     begin,
     subscribe,
-    subscribeIterator,
+    notifications,
   };
 }
 

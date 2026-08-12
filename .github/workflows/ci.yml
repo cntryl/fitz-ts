@@ -1,74 +1,144 @@
 name: CI
 
 on:
-  workflow_call:
   workflow_dispatch:
   schedule:
-    - cron: "0 0 * * *"
+    - cron: "0 6 * * *"
   push:
+    branches: [main]
   pull_request:
 
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+  id-token: write
+  attestations: write
+
+env:
+  FORCE_COLOR: "1"
+
 jobs:
-  ci:
-    timeout-minutes: 20
+  quality:
     runs-on: ubuntu-latest
-
+    timeout-minutes: 15
     steps:
-      - name: Check out repository
-        uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with: { node-version: "24", cache: npm }
+      - run: npm ci
+      - run: npm run fmt:check
+      - run: npm run lint
+      - run: npm run typecheck:contract
+      - run: npm run fixture:check
+      - if: github.event_name == 'schedule'
+        run: npm run fixture:check -- --upstream
+      - run: npm audit --audit-level=moderate
+      - run: npm run build
+      - run: npm run package:lint
+      - run: npm run pack:smoke
+      - run: vp test run --project unit --coverage
 
-      - name: Setup Node
-        uses: actions/setup-node@v6
-        with:
-          node-version: "lts/*"
-          cache: npm
-          cache-dependency-path: package-lock.json
+  node-compat:
+    strategy: { fail-fast: false, matrix: { node: ["24", "26"] } }
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with: { node-version: "${{ matrix.node }}", cache: npm }
+      - run: npm ci
+      - run: npm run build
+      - run: npm run test:unit
+      - run: npm run pack:smoke
 
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Check formatting
-        run: npm run fmt:check
-
-      - name: Lint package
-        run: npm run lint
-
-      - name: Build package
-        run: npm run build
-
-      - name: Run unit tests
-        run: npm run test:unit
-
-      - name: Smoke test package
-        run: npm run pack:smoke
-
-      - name: Start broker stack
-        run: docker compose up -d
-
-      - name: Run broker integration suite
-        run: npm run test:integration
-
-      - name: Run conformance matrix
-        shell: bash
+  broker:
+    strategy:
+      fail-fast: false
+      matrix:
+        leg: [integration, tcp-anonymous, tcp-valid_jwt, ws-anonymous, ws-valid_jwt]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      FITZ_BROKER_IMAGE: ${{ github.event_name == 'schedule' && 'ghcr.io/cntryl/fitz:latest' || 'ghcr.io/cntryl/fitz@sha256:3c128b890f7e6ff504d07f7ff5764ebd51cbf68495647d165d99b6b9f19755d5' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with: { node-version: "24", cache: npm }
+      - run: npm ci
+      - run: docker compose up -d
+      - name: Wait for broker
         run: |
-          for transport in tcp ws; do
-            for auth_mode in anonymous valid_jwt; do
-              output="artifacts/conformance-${transport}-${auth_mode}.json"
-              CONFORMANCE_TRANSPORT="$transport" \
-                CONFORMANCE_AUTH_MODE="$auth_mode" \
-                CONFORMANCE_OUTPUT="$output" \
-                npm run test:conformance
-            done
+          for attempt in {1..60}; do
+            curl --fail --silent http://127.0.0.1:4290/health && exit 0
+            sleep 1
           done
-
-      - name: Upload conformance results
-        if: always()
-        uses: actions/upload-artifact@v4
+          docker compose logs
+          exit 1
+      - if: matrix.leg == 'integration'
+        run: time npm run test:integration -- --reporter=verbose
+      - if: matrix.leg != 'integration'
+        env:
+          CONFORMANCE_TRANSPORT: ${{ startsWith(matrix.leg, 'tcp-') && 'tcp' || 'ws' }}
+          CONFORMANCE_AUTH_MODE: ${{ endsWith(matrix.leg, 'valid_jwt') && 'valid_jwt' || 'anonymous' }}
+          CONFORMANCE_OUTPUT: artifacts/conformance-${{ matrix.leg }}.json
+        run: time npm run test:conformance
+      - if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: fitz-ts-conformance-results
+          name: broker-${{ matrix.leg }}
           path: artifacts/conformance-*.json
-          if-no-files-found: warn
+          if-no-files-found: ignore
+      - if: always()
+        run: mkdir -p artifacts && docker compose logs > artifacts/broker-${{ matrix.leg }}.log && docker compose down --volumes
 
-      - name: Tear down broker stack
-        if: always()
+  browser:
+    strategy: { fail-fast: false, matrix: { browser: [chromium, firefox, webkit] } }
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with: { node-version: "24", cache: npm }
+      - run: npm ci
+      - run: npx playwright install --with-deps ${{ matrix.browser }}
+      - run: docker compose up -d
+      - run: |
+          until curl --fail --silent http://127.0.0.1:4290/health; do sleep 1; done
+          npx playwright test --project=${{ matrix.browser }}
+      - if: always()
         run: docker compose down --volumes
+
+  package:
+    needs: [quality, node-compat, broker, browser]
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with: { node-version: "24", cache: npm }
+      - run: npm ci && npm run build
+      - id: pack
+        run: |
+          mkdir release
+          npm pack --pack-destination release
+          echo "path=$(find release -name '*.tgz')" >> "$GITHUB_OUTPUT"
+      - uses: actions/attest-build-provenance@43d14bc2b83dec42d39ecae14e916627a18bb661 # v3
+        with: { subject-path: "${{ steps.pack.outputs.path }}" }
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          { name: npm-tarball-$, { { github.sha } }, path: release/*.tgz, if-no-files-found: error }
+
+  verdict:
+    if: always()
+    needs: [quality, node-compat, broker, browser, package]
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          test '${{ needs.quality.result }}' = success
+          test '${{ needs.node-compat.result }}' = success
+          test '${{ needs.broker.result }}' = success
+          test '${{ needs.browser.result }}' = success
+          test '${{ needs.package.result }}' = success -o '${{ needs.package.result }}' = skipped

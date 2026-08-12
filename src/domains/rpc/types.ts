@@ -23,7 +23,8 @@ export interface InboundRequest {
  * Allows a worker to send responses back to the caller
  */
 export interface ResponseWriter {
-  send(body: Uint8Array, isEnd: boolean): Promise<void>;
+  write(options: { body: Uint8Array; signal?: AbortSignal }): Promise<void>;
+  end(options?: { body?: Uint8Array; signal?: AbortSignal }): Promise<void>;
 }
 
 /**
@@ -38,19 +39,27 @@ export interface RegisterWorkerOptions {
 /**
  * Active worker registration
  */
-export type RpcSubscription = ReturnType<typeof createRpcSubscription>;
+export interface RpcSubscription extends AsyncDisposable {
+  unsubscribe(): Promise<void>;
+}
 
-export function createRpcSubscription(
-  route: string,
-  unsubscribeFn: (route: string) => Promise<void>,
-) {
+export function createRpcSubscription(unsubscribeFn: () => Promise<void>): RpcSubscription {
+  let active = true;
   const unsubscribe = async (): Promise<void> => {
-    await unsubscribeFn(route);
+    if (!active) return;
+    await unsubscribeFn();
+    active = false;
   };
 
   return {
-    route,
     unsubscribe,
+    async [Symbol.asyncDispose](): Promise<void> {
+      try {
+        await unsubscribe();
+      } catch {
+        // Disposal is explicitly best effort.
+      }
+    },
   };
 }
 
@@ -58,6 +67,7 @@ export function createRpcSubscription(
  * RPC request options
  */
 export interface RequestOptions {
+  body: Uint8Array;
   timeoutMs?: number;
   signal?: AbortSignal;
 }

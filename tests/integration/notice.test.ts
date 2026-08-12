@@ -31,7 +31,7 @@ describe("Notice integration", () => {
         });
       });
 
-      await f.client().notice.publish(route, b("hello"));
+      await f.client().notice.publish(route, { body: b("hello") });
       await expect(received).resolves.toEqual({ route, body: "hello" });
     });
 
@@ -53,7 +53,7 @@ describe("Notice integration", () => {
         count += 1;
       });
 
-      await publisher.client().notice.publish(route, b("fanout"));
+      await publisher.client().notice.publish(route, { body: b("fanout") });
       await sleep(500);
 
       expect(count).toBe(2);
@@ -73,13 +73,13 @@ describe("Notice integration", () => {
         received.push(`two:${Buffer.from(msg.body).toString()}`);
       });
 
-      await f.client().notice.publish(route, b("local-fanout"));
+      await f.client().notice.publish(route, { body: b("local-fanout") });
       await sleep(500);
 
       expect(received).toEqual(["one:local-fanout", "two:local-fanout"]);
 
       await subOne.unsubscribe();
-      await f.client().notice.publish(route, b("after-unsub"));
+      await f.client().notice.publish(route, { body: b("after-unsub") });
       await sleep(500);
 
       expect(received).toEqual(["one:local-fanout", "two:local-fanout", "two:after-unsub"]);
@@ -92,7 +92,7 @@ describe("Notice integration", () => {
       await f.connectOrFail();
 
       await expect(
-        f.client().notice.publish(f.uniqueRoute("notice"), b("nobody")),
+        f.client().notice.publish(f.uniqueRoute("notice"), { body: b("nobody") }),
       ).resolves.toBeUndefined();
     });
 
@@ -105,7 +105,7 @@ describe("Notice integration", () => {
 
       try {
         await expect(
-          f.client().notice.publish(f.uniqueRoute("notice"), b("quiet")),
+          f.client().notice.publish(f.uniqueRoute("notice"), { body: b("quiet") }),
         ).resolves.toBeUndefined();
         await sleep(250);
         expect(warn).not.toHaveBeenCalled();
@@ -127,12 +127,12 @@ describe("Notice integration", () => {
         received.push(Buffer.from(msg.body).toString());
       });
 
-      await f.client().notice.publish(route, b("before"));
+      await f.client().notice.publish(route, { body: b("before") });
       await sleep(500);
       expect(received).toEqual(["before"]);
 
       await sub.unsubscribe();
-      await f.client().notice.publish(route, b("after"));
+      await f.client().notice.publish(route, { body: b("after") });
       await sleep(500);
 
       expect(received).toEqual(["before"]);
@@ -165,7 +165,7 @@ describe("Notice integration", () => {
         });
       });
 
-      await f.client().notice.publish(route, b("wildcard-test"));
+      await f.client().notice.publish(route, { body: b("wildcard-test") });
       await expect(received).resolves.toEqual({
         route,
         body: "wildcard-test",
@@ -189,7 +189,7 @@ describe("Notice integration", () => {
         received.push("double");
       });
 
-      await f.client().notice.publish(route, b("nested"));
+      await f.client().notice.publish(route, { body: b("nested") });
       await sleep(500);
 
       expect(received).toEqual(["double"]);
@@ -211,7 +211,7 @@ describe("Notice integration", () => {
         received.push("staging");
       });
 
-      await f.client().notice.publish(`notice://${prodRealm}/${area}/events`, b("prod"));
+      await f.client().notice.publish(`notice://${prodRealm}/${area}/events`, { body: b("prod") });
       await sleep(500);
 
       expect(received).toEqual(["prod"]);
