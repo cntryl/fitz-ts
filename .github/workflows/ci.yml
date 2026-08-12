@@ -39,7 +39,7 @@ jobs:
       - run: npm run build
       - run: npm run package:lint
       - run: npm run pack:smoke
-      - run: vp test run --project unit --coverage
+      - run: npm exec -- vp test run --project unit --coverage
 
   node-compat:
     strategy: { fail-fast: false, matrix: { node: ["24", "26"] } }
