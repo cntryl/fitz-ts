@@ -1,4 +1,6 @@
+/** Cancellation options shared by public notification iterators. */
 export interface SubscriptionIteratorOptions {
+  /** Aborts pending iteration and unsubscribes this iterator. */
   signal?: AbortSignal;
 }
 

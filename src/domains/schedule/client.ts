@@ -66,26 +66,59 @@ type ScheduleConnectionPort = RequestPort &
   AsyncDispatchPort &
   Partial<ReconnectRestoreRequestPort>;
 
+/**
+ * Durable cron schedule facade. Concrete routes use
+ * `schedule://realm/area/resource/operation`. Subscription patterns use four
+ * segments with whole-segment `*` or `**`. Listing additionally accepts the
+ * documented realm (`realm/**`) and three-segment realm/area/resource selector
+ * forms. Use Notice directly for unscheduled ephemeral publication.
+ */
 export interface ScheduleClient {
+  /** Creates or rejects a schedule at `route`; `cron` uses the broker's cron grammar. */
   create(
     route: string,
     options: {
+      /** Broker-supported cron expression. */
       cron: string;
+      /** Broadcast to all matching consumers or deliver to one consumer. */
       deliveryMode: ScheduleDeliveryMode;
+      /** Payload included in each firing; defaults to an empty buffer. */
       payload?: Uint8Array;
+      /** Cancels waiting; creation outcome may be ambiguous after send. */
       signal?: AbortSignal;
     },
   ): Promise<void>;
-  cancel(route: string, options?: { signal?: AbortSignal }): Promise<void>;
+  /** Cancels the schedule at `route`. */
+  cancel(
+    route: string,
+    options?: {
+      /** Cancels waiting; cancellation outcome may be ambiguous after send. */
+      signal?: AbortSignal;
+    },
+  ): Promise<void>;
+  /**
+   * Iterates pages of schedules matching `selector`. Each yielded value is a
+   * page; break iteration to stop fetching additional pages.
+   */
   entries(
     selector: string,
-    options?: { pageSize?: bigint; signal?: AbortSignal },
+    options?: {
+      /** Requested schedules per broker page. */
+      pageSize?: bigint;
+      /** Cancels listing and closes the iterator. */
+      signal?: AbortSignal;
+    },
   ): AsyncIterableIterator<readonly ScheduleEntry[]>;
+  /** Registers a firing callback matching `pattern`; dispose the returned handle. */
   subscribe(
     pattern: string,
     handler: ScheduleHandler,
-    options?: { signal?: AbortSignal },
+    options?: {
+      /** Automatically unsubscribes this handler when aborted. */
+      signal?: AbortSignal;
+    },
   ): Promise<ScheduleSubscription>;
+  /** Returns an async stream of schedule firings; breaking iteration unsubscribes. */
   notifications(
     pattern: string,
     options?: SubscriptionIteratorOptions,

@@ -361,8 +361,24 @@ function createRpcIterator(
   };
 }
 
+/**
+ * Streaming RPC facade for callers and workers. Routes start with `rpc://`
+ * followed by one or more non-empty segments. Calls require a concrete route;
+ * worker registrations may use whole-segment `*` and `**` patterns.
+ */
 export interface RpcClient {
+  /**
+   * Starts an RPC call and returns its ordered response stream. Consume until
+   * completion or call `return()`/break iteration to release local state.
+   * Do not automatically replay after a request may have reached a worker.
+   */
   call(route: string, options: RequestOptions): AsyncIterableIterator<ResponseFrame>;
+  /**
+   * Registers one handler for a route pattern. Use a concrete route for one
+   * endpoint, or whole-segment `*` and `**` wildcards to match multiple routes.
+   * Keep and dispose the returned subscription; registrations are restored
+   * automatically after reconnect.
+   */
   registerWorker(
     route: string,
     handler: RpcHandler,

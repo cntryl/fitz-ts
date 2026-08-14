@@ -28,19 +28,65 @@ import {
 import { KvError } from "../../core/errors";
 import { formatStatusName } from "../internal/status";
 
+/**
+ * Single-connection KV transaction. It becomes unusable after commit,
+ * rollback, disposal, or disconnect; never retain it across reconnection.
+ */
 export interface KvTransaction extends AsyncDisposable {
-  put(options: { key: Uint8Array; value: Uint8Array; signal?: AbortSignal }): Promise<void>;
-  insert(options: { key: Uint8Array; value: Uint8Array; signal?: AbortSignal }): Promise<void>;
-  get(options: { key: Uint8Array; signal?: AbortSignal }): Promise<KvGetResult>;
-  delete(options: { key: Uint8Array; signal?: AbortSignal }): Promise<void>;
-  deleteRange(options: {
-    startKey: Uint8Array;
-    endKey: Uint8Array;
+  /** Upserts `key` to `value`. Requires a `ReadWrite` transaction. */
+  put(options: {
+    /** Binary key. */
+    key: Uint8Array;
+    /** Replacement value. */
+    value: Uint8Array;
+    /** Cancels waiting; post-send mutation outcome can be ambiguous. */
     signal?: AbortSignal;
   }): Promise<void>;
+  /** Inserts a value only when `key` is absent; conflicting writes reject. */
+  insert(options: {
+    /** Binary key that must not already exist. */
+    key: Uint8Array;
+    /** Value to insert. */
+    value: Uint8Array;
+    /** Cancels waiting; post-send mutation outcome can be ambiguous. */
+    signal?: AbortSignal;
+  }): Promise<void>;
+  /** Reads `key`, returning a discriminated not-found result instead of throwing when it is absent. */
+  get(options: {
+    /** Binary key to read. */
+    key: Uint8Array;
+    /** Cancels this read request. */
+    signal?: AbortSignal;
+  }): Promise<KvGetResult>;
+  /** Deletes `key`. Requires a `ReadWrite` transaction. */
+  delete(options: {
+    /** Binary key to delete. */
+    key: Uint8Array;
+    /** Cancels waiting; post-send mutation outcome can be ambiguous. */
+    signal?: AbortSignal;
+  }): Promise<void>;
+  /** Deletes keys in the half-open binary range `[startKey, endKey)`. */
+  deleteRange(options: {
+    /** Inclusive binary lower bound. */
+    startKey: Uint8Array;
+    /** Exclusive binary upper bound; must compare greater than `startKey`. */
+    endKey: Uint8Array;
+    /** Cancels waiting; post-send mutation outcome can be ambiguous. */
+    signal?: AbortSignal;
+  }): Promise<void>;
+  /** Reads one page of keys and values from this transaction's consistent view. */
   scan(options?: KvScanOptions): Promise<KvScanPage>;
-  commit(options?: { signal?: AbortSignal }): Promise<void>;
-  rollback(options?: { signal?: AbortSignal }): Promise<void>;
+  /** Finalizes mutations using the durability selected by {@link KvBeginOptions}. */
+  commit(options?: {
+    /** Cancels waiting; post-send commit outcome can be ambiguous. */
+    signal?: AbortSignal;
+  }): Promise<void>;
+  /** Discards uncommitted mutations. Safe cleanup should prefer disposal when either outcome is acceptable. */
+  rollback(options?: {
+    /** Cancels waiting; the local transaction still becomes unusable. */
+    signal?: AbortSignal;
+  }): Promise<void>;
+  /** Returns whether the local transaction handle can still issue operations. */
   isOpen(): boolean;
 }
 

@@ -14,10 +14,22 @@ import { MSG_QUEUE_EXTEND, MSG_QUEUE_COMPLETE } from "../../frame/types";
  * It carries the route and token required for `extend()` and `complete()`.
  */
 export interface QueueItem {
+  /** Concrete queue route from which this message was reserved. */
   readonly route: string;
+  /** Message payload. Treat this buffer as immutable while processing the reservation. */
   readonly body: Uint8Array;
-  extend(options: { leaseSeconds: number; signal?: AbortSignal }): Promise<void>;
-  complete(options?: { signal?: AbortSignal }): Promise<void>;
+  /** Extends reservation visibility by `leaseSeconds`; rejects after completion or disconnect. */
+  extend(options: {
+    /** Additional visibility lease in seconds. */
+    leaseSeconds: number;
+    /** Cancels waiting; renewal outcome may be ambiguous after send. */
+    signal?: AbortSignal;
+  }): Promise<void>;
+  /** Acknowledges successful processing and permanently consumes the message. */
+  complete(options?: {
+    /** Cancels waiting; completion outcome may be ambiguous after send. */
+    signal?: AbortSignal;
+  }): Promise<void>;
 }
 
 export function createQueueItem(
@@ -87,14 +99,20 @@ export function createQueueItem(
  * Availability notification from a queue.
  */
 export interface AvailabilityNotification {
+  /** Concrete queue route whose counts changed. */
   route: string;
+  /** Messages immediately eligible for reservation. */
   readyMessages: bigint;
+  /** Messages waiting for their enqueue delay to expire. */
   delayedMessages: bigint;
+  /** Messages currently held by uncompleted reservations. */
   inflightMessages: bigint;
 }
 
 /**
- * Handler for availability notifications.
+ * Handles queue availability changes. Notifications are wake signals, not
+ * reservations: call {@link QueueClient.reserve} to claim work. The shared
+ * async-handler dispatcher controls concurrency and reports callback failures.
  */
 export type AvailabilityHandler = (notification: AvailabilityNotification) => void | Promise<void>;
 
@@ -102,6 +120,7 @@ export type AvailabilityHandler = (notification: AvailabilityNotification) => vo
  * Queue availability subscription.
  */
 export interface QueueSubscription extends AsyncDisposable {
+  /** Stops this handler; shared wire state remains until the last local handler leaves. */
   unsubscribe(): Promise<void>;
 }
 
@@ -116,11 +135,17 @@ export function createQueueSubscription(
  * Queue operation status codes
  */
 export enum QueueStatus {
+  /** Operation succeeded. */
   Ok = 0,
+  /** Queue route does not exist. */
   QueueNotFound = 1,
+  /** Reserved message no longer exists. */
   MessageNotFound = 2,
+  /** Reservation token is stale or invalid. */
   InvalidToken = 3,
+  /** Queue capacity is exhausted. */
   QueueFull = 4,
+  /** Requested delay is outside the supported range. */
   InvalidDelay = 5,
 }
 
@@ -128,8 +153,11 @@ export enum QueueStatus {
  * Options for enqueue operations.
  */
 export interface EnqueueOptions {
+  /** Message body copied into the enqueue request. */
   body: Uint8Array;
+  /** Delay in seconds before reservation eligibility. Omit for immediate availability. */
   delaySeconds?: number;
+  /** Cancels waiting for the enqueue response; cancellation may leave the outcome ambiguous. */
   signal?: AbortSignal;
 }
 

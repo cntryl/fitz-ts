@@ -69,6 +69,11 @@ type LeaseConnectionPort = RequestPort &
   RetryExecutionPort &
   Partial<ReconnectRestoreRequestPort>;
 
+/**
+ * Distributed lease facade for manual handles and managed fenced critical
+ * sections. Every method requires a concrete `lease://realm/area/resource`
+ * route; lease subscriptions intentionally do not accept wildcards.
+ */
 export interface LeaseClient {
   /**
    * Acquires a lease.
@@ -78,24 +83,46 @@ export interface LeaseClient {
    * carries no correlation id, only FIFO arrival order, so a second
    * `acquire()` for a completely unrelated route cannot even send its
    * request until this call's full lifecycle has resolved.
+   *
+   * `ttlSeconds` is a positive integer lifetime whose milliseconds must fit a
+   * signed 32-bit timer; `waitSeconds` defaults to 0 and must fit an unsigned
+   * 32-bit integer. Always release the returned handle. Do not use manual
+   * acquisition when automatic renewal and loss signalling are required;
+   * prefer {@link LeaseClient.withLease}.
    */
   acquire(route: string, options: LeaseAcquireOptions): Promise<Lease>;
   /**
    * Acquires a lease, runs `callback` while holding it, and releases it
    * afterward. Subject to the same cross-route serialization as
    * {@link LeaseClient.acquire}.
+   *
+   * The callback signal aborts on caller cancellation, lease loss, renewal
+   * failure, or shutdown. Protected writes must carry `authority.fencingToken`.
+   * Callback success does not hide renewal/release failures.
    */
   withLease<T>(
     route: string,
     callback: (signal: AbortSignal, authority: LeaseAuthority) => T | Promise<T>,
     options: WithLeaseOptions,
   ): Promise<T>;
-  query(route: string, options?: { signal?: AbortSignal }): Promise<LeaseInfo>;
+  /** Returns current broker lease state without acquiring ownership. */
+  query(
+    route: string,
+    options?: {
+      /** Cancels this read-only query. */
+      signal?: AbortSignal;
+    },
+  ): Promise<LeaseInfo>;
+  /** Subscribes to release/expiry changes for one lease route. */
   subscribe(
     route: string,
     handler: ChangeHandler,
-    options?: { signal?: AbortSignal },
+    options?: {
+      /** Automatically unsubscribes this handler when aborted. */
+      signal?: AbortSignal;
+    },
   ): Promise<LeaseSubscription>;
+  /** Returns an async stream of release/expiry changes; breaking iteration unsubscribes. */
   notifications(
     route: string,
     options?: SubscriptionIteratorOptions,

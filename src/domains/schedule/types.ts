@@ -15,19 +15,26 @@ import { createSubscriptionHandle } from "../internal/subscription-handle";
  * Per CLIENT_SPEC: route, cron, payload
  */
 export interface ScheduleEntry {
+  /** Concrete schedule route. */
   route: string;
+  /** Broker-supported cron expression. */
   cron: string;
+  /** Whether each firing reaches all subscribers or one selected subscriber. */
   deliveryMode: ScheduleDeliveryMode;
+  /** Payload delivered at each firing. */
   payload: Uint8Array;
 }
 
+/** `Broadcast` delivers to every eligible subscriber; `Single` selects one consumer. */
 export type ScheduleDeliveryMode = "Broadcast" | "Single";
 
 /**
  * Notification is the payload delivered when a schedule fires (SCHEDULE_NOTIFY 705)
  */
 export interface ScheduleNotification {
+  /** Concrete schedule route that fired. */
   route: string;
+  /** Payload configured when the schedule was created. */
   payload: Uint8Array;
 }
 
@@ -38,8 +45,9 @@ export interface DecodedScheduleNotification {
 }
 
 /**
- * ScheduleHandler is called when a schedule fires for a subscribed pattern
- * It is fire-and-forget; the return value is not used
+ * Handles a schedule firing. Delivery acknowledgement does not wait for the
+ * returned promise; failures are reported through background-error handling.
+ * Use Queue-backed scheduled work when processing must be durable.
  */
 export type ScheduleHandler = (notification: ScheduleNotification) => void | Promise<void>;
 
@@ -47,6 +55,7 @@ export type ScheduleHandler = (notification: ScheduleNotification) => void | Pro
  * ScheduleSubscription represents an active subscription to schedule fire notifications
  */
 export interface ScheduleSubscription extends AsyncDisposable {
+  /** Stops this local consumer and eventually releases shared broker subscription state. */
   unsubscribe(): Promise<void>;
 }
 
@@ -63,8 +72,11 @@ export interface ScheduleCreateResponse {
 
 export type ScheduleCancelResponse = Record<string, never>;
 
+/** Decoded schedule page metadata used by the public entries iterator. */
 export interface ScheduleListPage {
+  /** Schedules in this page. */
   entries: readonly ScheduleEntry[];
+  /** Total schedules matching the selector at listing time. */
   totalCount: bigint;
 }
 
@@ -78,11 +90,17 @@ export type ScheduleUnsubscribeResponse = Record<string, never>;
  * Schedule operation status codes
  */
 export enum ScheduleStatus {
+  /** Operation succeeded. */
   Ok = 0,
+  /** Schedule route does not exist. */
   ScheduleNotFound = 1,
+  /** Scheduled task no longer exists. */
   TaskNotFound = 2,
+  /** Cron expression is invalid. */
   InvalidCron = 3,
+  /** Delay is outside the supported range. */
   InvalidDelay = 4,
+  /** Timestamp is invalid. */
   InvalidTimestamp = 5,
 }
 

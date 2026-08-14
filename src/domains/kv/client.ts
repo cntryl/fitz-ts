@@ -64,13 +64,28 @@ type KvSubscriptionState = {
   pendingUnsubscribe?: Promise<void>;
 };
 
+/**
+ * Transactional key-value domain facade. All mutations occur through
+ * {@link KvTransaction}. Concrete routes use `kv://realm/area/resource`;
+ * subscriptions use the same three segments with whole-segment `*` or `**`
+ * wildcards. `begin` also accepts a legacy bare non-empty route.
+ */
 export interface KvClient {
+  /** Starts a transaction scoped to one concrete KV route. */
   begin(route: string, options: KvBeginOptions): Promise<KvTransaction>;
+  /** Registers a callback for mutations matching `pattern`. Dispose the returned handle. */
   subscribe(
     pattern: string,
     handler: KvHandler,
-    options?: { signal?: AbortSignal },
+    options?: {
+      /** Automatically unsubscribes this handler when aborted. */
+      signal?: AbortSignal;
+    },
   ): Promise<KvSubscription>;
+  /**
+   * Returns an async stream of mutation notifications. Breaking iteration
+   * unsubscribes; pass a signal when the consumer may otherwise wait forever.
+   */
   notifications(
     pattern: string,
     options?: SubscriptionIteratorOptions,

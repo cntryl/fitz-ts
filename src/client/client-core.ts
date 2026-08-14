@@ -134,28 +134,52 @@ type DefinedConfigShape<TConfig extends ClientConfig> = {
   [K in Exclude<keyof TConfig, DefaultedClientConfigKeys>]-?: Exclude<TConfig[K], undefined>;
 };
 
+/** Fully defaulted configuration exposed by {@link Client.config}. */
 export type ResolvedClientConfig<TConfig extends ClientConfig> = DefinedConfigShape<TConfig> & {
+  /** Effective asynchronous-handler limits. */
   asyncHandlers: AsyncHandlerOptions;
+  /** Effective heartbeat policy. */
   heartbeat: HeartbeatOptions;
+  /** Effective reconnection policy. */
   reconnect: ReconnectOptions;
+  /** Effective safe-retry policy. */
   retry: RetryOptions;
+  /** Token supplier, or `undefined` for anonymous authentication. */
   tokenProvider?: TConfig["tokenProvider"];
 };
 
+/**
+ * Stateful Fitz client facade. Domain clients are created lazily and share one
+ * connection. Do not use domain methods before connecting or after closing.
+ */
 export type Client<TConfig extends ClientConfig = ClientConfig> = {
+  /** Immutable-by-convention configuration with all defaults applied. */
   config: ResolvedClientConfig<TConfig>;
+  /** Performs one connection and authentication attempt. Concurrent calls share the attempt. */
   connect: (options?: ClientConnectOptions) => Promise<void>;
+  /** Retries startup failures until ready, cancelled, closed, or timed out. */
   connectWhenReady: (options?: ConnectWhenReadyOptions) => Promise<void>;
+  /** Permanently closes the client and its active connection. Safe to call repeatedly. */
   close: () => Promise<void>;
+  /** Returns whether the shared connection is currently authenticated and usable. */
   isConnected: () => boolean;
+  /** Transactional key-value operations. */
   readonly kv: KvClient;
+  /** Durable queue operations. */
   readonly queue: QueueClient;
+  /** Streaming request/response RPC operations. */
   readonly rpc: RpcClient;
+  /** Distributed lease operations. */
   readonly lease: LeaseClient;
+  /** Publish/subscribe notice operations. */
   readonly notice: NoticeClient;
+  /** Append-only stream operations. */
   readonly stream: StreamClient;
+  /** Durable schedule operations. */
   readonly schedule: ScheduleClient;
+  /** Returns the configured endpoint URL. */
   getUrl: () => string;
+  /** Returns the current connection state. */
   getState: () => ConnectionState;
 };
 

@@ -1,11 +1,21 @@
+/** Options for waiting on a {@link WakeGate}. */
 export interface WakeWaitOptions {
+  /** Cancels only this wait and rejects it with an `AbortError`. */
   signal?: AbortSignal;
 }
 
+/**
+ * Versioned coordination primitive that wakes all current waiters without
+ * losing notifications between observing state and beginning a wait.
+ */
 export interface WakeGate {
+  /** Current monotonically increasing wake version. */
   readonly version: number;
+  /** Advances the version, resolves every current waiter, and returns the new version. */
   wake(): number;
+  /** Waits until the version is greater than `version`, avoiding missed wake-ups. */
   waitAfter(version: number, options?: WakeWaitOptions): Promise<number>;
+  /** Waits for the next wake after this call. Prefer `waitAfter` when state was observed earlier. */
   wait(options?: WakeWaitOptions): Promise<number>;
 }
 
@@ -23,6 +33,7 @@ function abortError(): Error {
   return error;
 }
 
+/** Creates an independent versioned wake gate. */
 export function createWakeGate(): WakeGate {
   let currentVersion = 0;
   const waiters = new Set<Waiter>();

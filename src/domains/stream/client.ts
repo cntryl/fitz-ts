@@ -82,16 +82,43 @@ type StreamConnectionPort = RequestPort &
   RetryExecutionPort &
   Partial<ReconnectRestoreRequestPort>;
 
+/**
+ * Append-only event stream facade with transactional writes and gap-aware
+ * reads. Concrete routes use `stream://realm/area/resource`. Read/subscription
+ * selectors accept whole-segment `*`, `stream://realm/**`, and `stream://**`;
+ * the first wildcard selects the area, realm, or global ordering axis.
+ */
 export interface StreamClient {
+  /** Begins a write session for one concrete resource route; always commit, rollback, or dispose it. */
   begin(route: string, options?: StreamBeginOptions): Promise<StreamSession>;
+  /** Reads a concrete or wildcard selector without losing filtered-offset progress. */
   read(selector: string, options: StreamReadOptions): AsyncIterableIterator<StreamReadBatch>;
-  peek(route: string, options?: { signal?: AbortSignal }): Promise<StreamRecord | null>;
-  metadata(route: string, options?: { signal?: AbortSignal }): Promise<StreamMetadata>;
+  /** Returns the latest record for a concrete route, or `null` when the stream is empty. */
+  peek(
+    route: string,
+    options?: {
+      /** Cancels this read-only request. */
+      signal?: AbortSignal;
+    },
+  ): Promise<StreamRecord | null>;
+  /** Reads limits, retention, offsets, and watermarks for a concrete stream route. */
+  metadata(
+    route: string,
+    options?: {
+      /** Cancels this read-only request. */
+      signal?: AbortSignal;
+    },
+  ): Promise<StreamMetadata>;
+  /** Registers a callback for commits matching `pattern`; dispose the returned handle. */
   subscribe(
     pattern: string,
     handler: StreamCommitHandler,
-    options?: { signal?: AbortSignal },
+    options?: {
+      /** Automatically unsubscribes this handler when aborted. */
+      signal?: AbortSignal;
+    },
   ): Promise<StreamSubscription>;
+  /** Returns an async stream of commit summaries; breaking iteration unsubscribes. */
   notifications(
     pattern: string,
     options?: SubscriptionIteratorOptions,

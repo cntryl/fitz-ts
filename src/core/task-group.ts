@@ -1,22 +1,47 @@
+/** Lifecycle state of a {@link TaskGroup}. */
 export type TaskGroupStatus = "idle" | "running" | "stopping" | "stopped" | "failed";
+/** Action taken when one task iteration rejects for a reason other than cancellation. */
 export type TaskGroupErrorPolicy = "stop-group" | "restart-task" | "ignore";
 
+/** Per-worker context supplied to {@link TaskGroupOptions.run}. */
 export type TaskContext = {
+  /** Configured task-group name. */
   readonly name: string;
+  /** Zero-based stable worker index. */
   readonly index: number;
+  /** Aborted when the group is stopping; task code must observe it to stop promptly. */
   readonly signal: AbortSignal;
 };
 
+/** Configuration for a closure-backed group of long-running asynchronous workers. */
 export type TaskGroupOptions = {
+  /** Diagnostic name included in each worker context. */
   readonly name: string;
+  /** Number of workers to run concurrently. Must be at least 1. */
   readonly concurrency: number;
+  /** Failure behavior. Defaults to `stop-group`. */
   readonly errorPolicy?: TaskGroupErrorPolicy;
+  /** One worker iteration. Under `restart-task`, a rejected iteration may be invoked again. */
   readonly run: (ctx: TaskContext) => Promise<void>;
 };
 
 import { createDeferred, type Deferred } from "./types";
 
-export type TaskGroup = ReturnType<typeof createTaskGroup>;
+/** Closure-backed group of managed asynchronous workers. */
+export interface TaskGroup {
+  /** Configured diagnostic name. */
+  readonly name: string;
+  /** Current group lifecycle state. */
+  readonly status: TaskGroupStatus;
+  /** Starts `concurrency` workers. Rejects if already running, stopping, or permanently failed. */
+  start: () => Promise<void>;
+  /** Aborts workers and resolves after they settle; it is safe to call repeatedly. */
+  stop: (reason?: unknown) => Promise<void>;
+  /** Waits for terminal completion and rejects with a `stop-group` worker failure. */
+  join: () => Promise<void>;
+  /** Alias for {@link TaskGroup.stop}, suitable for deterministic cleanup. */
+  dispose: (reason?: unknown) => Promise<void>;
+}
 
 type InternalState = {
   status: TaskGroupStatus;
@@ -25,7 +50,11 @@ type InternalState = {
   error: unknown;
 };
 
-export function createTaskGroup(options: TaskGroupOptions) {
+/**
+ * Creates a task group without starting it. Call `start()`, then `stop()` or
+ * `dispose()` during shutdown; `join()` observes terminal completion.
+ */
+export function createTaskGroup(options: TaskGroupOptions): TaskGroup {
   const name = options.name;
   const concurrency = options.concurrency;
   const errorPolicy = options.errorPolicy ?? "stop-group";

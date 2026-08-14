@@ -68,26 +68,59 @@ type QueueConnectionPort = RequestPort &
   RetryExecutionPort &
   Partial<ReconnectRestoreRequestPort>;
 
+/**
+ * Durable queue facade for producing, reserving, and observing messages.
+ * Concrete routes use `queue://realm/area/resource`; reservation and
+ * subscription selectors may replace whole segments with `*` or `**`.
+ */
 export interface QueueClient {
+  /** Enqueues one message. Do not blindly replay after an ambiguous post-send failure. */
   enqueue(route: string, options: EnqueueOptions): Promise<void>;
+  /**
+   * Reserves up to `batchSize` messages for `leaseSeconds`, optionally waiting
+   * up to `waitSeconds`. `batchSize` defaults to 1 and accepts integers from 0
+   * through 1,024. Complete each item or let its lease expire.
+   */
   reserve(
     route: string,
     options: {
+      /** Reservation lifetime in seconds. */
       leaseSeconds: number;
+      /** Maximum messages to return. Defaults to 1; valid range is 0 through 1,024. */
       batchSize?: number;
+      /** Maximum broker long-poll duration in seconds. Defaults to 0. */
       waitSeconds?: number;
+      /** Cancels waiting; messages already reserved remain leased to this consumer. */
       signal?: AbortSignal;
     },
   ): Promise<readonly QueueItem[]>;
+  /**
+   * Continuously reserves batches when messages become available. `batchSize`
+   * defaults to 1. Breaking iteration stops future reservations but does not
+   * complete yielded items. This helper follows reconnects until cancellation
+   * or permanent client closure.
+   */
   reserveWhenAvailable(
     route: string,
-    options: { leaseSeconds: number; batchSize?: number; signal?: AbortSignal },
+    options: {
+      /** Reservation lifetime in seconds for every yielded item. */
+      leaseSeconds: number;
+      /** Maximum items per yielded batch. Defaults to 1. */
+      batchSize?: number;
+      /** Stops iteration and its availability subscription. */
+      signal?: AbortSignal;
+    },
   ): AsyncIterable<readonly QueueItem[]>;
+  /** Subscribes a callback to availability changes matching `pattern`. */
   subscribe(
     pattern: string,
     handler: AvailabilityHandler,
-    options?: { signal?: AbortSignal },
+    options?: {
+      /** Automatically unsubscribes this handler when aborted. */
+      signal?: AbortSignal;
+    },
   ): Promise<QueueSubscription>;
+  /** Returns an async stream of availability changes; breaking iteration unsubscribes. */
   notifications(
     pattern: string,
     options?: SubscriptionIteratorOptions,

@@ -9,12 +9,16 @@ import { createSubscriptionHandle } from "../internal/subscription-handle";
  * Received notification message
  */
 export interface NoticeMsg {
+  /** Concrete notice route that was published. */
   route: string;
+  /** Publisher-supplied payload. */
   body: Uint8Array;
 }
 
 /**
- * Handler for incoming notifications
+ * Handles an ephemeral notice. Delivery is not durable and callback completion
+ * is not acknowledged to the publisher. The shared async-handler dispatcher
+ * controls concurrency and reports callback failures.
  */
 export type NoticeHandler = (msg: NoticeMsg) => Promise<void> | void;
 
@@ -22,6 +26,7 @@ export type NoticeHandler = (msg: NoticeMsg) => Promise<void> | void;
  * Active notice subscription
  */
 export interface NoticeSubscription extends AsyncDisposable {
+  /** Removes this local consumer; shared wire state closes after the last consumer leaves. */
   unsubscribe(): Promise<void>;
 }
 
@@ -51,5 +56,6 @@ export interface UnsubscribeResponse {
  * Notice status codes
  */
 export enum NoticeStatus {
+  /** Operation succeeded. */
   Ok = 0,
 }

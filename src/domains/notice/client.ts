@@ -57,13 +57,33 @@ type NoticeConnectionPort = RequestPort &
   OptionalResponsePort &
   Partial<ReconnectRestoreRequestPort>;
 
+/**
+ * Ephemeral publish/subscribe facade. Concrete publish routes use
+ * `notice://realm/area/resource`; subscription patterns start with
+ * `notice://` and may contain whole-segment `*` or `**`. Use Queue or Stream
+ * when durable delivery is required.
+ */
 export interface NoticeClient {
-  publish(route: string, options: { body: Uint8Array; signal?: AbortSignal }): Promise<void>;
+  /** Publishes one best-effort notice. Success does not mean any subscriber received it. */
+  publish(
+    route: string,
+    options: {
+      /** Notice payload. */
+      body: Uint8Array;
+      /** Cancels local sending; delivery remains unconfirmed by design. */
+      signal?: AbortSignal;
+    },
+  ): Promise<void>;
+  /** Registers a callback for notices matching `pattern`; dispose the returned handle. */
   subscribe(
     pattern: string,
     handler: NoticeHandler,
-    options?: { signal?: AbortSignal },
+    options?: {
+      /** Automatically unsubscribes this handler when aborted. */
+      signal?: AbortSignal;
+    },
   ): Promise<NoticeSubscription>;
+  /** Returns an async notice stream. Breaking iteration unsubscribes this consumer. */
   notifications(pattern: string, options?: SubscriptionIteratorOptions): AsyncIterable<NoticeMsg>;
 }
 

@@ -72,8 +72,11 @@ const packMetadata = JSON.parse(
 if (packMetadata.entryCount > 20) {
   throw new Error(`tarball contains ${packMetadata.entryCount} files; maximum is 20`);
 }
-if (packMetadata.unpackedSize > 2_500_000) {
-  throw new Error(`tarball unpacks to ${packMetadata.unpackedSize} bytes; maximum is 2500000`);
+// Public JSDoc is intentionally emitted into all four ESM/CJS Node/browser
+// declaration variants. Keep enough headroom for that agent-usable contract
+// while retaining a tight guard against accidentally publishing build debris.
+if (packMetadata.unpackedSize > 2_700_000) {
+  throw new Error(`tarball unpacks to ${packMetadata.unpackedSize} bytes; maximum is 2700000`);
 }
 
 run("npm", ["init", "-y"], { cwd: smokeDir, stdio: "ignore" });
