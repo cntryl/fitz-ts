@@ -43,7 +43,7 @@ jobs:
           tarball=$(find release -name '*.tgz' -type f)
           test -n "$tarball"
           version=$(node -p 'require("./package.json").version')
-          test "$version" = "0.0.18"
+          test "$version" = "0.0.19"
           tag="v$version"
           if git rev-parse "$tag" >/dev/null 2>&1; then
             test "$(git rev-list -n1 "$tag")" = '${{ inputs.sha }}'
@@ -57,7 +57,7 @@ jobs:
       - name: Publish exact attested artifact
         env: { NODE_AUTH_TOKEN: "${{ secrets.NPM_TOKEN }}" }
         run: |
-          remote_integrity=$(npm view @cntryl/fitz@0.0.18 dist.integrity 2>/dev/null || true)
+          remote_integrity=$(npm view @cntryl/fitz@0.0.19 dist.integrity 2>/dev/null || true)
           local_integrity=$(openssl dgst -sha512 -binary "$TARBALL" | openssl base64 -A)
           if test -n "$remote_integrity"; then
             test "$remote_integrity" = "sha512-$local_integrity"
