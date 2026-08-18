@@ -1,6 +1,6 @@
 {
   "name": "@cntryl/fitz",
-  "version": "0.0.19",
+  "version": "0.0.20",
   "description": "TypeScript client library for Fitz distributed system",
   "keywords": [
     "distributed-systems",
@@ -77,7 +77,7 @@
   "scripts": {
     "clean:dist": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
     "build": "npm run clean:dist && npm run build:node && npm run build:browser",
-    "build:node": "vp pack src/index.node.ts --format esm,cjs --platform node --target node24 --out-dir dist/node --clean --dts --deps.never-bundle ws",
+    "build:node": "vp pack src/index.node.ts --format esm,cjs --platform node --target node22 --out-dir dist/node --clean --dts --deps.never-bundle ws",
     "build:browser": "vp pack src/index.browser.ts --format esm,cjs --platform browser --target es2024 --out-dir dist/browser --no-clean --dts",
     "package:lint": "publint && attw --pack . --ignore-rules no-resolution",
     "fixture:check": "node tests/package-consumer/check-stream-fixture.js",
@@ -121,7 +121,7 @@
     "vite-plus": "0.2.9"
   },
   "engines": {
-    "node": ">=24.0.0"
+    "node": ">=22.0.0"
   },
   "packageManager": "npm@11.18.0",
   "allowScripts": {

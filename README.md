@@ -4,7 +4,7 @@ TypeScript client SDK for [Fitz](https://github.com/cntryl/fitz).
 
 ## Install
 
-Requires Node.js 20.19 or later.
+Requires Node.js 22 or later.
 
 ```bash
 npm install @cntryl/fitz
