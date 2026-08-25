@@ -6,6 +6,14 @@ The format is based on Keep a Changelog and the project follows Semantic Version
 
 ## [Unreleased]
 
+## [0.0.21] - 2026-08-25
+
+### Fixed
+
+- Decode Stream `READ` coded responses separately from plain responses used by other Stream operations.
+- Surface Lease acquisition disconnects and subscription handler saturation as typed client failures.
+- Add retryable Schedule backend error code `7010` without misclassifying broker saturation as a cron parse error.
+
 ## [0.0.17] - 2026-08-12
 
 ### Fixed
