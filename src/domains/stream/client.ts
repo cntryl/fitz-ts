@@ -32,7 +32,6 @@ import {
   StreamCommitHandler,
   StreamCommitNotification,
   StreamSubscription,
-  createStreamSubscription,
 } from "./types";
 import { createStreamSession } from "./session";
 import { StreamError, StreamReadStalledError } from "../../core/errors";
@@ -52,20 +51,24 @@ import { createKeyedSingleFlight } from "../internal/keyed-single-flight";
 import { formatStatusName } from "../internal/status";
 import {
   awaitPendingUnsubscribe,
+  createSubscriptionController,
   createGenerationCounter,
   isCurrentEmptyState,
 } from "../internal/subscription-handle";
+import {
+  dispatchSubscriptionHandler,
+  type SubscriptionHandlerRegistration,
+} from "../internal/subscription-dispatch";
 import { createPendingNotificationBuffer } from "../internal/pending-notifications";
 import {
   createSubscriptionIterator,
   type SubscriptionIteratorOptions,
 } from "../internal/subscription-iterator";
 import { createBufferReader } from "../../core/buffer";
-import { parseStandardResponse } from "../../protocol/response";
 
 type StreamSubscriptionState = {
   subId: bigint;
-  handlers: Map<number, StreamCommitHandler>;
+  handlers: Map<number, SubscriptionHandlerRegistration<StreamCommitNotification>>;
   generation: number;
   // Set while a wire UNSUBSCRIBE for this pattern is awaiting its broker
   // round-trip. subscribe()'s "reuse the existing state" path must wait it
@@ -139,10 +142,14 @@ export function createStreamClient(connection: StreamConnectionPort): StreamClie
       const pattern = patternsBySubId.get(subId);
       return pattern === undefined ? undefined : subscriptionsByPattern.get(pattern);
     },
-    (handler, notification) => {
-      connection.dispatchAsyncHandler(async () => {
-        await handler(notification);
-      });
+    (registration, notification) => {
+      dispatchSubscriptionHandler(
+        connection,
+        registration,
+        notification,
+        "stream",
+        notification.route,
+      );
     },
   );
   let initialized = false;
@@ -162,11 +169,15 @@ export function createStreamClient(connection: StreamConnectionPort): StreamClie
         return { subId, handlers: new Map(state.handlers), generation: state.generation };
       },
       async (pattern) => {
-        parseStandardResponse(
-          await requestReconnectFrame(
+        assertStreamResponseSuccess(
+          StreamCodec.decodeResponse(
+            await requestReconnectFrame(
+              MSG_STREAM_UNSUBSCRIBE,
+              StreamCodec.encodeUnsubscribe(pattern),
+            ),
             MSG_STREAM_UNSUBSCRIBE,
-            StreamCodec.encodeUnsubscribe(pattern),
           ),
+          "UNSUBSCRIBE",
         );
       },
     );
@@ -405,14 +416,11 @@ export function createStreamClient(connection: StreamConnectionPort): StreamClie
 
   const subscribeWire = async (pattern: string, request = requestFrame): Promise<bigint> => {
     const payload = StreamCodec.encodeSubscribe(pattern);
-    const parsed = parseStandardResponse(await request(MSG_STREAM_SUBSCRIBE, payload));
-    if (!parsed.success) {
-      throw new StreamError(
-        `SUBSCRIBE failed: ${parsed.error ?? "unknown error"}`,
-        "SUBSCRIBE_FAILED",
-        parsed.errorCode,
-      );
-    }
+    const parsed = StreamCodec.decodeResponse(
+      await request(MSG_STREAM_SUBSCRIBE, payload),
+      MSG_STREAM_SUBSCRIBE,
+    );
+    assertStreamResponseSuccess(parsed, "SUBSCRIBE");
     const reader = createBufferReader(parsed.data);
     if (reader.readU8() !== 1 || reader.remainingBytes() < 8) {
       throw new StreamError("SUBSCRIBE response missing subId", "MISSING_SESSION_ID");
@@ -441,9 +449,13 @@ export function createStreamClient(connection: StreamConnectionPort): StreamClie
       patternsBySubId.set(subId, pattern);
     }
 
-    subscription.handlers.set(handlerId, handler);
+    const controller = createSubscriptionController<StreamSubscription>(
+      async () => unsubscribe(pattern, handlerId),
+      signal,
+    );
+    subscription.handlers.set(handlerId, { handler, fail: (error) => controller.fail(error) });
     pendingNotifications.flush(subId);
-    return createStreamSubscription(async () => unsubscribe(pattern, handlerId), signal);
+    return controller.handle;
   };
 
   const unsubscribe = async (pattern: string, handlerId: number): Promise<void> => {
@@ -459,14 +471,13 @@ export function createStreamClient(connection: StreamConnectionPort): StreamClie
 
     const wireUnsubscribe = (async (): Promise<void> => {
       const payload = StreamCodec.encodeUnsubscribe(pattern);
-      const parsed = parseStandardResponse(await requestFrame(MSG_STREAM_UNSUBSCRIBE, payload));
-      if (!parsed.success) {
-        throw new StreamError(
-          `UNSUBSCRIBE failed: ${parsed.error ?? "unknown error"}`,
-          "UNSUBSCRIBE_FAILED",
-          parsed.errorCode,
-        );
-      }
+      assertStreamResponseSuccess(
+        StreamCodec.decodeResponse(
+          await requestFrame(MSG_STREAM_UNSUBSCRIBE, payload),
+          MSG_STREAM_UNSUBSCRIBE,
+        ),
+        "UNSUBSCRIBE",
+      );
     })();
     subscription.pendingUnsubscribe = wireUnsubscribe;
     try {
@@ -561,6 +572,18 @@ export function createStreamClient(connection: StreamConnectionPort): StreamClie
     subscribe,
     notifications,
   };
+}
+
+function assertStreamResponseSuccess(
+  response: { status: number; errorCode?: number; errorMessage?: string },
+  operation: string,
+): void {
+  if (response.status === StreamStatus.Ok) return;
+  throw new StreamError(
+    `${operation} failed: ${response.errorMessage ?? "unknown error"}`,
+    `${operation}_FAILED`,
+    response.errorCode,
+  );
 }
 
 export function streamNextOffset(

@@ -1,3 +1,5 @@
+import type { SubscriptionHandlerRegistration } from "./subscription-dispatch";
+
 /**
  * Shared buffer for notifications that arrive before their subscription's
  * bookkeeping (subId -> pattern/route -> handlers) is fully registered.
@@ -12,12 +14,12 @@
 export function createPendingNotificationBuffer<
   TNotification,
   TSubscription extends {
-    handlers: Map<number, (notification: TNotification) => void | Promise<void>>;
+    handlers: Map<number, SubscriptionHandlerRegistration<TNotification>>;
   },
 >(
   resolveSubscription: (subId: bigint) => TSubscription | undefined,
   dispatchToHandler: (
-    handler: (notification: TNotification) => void | Promise<void>,
+    registration: SubscriptionHandlerRegistration<TNotification>,
     notification: TNotification,
   ) => void,
 ) {

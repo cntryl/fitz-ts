@@ -16,6 +16,17 @@ import {
   type BufferWriter,
 } from "../../core/buffer";
 import { StreamError } from "../../core/errors";
+import {
+  MSG_STREAM_APPEND,
+  MSG_STREAM_BEGIN,
+  MSG_STREAM_COMMIT,
+  MSG_STREAM_GET_METADATA,
+  MSG_STREAM_LAST,
+  MSG_STREAM_READ,
+  MSG_STREAM_ROLLBACK,
+  MSG_STREAM_SUBSCRIBE,
+  MSG_STREAM_UNSUBSCRIBE,
+} from "../../frame/types";
 import { classifyStreamSelectorScope, isRouteShape, isStreamSelectorShape } from "../_routes";
 import {
   StreamCommitMode,
@@ -39,6 +50,49 @@ export interface StreamWireReadOptions {
 }
 
 export const StreamCodec = {
+  /**
+   * Decode the response envelope selected by the authoritative request message type.
+   * Stream READ is the only operation whose error includes a numeric domain code;
+   * every other Stream error is `[status][message]`.
+   */
+  decodeResponse(
+    payload: Uint8Array,
+    messageType: number,
+  ): {
+    status: number;
+    data: Uint8Array;
+    errorCode?: number;
+    errorMessage?: string;
+  } {
+    const operation = streamOperationName(messageType);
+    const reader = createBufferReader(payload);
+    const status = reader.readU8();
+    if (status === 0) {
+      return { status, data: reader.remaining() };
+    }
+    if (status !== 1) {
+      if (!reader.isEOF()) {
+        throw new StreamError(
+          `${operation} status response has trailing bytes`,
+          `${operation}_INVALID_RESPONSE`,
+          status,
+        );
+      }
+      return { status, data: new Uint8Array(0) };
+    }
+
+    const errorCode = messageType === MSG_STREAM_READ ? reader.readU32BE() : undefined;
+    const errorMessage = reader.readString();
+    if (!reader.isEOF()) {
+      throw new StreamError(
+        `${operation} error response has trailing bytes`,
+        `${operation}_INVALID_RESPONSE`,
+        errorCode,
+      );
+    }
+    return { status, data: new Uint8Array(0), errorCode, errorMessage };
+  },
+
   /**
    * Encode BEGIN request
    * Payload: [route: string][has_ingest_metadata: u8][ingest_metadata?: bytes]
@@ -70,7 +124,7 @@ export const StreamCodec = {
     errorCode?: number;
     errorMessage?: string;
   } {
-    const decoded = this.decodePlainWrappedResponse(payload);
+    const decoded = this.decodeResponse(payload, MSG_STREAM_BEGIN);
     if (decoded.status !== 0) return decoded;
     if (decoded.data.length < 8) return { status: decoded.status };
     return { status: decoded.status, sessionId: createBufferReader(decoded.data).readU64BE() };
@@ -131,7 +185,7 @@ export const StreamCodec = {
     errorCode?: number;
     errorMessage?: string;
   } {
-    const decoded = this.decodePlainWrappedResponse(payload);
+    const decoded = this.decodeResponse(payload, MSG_STREAM_APPEND);
     if (decoded.status !== 0 || decoded.data.length < 12) {
       return decoded;
     }
@@ -167,7 +221,7 @@ export const StreamCodec = {
     errorCode?: number;
     errorMessage?: string;
   } {
-    return this.decodeWrappedResponse(payload);
+    return this.decodeResponse(payload, MSG_STREAM_COMMIT);
   },
 
   /**
@@ -189,7 +243,7 @@ export const StreamCodec = {
     errorCode?: number;
     errorMessage?: string;
   } {
-    return this.decodeWrappedResponse(payload);
+    return this.decodeResponse(payload, MSG_STREAM_ROLLBACK);
   },
 
   /**
@@ -267,7 +321,7 @@ export const StreamCodec = {
     errorCode?: number;
     errorMessage?: string;
   } {
-    const decoded = this.decodeWrappedResponse(payload);
+    const decoded = this.decodeResponse(payload, MSG_STREAM_READ);
     if (decoded.status !== 0) {
       return { ...decoded, items: [] };
     }
@@ -354,7 +408,7 @@ export const StreamCodec = {
     errorCode?: number;
     errorMessage?: string;
   } {
-    const decoded = this.decodeWrappedResponse(payload);
+    const decoded = this.decodeResponse(payload, MSG_STREAM_LAST);
     if (decoded.status !== 0 || decoded.data.length === 0) {
       return decoded;
     }
@@ -386,7 +440,7 @@ export const StreamCodec = {
     errorCode?: number;
     errorMessage?: string;
   } {
-    const decoded = this.decodeWrappedResponse(payload);
+    const decoded = this.decodeResponse(payload, MSG_STREAM_GET_METADATA);
     if (decoded.status !== 0 || decoded.data.length === 0) {
       return decoded;
     }
@@ -533,37 +587,6 @@ export const StreamCodec = {
     const length = reader.readU32BE();
     return reader.readBytes(length);
   },
-
-  decodeWrappedResponse(payload: Uint8Array): {
-    status: number;
-    sessionId?: bigint;
-    data: Uint8Array;
-    errorCode?: number;
-    errorMessage?: string;
-  } {
-    const reader = createBufferReader(payload);
-    const status = reader.readU8();
-    if (status !== 0) {
-      if (reader.remainingBytes() < 8) return { status, data: new Uint8Array(0) };
-      const errorCode = reader.readU32BE();
-      const errorMessage = reader.readString();
-      return { status, data: new Uint8Array(0), errorCode, errorMessage };
-    }
-    return { status, data: reader.remaining() };
-  },
-
-  decodePlainWrappedResponse(payload: Uint8Array): {
-    status: number;
-    data: Uint8Array;
-    errorMessage?: string;
-  } {
-    const reader = createBufferReader(payload);
-    const status = reader.readU8();
-    if (status !== 0) {
-      return { status, data: new Uint8Array(0), errorMessage: reader.readString() };
-    }
-    return { status, data: reader.remaining() };
-  },
 };
 
 export function isGlobalSelector(selector: string): boolean {
@@ -572,6 +595,34 @@ export function isGlobalSelector(selector: string): boolean {
 
 function isStreamSelector(selector: string): boolean {
   return isStreamSelectorShape(selector);
+}
+
+function streamOperationName(messageType: number): string {
+  switch (messageType) {
+    case MSG_STREAM_BEGIN:
+      return "BEGIN";
+    case MSG_STREAM_APPEND:
+      return "APPEND";
+    case MSG_STREAM_COMMIT:
+      return "COMMIT";
+    case MSG_STREAM_ROLLBACK:
+      return "ROLLBACK";
+    case MSG_STREAM_READ:
+      return "READ";
+    case MSG_STREAM_LAST:
+      return "LAST";
+    case MSG_STREAM_GET_METADATA:
+      return "GET_METADATA";
+    case MSG_STREAM_SUBSCRIBE:
+      return "SUBSCRIBE";
+    case MSG_STREAM_UNSUBSCRIBE:
+      return "UNSUBSCRIBE";
+    default:
+      throw new StreamError(
+        `Unknown Stream response message type ${messageType}`,
+        "UNKNOWN_INVALID_RESPONSE",
+      );
+  }
 }
 
 function encodeStreamFilterSet(filter: StreamFilterSet, writer: BufferWriter): void {

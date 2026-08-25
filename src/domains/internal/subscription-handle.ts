@@ -100,21 +100,34 @@ export async function awaitPendingUnsubscribe(state: {
 }
 
 export interface SubscriptionHandle extends AsyncDisposable {
+  /** Resolves after normal unsubscribe and rejects if local notification delivery overflows. */
+  readonly completion: Promise<void>;
   unsubscribe(): Promise<void>;
 }
 
-/**
- * Creates the shared, retryable unsubscribe state machine used by every
- * domain. Concurrent callers share one wire round-trip; a failed explicit
- * unsubscribe remains retryable; async disposal is deliberately best effort.
- */
-export function createSubscriptionHandle<T extends SubscriptionHandle>(
+export interface SubscriptionController<T extends SubscriptionHandle> {
+  readonly handle: T;
+  fail(error: unknown): void;
+}
+
+export function createSubscriptionController<T extends SubscriptionHandle>(
   unsubscribeFn: () => Promise<void>,
   signal?: AbortSignal,
-): T {
+): SubscriptionController<T> {
   let active = true;
+  let terminalFailure = false;
   let pending: Promise<void> | undefined;
   let onAbort: (() => void) | undefined;
+  let resolveCompletion!: () => void;
+  let rejectCompletion!: (error: unknown) => void;
+  const completion = new Promise<void>((resolve, reject) => {
+    resolveCompletion = resolve;
+    rejectCompletion = reject;
+  });
+  // A callback consumer may choose not to await completion. Keep the
+  // programmatic rejection available without ever creating an unhandled
+  // rejection at process/global scope.
+  void completion.catch(() => undefined);
 
   const unsubscribe = async (): Promise<void> => {
     if (!active) return pending;
@@ -126,12 +139,14 @@ export function createSubscriptionHandle<T extends SubscriptionHandle>(
     });
     try {
       await pending;
+      if (!terminalFailure) resolveCompletion();
     } finally {
       pending = undefined;
     }
   };
 
   const handle: SubscriptionHandle = {
+    completion,
     unsubscribe,
     async [Symbol.asyncDispose](): Promise<void> {
       try {
@@ -142,11 +157,36 @@ export function createSubscriptionHandle<T extends SubscriptionHandle>(
     },
   };
 
+  const fail = (error: unknown): void => {
+    if (!active) return;
+    active = false;
+    terminalFailure = true;
+    if (signal && onAbort) signal.removeEventListener("abort", onAbort);
+    rejectCompletion(error);
+    pending = unsubscribeFn()
+      .catch(() => undefined)
+      .finally(() => {
+        pending = undefined;
+      });
+  };
+
   if (signal) {
     onAbort = (): void => void handle[Symbol.asyncDispose]();
     if (signal.aborted) onAbort();
     else signal.addEventListener("abort", onAbort, { once: true });
   }
 
-  return handle as T;
+  return { handle: handle as T, fail };
+}
+
+/**
+ * Creates the shared, retryable unsubscribe state machine used by every
+ * domain. Concurrent callers share one wire round-trip; a failed explicit
+ * unsubscribe remains retryable; async disposal is deliberately best effort.
+ */
+export function createSubscriptionHandle<T extends SubscriptionHandle>(
+  unsubscribeFn: () => Promise<void>,
+  signal?: AbortSignal,
+): T {
+  return createSubscriptionController<T>(unsubscribeFn, signal).handle;
 }

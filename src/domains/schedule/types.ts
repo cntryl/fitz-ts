@@ -4,6 +4,7 @@
  */
 
 import {
+  ErrCodeScheduleBackendError,
   ErrCodeScheduleInvalidDeliveryMode,
   ErrCodeScheduleInvalidSubscription,
   ErrCodeScheduleSubscriptionLimit,
@@ -55,6 +56,8 @@ export type ScheduleHandler = (notification: ScheduleNotification) => void | Pro
  * ScheduleSubscription represents an active subscription to schedule fire notifications
  */
 export interface ScheduleSubscription extends AsyncDisposable {
+  /** Resolves after unsubscribe; rejects with `AsyncHandlerOverflowError` on local overflow. */
+  readonly completion: Promise<void>;
   /** Stops this local consumer and eventually releases shared broker subscription state. */
   unsubscribe(): Promise<void>;
 }
@@ -119,4 +122,5 @@ export const ScheduleStatusNames: Record<number, string> = {
   [ErrCodeScheduleInvalidSubscription]: "INVALID_SUBSCRIPTION",
   [ErrCodeScheduleSubscriptionLimit]: "SUBSCRIPTION_LIMIT",
   [ErrCodeScheduleInvalidDeliveryMode]: "INVALID_DELIVERY_MODE",
+  [ErrCodeScheduleBackendError]: "BACKEND_ERROR",
 };

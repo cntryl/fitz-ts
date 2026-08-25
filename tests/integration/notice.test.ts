@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vite-plus/test";
 import { sleep } from "./helpers";
 import { TestFixture } from "./fixture/fixture";
 import { runWithBothTransports } from "./fixture/transport";
+import { AsyncHandlerOverflowError } from "../../src/core/errors";
 
 const b = (value: string) => Buffer.from(value);
 
@@ -33,6 +34,45 @@ describe("Notice integration", () => {
 
       await f.client().notice.publish(route, { body: b("hello") });
       await expect(received).resolves.toEqual({ route, body: "hello" });
+    });
+
+    it("reconciles a bounded handler burst with an explicit overflow failure", async () => {
+      const subscriber = new TestFixture(transport, authMode);
+      const publisher = new TestFixture(transport, authMode);
+      await subscriber.connectOrFail({
+        asyncHandlers: { maxConcurrency: 1, queueCapacity: 1, timeoutMs: 10_000 },
+      });
+      await publisher.connectOrFail();
+      const route = subscriber.uniqueRoute("notice");
+      let releaseFirst: () => void = () => undefined;
+      const firstCanFinish = new Promise<void>((resolve) => {
+        releaseFirst = resolve;
+      });
+      let markStarted: () => void = () => undefined;
+      const firstStarted = new Promise<void>((resolve) => {
+        markStarted = resolve;
+      });
+      const received: string[] = [];
+      const subscription = await subscriber.client().notice.subscribe(route, async (message) => {
+        received.push(Buffer.from(message.body).toString());
+        if (received.length === 1) {
+          markStarted();
+          await firstCanFinish;
+        }
+      });
+
+      try {
+        await publisher.client().notice.publish(route, { body: b("active") });
+        await firstStarted;
+        await publisher.client().notice.publish(route, { body: b("queued") });
+        await publisher.client().notice.publish(route, { body: b("overflow") });
+
+        await expect(subscription.completion).rejects.toBeInstanceOf(AsyncHandlerOverflowError);
+        releaseFirst();
+        await vi.waitFor(() => expect(received).toEqual(["active", "queued"]));
+      } finally {
+        releaseFirst();
+      }
     });
 
     it("should fan out to all subscribers on the same route", async () => {

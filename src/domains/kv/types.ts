@@ -70,6 +70,8 @@ export type KvHandler = (notification: KvNotification) => void | Promise<void>;
 
 /** Active KV subscription. Dispose or unsubscribe it to release broker and local resources. */
 export interface KvSubscription extends AsyncDisposable {
+  /** Resolves after unsubscribe; rejects with `AsyncHandlerOverflowError` on local overflow. */
+  readonly completion: Promise<void>;
   /** Stops this local handler; the shared wire subscription closes after its final handler leaves. */
   unsubscribe(): Promise<void>;
 }

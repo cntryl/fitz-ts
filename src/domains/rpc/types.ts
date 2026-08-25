@@ -64,6 +64,8 @@ export interface RegisterWorkerOptions {
  * Active worker registration
  */
 export interface RpcSubscription extends AsyncDisposable {
+  /** Resolves after the worker is unregistered. */
+  readonly completion: Promise<void>;
   /** Unregisters this worker and stops admitting new requests. */
   unsubscribe(): Promise<void>;
 }

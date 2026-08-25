@@ -26,6 +26,8 @@ export type NoticeHandler = (msg: NoticeMsg) => Promise<void> | void;
  * Active notice subscription
  */
 export interface NoticeSubscription extends AsyncDisposable {
+  /** Resolves after unsubscribe; rejects with `AsyncHandlerOverflowError` on local overflow. */
+  readonly completion: Promise<void>;
   /** Removes this local consumer; shared wire state closes after the last consumer leaves. */
   unsubscribe(): Promise<void>;
 }

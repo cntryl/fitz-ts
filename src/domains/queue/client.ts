@@ -29,9 +29,14 @@ import { createKeyedSingleFlight } from "../internal/keyed-single-flight";
 import { formatStatusName } from "../internal/status";
 import {
   awaitPendingUnsubscribe,
+  createSubscriptionController,
   createGenerationCounter,
   isCurrentEmptyState,
 } from "../internal/subscription-handle";
+import {
+  dispatchSubscriptionHandler,
+  type SubscriptionHandlerRegistration,
+} from "../internal/subscription-dispatch";
 import { createPendingNotificationBuffer } from "../internal/pending-notifications";
 import {
   createSubscriptionIterator,
@@ -46,12 +51,11 @@ import {
   QueueStatus,
   QueueSubscription,
   createQueueItem,
-  createQueueSubscription,
 } from "./types";
 
 type QueueSubscriptionState = {
   subId: bigint;
-  handlers: Map<number, AvailabilityHandler>;
+  handlers: Map<number, SubscriptionHandlerRegistration<AvailabilityNotification>>;
   generation: number;
   // Set while a wire UNSUBSCRIBE for this pattern is awaiting its broker
   // round-trip. subscribe()'s "reuse the existing state" path must wait it
@@ -141,10 +145,14 @@ export function createQueueClient(connection: QueueConnectionPort): QueueClient 
       const pattern = patternsBySubId.get(subId);
       return pattern === undefined ? undefined : subscriptionsByPattern.get(pattern);
     },
-    (handler, notification) => {
-      connection.dispatchAsyncHandler(async () => {
-        await handler(notification);
-      });
+    (registration, notification) => {
+      dispatchSubscriptionHandler(
+        connection,
+        registration,
+        notification,
+        "queue",
+        notification.route,
+      );
     },
   );
   let notificationHandlerRegistered = false;
@@ -358,10 +366,14 @@ export function createQueueClient(connection: QueueConnectionPort): QueueClient 
       patternsBySubId.set(subId, pattern);
     }
 
-    subscription.handlers.set(handlerId, handler);
+    const controller = createSubscriptionController<QueueSubscription>(
+      async () => unsubscribe(pattern, handlerId),
+      signal,
+    );
+    subscription.handlers.set(handlerId, { handler, fail: (error) => controller.fail(error) });
     pendingNotifications.flush(subId);
 
-    return createQueueSubscription(async () => unsubscribe(pattern, handlerId), signal);
+    return controller.handle;
   };
 
   const unsubscribe = async (pattern: string, handlerId: number): Promise<void> => {

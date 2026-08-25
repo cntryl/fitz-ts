@@ -181,6 +181,40 @@ class FakeLeaseConnection {
   }
 }
 
+class DisconnectingAcquireConnection {
+  readonly handlers = new Map<number, (payload: Uint8Array) => void>();
+  private readonly disconnectListeners = new Set<() => void>();
+  private rejectRequest: (error: unknown) => void = () => undefined;
+
+  request(): Promise<Uint8Array> {
+    return new Promise<Uint8Array>((_resolve, reject) => {
+      this.rejectRequest = reject;
+    });
+  }
+
+  registerNotificationHandler(type: number, handler: (payload: Uint8Array) => void): void {
+    this.handlers.set(type, handler);
+  }
+
+  onReconnect(): () => void {
+    return () => undefined;
+  }
+
+  onDisconnect(listener: () => void): () => void {
+    this.disconnectListeners.add(listener);
+    return () => this.disconnectListeners.delete(listener);
+  }
+
+  dispatchAsyncHandler(task: () => void | Promise<void>): void {
+    void task();
+  }
+
+  disconnect(): void {
+    for (const listener of this.disconnectListeners) listener();
+    this.rejectRequest(new Error("transport disconnected"));
+  }
+}
+
 describe("lease acquisition", () => {
   it("encodes the canonical wait_seconds field, including zero", () => {
     const zero = LeaseCodec.encodeAcquire("lease://realm/area/resource", 30);
@@ -253,6 +287,32 @@ describe("lease acquisition", () => {
     await expect(pending).rejects.toMatchObject({ domainCode: 5006 });
     await expect(pending).rejects.toThrow("lease wait timed out");
   });
+
+  it.each([0, 12])(
+    "should_reject_the_public_acquisition_without_an_unhandled_rejection_given_disconnect_with_wait_seconds_%s",
+    async (waitSeconds) => {
+      const connection = new DisconnectingAcquireConnection();
+      const client = createLeaseClient(connection as unknown as Connection);
+      const unhandled = vi.fn();
+      process.on("unhandledRejection", unhandled);
+
+      try {
+        const pending = client.acquire("lease://realm/area/resource", {
+          ttlSeconds: 30,
+          waitSeconds,
+        });
+        await Promise.resolve();
+
+        connection.disconnect();
+
+        await expect(pending).rejects.toMatchObject({ code: "LEASE_DISCONNECTED" });
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        expect(unhandled).not.toHaveBeenCalled();
+      } finally {
+        process.off("unhandledRejection", unhandled);
+      }
+    },
+  );
 });
 
 describe("withLease", () => {

@@ -117,6 +117,8 @@ export const ErrCodeNoticeSubscriptionLimit = 3003;
 export const ErrCodeScheduleInvalidSubscription = 7006;
 /** Schedule error code: broker subscription limit reached. */
 export const ErrCodeScheduleSubscriptionLimit = 7007;
+/** Schedule error code: broker backend is unavailable or saturated. */
+export const ErrCodeScheduleBackendError = 7010;
 
 const retryableErrorCodes = new Set([
   "KV_3",
@@ -130,6 +132,7 @@ const retryableErrorCodes = new Set([
   `RPC_${ErrCodeRpcWorkerNotFound}`,
   `RPC_${ErrCodeRpcBackpressure}`,
   `RPC_${ErrCodeRpcRouteNotRegistered}`,
+  `SCHEDULE_${ErrCodeScheduleBackendError}`,
 ]);
 
 function retryableKey(error: FitzError): string | null {
@@ -238,6 +241,16 @@ export class RequestQueueFullError extends FitzError {
     super(message, "REQUEST_QUEUE_FULL", undefined, context);
     this.name = "RequestQueueFullError";
     Object.setPrototypeOf(this, RequestQueueFullError.prototype);
+  }
+}
+
+/** A decoded subscription notification could not enter the bounded async-handler queue. */
+export class AsyncHandlerOverflowError extends FitzError {
+  /** Creates a terminal local subscription-overflow failure. */
+  constructor(message = "Async handler queue is full", context?: Record<string, unknown>) {
+    super(message, "ASYNC_HANDLER_OVERFLOW", undefined, context);
+    this.name = "AsyncHandlerOverflowError";
+    Object.setPrototypeOf(this, AsyncHandlerOverflowError.prototype);
   }
 }
 

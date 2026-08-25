@@ -1,16 +1,25 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import { createPendingNotificationBuffer } from "../../../src/domains/internal/pending-notifications";
+import type { SubscriptionHandlerRegistration } from "../../../src/domains/internal/subscription-dispatch";
 
 type FakeNotification = { value: string };
-type FakeSubscription = { handlers: Map<number, (notification: FakeNotification) => void> };
+type FakeSubscription = {
+  handlers: Map<number, SubscriptionHandlerRegistration<FakeNotification>>;
+};
+
+function registration(
+  handler: (notification: FakeNotification) => void,
+): SubscriptionHandlerRegistration<FakeNotification> {
+  return { handler, fail: () => undefined };
+}
 
 describe("createPendingNotificationBuffer", () => {
   it("buffers a notification when dispatchOrQueue finds no known subscription yet", () => {
     const dispatched: FakeNotification[] = [];
     const buffer = createPendingNotificationBuffer<FakeNotification, FakeSubscription>(
       () => undefined,
-      (handler, notification) => handler(notification),
+      (entry, notification) => entry.handler(notification),
     );
 
     buffer.dispatchOrQueue(1n, { value: "early" });
@@ -20,11 +29,11 @@ describe("createPendingNotificationBuffer", () => {
   it("dispatches immediately via dispatchOrQueue once the subscription is already known", () => {
     const dispatched: FakeNotification[] = [];
     const subscription: FakeSubscription = {
-      handlers: new Map([[1, (n) => dispatched.push(n)]]),
+      handlers: new Map([[1, registration((n) => dispatched.push(n))]]),
     };
     const buffer = createPendingNotificationBuffer<FakeNotification, FakeSubscription>(
       () => subscription,
-      (handler, notification) => handler(notification),
+      (entry, notification) => entry.handler(notification),
     );
 
     buffer.dispatchOrQueue(1n, { value: "now" });
@@ -36,14 +45,14 @@ describe("createPendingNotificationBuffer", () => {
     let subscription: FakeSubscription | undefined;
     const buffer = createPendingNotificationBuffer<FakeNotification, FakeSubscription>(
       () => subscription,
-      (handler, notification) => handler(notification),
+      (entry, notification) => entry.handler(notification),
     );
 
     buffer.dispatchOrQueue(1n, { value: "first" });
     buffer.dispatchOrQueue(1n, { value: "second" });
     expect(dispatched).toEqual([]);
 
-    subscription = { handlers: new Map([[1, (n) => dispatched.push(n)]]) };
+    subscription = { handlers: new Map([[1, registration((n) => dispatched.push(n))]]) };
     buffer.flush(1n);
 
     expect(dispatched).toEqual([{ value: "first" }, { value: "second" }]);
@@ -52,11 +61,11 @@ describe("createPendingNotificationBuffer", () => {
   it("does not redeliver an already-flushed notification on a second flush() call", () => {
     const dispatched: FakeNotification[] = [];
     const subscription: FakeSubscription = {
-      handlers: new Map([[1, (n) => dispatched.push(n)]]),
+      handlers: new Map([[1, registration((n) => dispatched.push(n))]]),
     };
     const buffer = createPendingNotificationBuffer<FakeNotification, FakeSubscription>(
       () => subscription,
-      (handler, notification) => handler(notification),
+      (entry, notification) => entry.handler(notification),
     );
 
     buffer.queue(1n, { value: "once" });
@@ -71,13 +80,13 @@ describe("createPendingNotificationBuffer", () => {
     const dispatchedB: FakeNotification[] = [];
     const subscription: FakeSubscription = {
       handlers: new Map([
-        [1, (n) => dispatchedA.push(n)],
-        [2, (n) => dispatchedB.push(n)],
+        [1, registration((n) => dispatchedA.push(n))],
+        [2, registration((n) => dispatchedB.push(n))],
       ]),
     };
     const buffer = createPendingNotificationBuffer<FakeNotification, FakeSubscription>(
       () => subscription,
-      (handler, notification) => handler(notification),
+      (entry, notification) => entry.handler(notification),
     );
 
     buffer.dispatchOrQueue(1n, { value: "fanout" });
@@ -91,13 +100,13 @@ describe("createPendingNotificationBuffer", () => {
     let subscription: FakeSubscription | undefined;
     const buffer = createPendingNotificationBuffer<FakeNotification, FakeSubscription>(
       () => subscription,
-      (handler, notification) => handler(notification),
+      (entry, notification) => entry.handler(notification),
     );
 
     buffer.queue(1n, { value: "orphaned" });
     buffer.remove(1n);
 
-    subscription = { handlers: new Map([[1, (n) => dispatched.push(n)]]) };
+    subscription = { handlers: new Map([[1, registration((n) => dispatched.push(n))]]) };
     buffer.flush(1n);
 
     expect(dispatched).toEqual([]);

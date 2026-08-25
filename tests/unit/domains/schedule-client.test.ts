@@ -2,7 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import { MSG_SCHEDULE_SUBSCRIBE } from "../../../src/frame/types";
 import { createScheduleClient } from "../../../src/domains/schedule/client";
-import { ScheduleError } from "../../../src/core/errors";
+import { ErrCodeScheduleBackendError, ScheduleError } from "../../../src/core/errors";
 
 class FakeScheduleConnection {
   constructor(private readonly response = new Uint8Array([0])) {}
@@ -182,6 +182,24 @@ describe("ScheduleClient domain errors", () => {
     await expect(client.entries("schedule://realm/**").next()).rejects.toMatchObject({
       code: "SCHEDULE_INVALID_SUBSCRIPTION",
       domainCode: 7006,
+    });
+  });
+
+  it("preserves the distinct backend code given coded Schedule saturation", async () => {
+    const message = "backend busy";
+    const messageBytes = new TextEncoder().encode(message);
+    const response = new Uint8Array(1 + 4 + 4 + messageBytes.length);
+    response[0] = 1;
+    new DataView(response.buffer).setUint32(1, ErrCodeScheduleBackendError, false);
+    new DataView(response.buffer).setUint32(5, messageBytes.length, false);
+    response.set(messageBytes, 9);
+
+    const client = createScheduleClient(new FakeScheduleConnection(response));
+
+    await expect(client.entries("schedule://realm/**").next()).rejects.toMatchObject({
+      code: "SCHEDULE_BACKEND_ERROR",
+      domainCode: 7010,
+      message: "LIST_PAGE failed: backend busy",
     });
   });
 });

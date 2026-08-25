@@ -723,6 +723,7 @@ describe("Connection", () => {
         asyncHandlers: {
           maxConcurrency: 1,
           timeoutMs: 1_000,
+          queueCapacity: 1,
         },
         maxRequestQueueSize: 1,
         observability: {
@@ -769,6 +770,34 @@ describe("Connection", () => {
     );
 
     releaseFirst();
+    await connection.close();
+  });
+
+  it("does not derive async handler capacity from maxRequestQueueSize", async () => {
+    const connection = createConnection(
+      () => new FakeTransport(),
+      async () => "",
+      {
+        asyncHandlers: { maxConcurrency: 1, timeoutMs: 1_000, queueCapacity: 2 },
+        maxRequestQueueSize: 0,
+      },
+    );
+    let release: () => void = () => undefined;
+
+    expect(
+      connection.dispatchAsyncHandler(
+        () =>
+          new Promise<void>((resolve) => {
+            release = resolve;
+          }),
+      ),
+    ).toBe(true);
+    expect(connection.dispatchAsyncHandler(() => undefined)).toBe(true);
+    expect(connection.dispatchAsyncHandler(() => undefined)).toBe(true);
+    expect(connection.dispatchAsyncHandler(() => undefined)).toBe(false);
+
+    await Promise.resolve();
+    release();
     await connection.close();
   });
 

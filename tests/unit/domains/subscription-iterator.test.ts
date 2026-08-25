@@ -6,12 +6,18 @@ describe("Subscription iterator", () => {
   it("should yield pushed values and unsubscribe given cancellation", async () => {
     // Arrange
     let push: ((value: string) => void) | undefined;
-    const unsubscribe = vi.fn(async () => undefined);
+    let resolveCompletion: () => void = () => undefined;
+    const completion = new Promise<void>((resolve) => {
+      resolveCompletion = resolve;
+    });
+    const unsubscribe = vi.fn(async () => {
+      resolveCompletion();
+    });
     const controller = new AbortController();
     const iterable = createSubscriptionIterator<string>(
       async (handler) => {
         push = handler;
-        return { unsubscribe };
+        return { completion, unsubscribe };
       },
       { signal: controller.signal },
     );

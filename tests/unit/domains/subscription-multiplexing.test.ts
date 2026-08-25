@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
 
 import { createBufferWriter, utf8Decoder, utf8Encoder } from "../../../src/core/buffer";
 import { createLeaseClient } from "../../../src/domains/lease/client";
@@ -7,10 +7,12 @@ import { createNoticeClient } from "../../../src/domains/notice/client";
 import { createQueueClient } from "../../../src/domains/queue/client";
 import { createScheduleClient } from "../../../src/domains/schedule/client";
 import { createStreamClient } from "../../../src/domains/stream/client";
+import { AsyncHandlerOverflowError } from "../../../src/core/errors";
 import {
   MSG_LEASE_NOTIFY,
   MSG_LEASE_SUBSCRIBE,
   MSG_LEASE_UNSUBSCRIBE,
+  MSG_KV_NOTIFY,
   MSG_KV_SUBSCRIBE,
   MSG_KV_UNSUBSCRIBE,
   MSG_NOTICE_NOTIFY,
@@ -99,6 +101,10 @@ class FakeSubscriptionConnection {
     handler(payload);
   }
 
+  hasNotificationHandler(messageType: number): boolean {
+    return this.notificationHandlers.has(messageType);
+  }
+
   countRequests(messageType: number): number {
     return this.requestCalls.filter((value) => value === messageType).length;
   }
@@ -168,6 +174,14 @@ function encodeNoticeNotification(subId: bigint, route: string, body: Uint8Array
   return writer.getBuffer();
 }
 
+function encodeKvNotification(subId: bigint, route: string): Uint8Array {
+  const writer = createBufferWriter(128);
+  writer.writeU64BE(subId);
+  writer.writeString(route);
+  writer.writeU64BE(1n);
+  return writer.getBuffer();
+}
+
 function encodeQueueNotification(subId: bigint, route: string): Uint8Array {
   const writer = createBufferWriter(128);
   writer.writeU64BE(subId);
@@ -203,6 +217,125 @@ function encodeStreamNotification(subId: bigint, route: string, payload: Uint8Ar
   writer.writeBytes(payload);
   return writer.getBuffer();
 }
+
+type OverflowCase = {
+  name: string;
+  responses: Array<[number, Uint8Array]>;
+  subscribeType: number;
+  notificationType: number;
+  notification: Uint8Array;
+  unsubscribeType: number;
+  subscribe(connection: FakeSubscriptionConnection): Promise<{ completion: Promise<void> }>;
+  notifications(connection: FakeSubscriptionConnection): AsyncIterable<unknown>;
+};
+
+const overflowCases: OverflowCase[] = [
+  {
+    name: "KV",
+    responses: [
+      [MSG_KV_SUBSCRIBE, encodeKvSubIdResponse(1n)],
+      [MSG_KV_UNSUBSCRIBE, encodeStatusOnlyResponse()],
+    ],
+    subscribeType: MSG_KV_SUBSCRIBE,
+    notificationType: MSG_KV_NOTIFY,
+    notification: encodeKvNotification(1n, "kv://realm/area/resource"),
+    unsubscribeType: MSG_KV_UNSUBSCRIBE,
+    subscribe: (connection) =>
+      createKvClient(connection).subscribe("kv://realm/area/resource", () => undefined),
+    notifications: (connection) =>
+      createKvClient(connection).notifications("kv://realm/area/resource"),
+  },
+  {
+    name: "Queue",
+    responses: [
+      [MSG_QUEUE_SUBSCRIBE, encodeQueueSubIdResponse(2n)],
+      [MSG_QUEUE_UNSUBSCRIBE, encodeStatusOnlyResponse()],
+    ],
+    subscribeType: MSG_QUEUE_SUBSCRIBE,
+    notificationType: MSG_QUEUE_NOTIFY,
+    notification: encodeQueueNotification(2n, "queue://realm/area/resource"),
+    unsubscribeType: MSG_QUEUE_UNSUBSCRIBE,
+    subscribe: (connection) =>
+      createQueueClient(connection).subscribe("queue://realm/area/resource", () => undefined),
+    notifications: (connection) =>
+      createQueueClient(connection).notifications("queue://realm/area/resource"),
+  },
+  {
+    name: "Lease",
+    responses: [
+      [MSG_LEASE_SUBSCRIBE, encodeLeaseSubscribeResponse(3n)],
+      [MSG_LEASE_UNSUBSCRIBE, encodeStatusOnlyResponse()],
+    ],
+    subscribeType: MSG_LEASE_SUBSCRIBE,
+    notificationType: MSG_LEASE_NOTIFY,
+    notification: encodeLeaseNotification(3n, "lease://realm/area/resource"),
+    unsubscribeType: MSG_LEASE_UNSUBSCRIBE,
+    subscribe: (connection) =>
+      createLeaseClient(connection).subscribe("lease://realm/area/resource", () => undefined),
+    notifications: (connection) =>
+      createLeaseClient(connection).notifications("lease://realm/area/resource"),
+  },
+  {
+    name: "Notice",
+    responses: [
+      [MSG_NOTICE_SUBSCRIBE, encodeOptionalSubIdResponse(4n)],
+      [MSG_NOTICE_UNSUBSCRIBE, encodeStatusOnlyResponse()],
+    ],
+    subscribeType: MSG_NOTICE_SUBSCRIBE,
+    notificationType: MSG_NOTICE_NOTIFY,
+    notification: encodeNoticeNotification(
+      4n,
+      "notice://realm/area/resource",
+      utf8Encoder.encode("overflow"),
+    ),
+    unsubscribeType: MSG_NOTICE_UNSUBSCRIBE,
+    subscribe: (connection) =>
+      createNoticeClient(connection).subscribe("notice://realm/area/resource", () => undefined),
+    notifications: (connection) =>
+      createNoticeClient(connection).notifications("notice://realm/area/resource"),
+  },
+  {
+    name: "Schedule",
+    responses: [
+      [MSG_SCHEDULE_SUBSCRIBE, encodeOptionalSubIdResponse(5n)],
+      [MSG_SCHEDULE_UNSUBSCRIBE, encodeStatusOnlyResponse()],
+    ],
+    subscribeType: MSG_SCHEDULE_SUBSCRIBE,
+    notificationType: MSG_SCHEDULE_NOTIFY,
+    notification: encodeScheduleNotification(
+      5n,
+      "schedule://realm/area/resource/run",
+      utf8Encoder.encode("overflow"),
+    ),
+    unsubscribeType: MSG_SCHEDULE_UNSUBSCRIBE,
+    subscribe: (connection) =>
+      createScheduleClient(connection).subscribe(
+        "schedule://realm/area/resource/run",
+        () => undefined,
+      ),
+    notifications: (connection) =>
+      createScheduleClient(connection).notifications("schedule://realm/area/resource/run"),
+  },
+  {
+    name: "Stream",
+    responses: [
+      [MSG_STREAM_SUBSCRIBE, encodeOptionalSubIdResponse(6n)],
+      [MSG_STREAM_UNSUBSCRIBE, encodeStatusOnlyResponse()],
+    ],
+    subscribeType: MSG_STREAM_SUBSCRIBE,
+    notificationType: MSG_STREAM_NOTIFY,
+    notification: encodeStreamNotification(
+      6n,
+      "stream://realm/area/resource",
+      utf8Encoder.encode("{}"),
+    ),
+    unsubscribeType: MSG_STREAM_UNSUBSCRIBE,
+    subscribe: (connection) =>
+      createStreamClient(connection).subscribe("stream://realm/area/resource", () => undefined),
+    notifications: (connection) =>
+      createStreamClient(connection).notifications("stream://realm/area/resource"),
+  },
+];
 
 describe("Subscription Multiplexing", () => {
   it("retains Notice bookkeeping until a failed wire unsubscribe can be retried", async () => {
@@ -334,29 +467,44 @@ describe("Subscription Multiplexing", () => {
     expect(connection.countRequests(MSG_NOTICE_UNSUBSCRIBE)).toBe(1);
   });
 
-  it("drops best-effort notice fanout when async dispatch is saturated", async () => {
-    const connection = new FakeSubscriptionConnection([
-      [MSG_NOTICE_SUBSCRIBE, encodeOptionalSubIdResponse(11n)],
-      [MSG_NOTICE_UNSUBSCRIBE, encodeStatusOnlyResponse()],
-    ]);
-    const client = createNoticeClient(connection);
-    const deliveredRoutes: string[] = [];
-    const pattern = "notice://realm/area/resource";
+  it.each(overflowCases)(
+    "$name callback subscription fails programmatically when async dispatch overflows",
+    async (testCase) => {
+      const connection = new FakeSubscriptionConnection(testCase.responses);
+      const subscription = await testCase.subscribe(connection);
+      connection.asyncDispatchAccepted = false;
 
-    await client.subscribe(pattern, async (msg) => {
-      deliveredRoutes.push(msg.route);
-    });
-    connection.asyncDispatchAccepted = false;
+      connection.emitNotification(testCase.notificationType, testCase.notification);
 
-    connection.emitNotification(
-      MSG_NOTICE_NOTIFY,
-      encodeNoticeNotification(11n, pattern, utf8Encoder.encode("dropped")),
-    );
-    await connection.flushHandlers();
+      await expect(subscription.completion).rejects.toBeInstanceOf(AsyncHandlerOverflowError);
+      await vi.waitFor(() => {
+        expect(connection.countRequests(testCase.unsubscribeType)).toBe(1);
+      });
+      expect(connection.asyncDispatchAttempts).toBe(1);
+    },
+  );
 
-    expect(connection.asyncDispatchAttempts).toBe(1);
-    expect(deliveredRoutes).toEqual([]);
-  });
+  it.each(overflowCases)(
+    "$name notification iterator rejects when async dispatch overflows",
+    async (testCase) => {
+      const connection = new FakeSubscriptionConnection(testCase.responses);
+      const iterator = testCase.notifications(connection)[Symbol.asyncIterator]();
+      const pending = iterator.next();
+      await vi.waitFor(() => {
+        expect(connection.hasNotificationHandler(testCase.notificationType)).toBe(true);
+        expect(connection.countRequests(testCase.subscribeType)).toBe(1);
+      });
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      connection.asyncDispatchAccepted = false;
+
+      connection.emitNotification(testCase.notificationType, testCase.notification);
+
+      await expect(pending).rejects.toBeInstanceOf(AsyncHandlerOverflowError);
+      await vi.waitFor(() => {
+        expect(connection.countRequests(testCase.unsubscribeType)).toBe(1);
+      });
+    },
+  );
 
   it("should restore queue subscriptions given reconnect when the application still wants them active", async () => {
     const connection = new FakeSubscriptionConnection([

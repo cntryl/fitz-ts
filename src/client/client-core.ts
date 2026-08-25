@@ -250,6 +250,7 @@ export function createClientWithTransport<TConfig extends ClientConfig>(
     },
     asyncHandlers: {
       maxConcurrency: Infinity,
+      queueCapacity: 1024,
       timeoutMs: 30000,
       ...config.asyncHandlers,
     },
