@@ -111,8 +111,11 @@ Available hooks:
 Async handler controls:
 
 - `asyncHandlers.maxConcurrency` limits how many notification or RPC worker handlers may run at once.
+- `asyncHandlers.queueCapacity` limits queued handler work independently from the pending-request queue and defaults to 1,024.
 - `asyncHandlers.timeoutMs` bounds how long one handler may run before the client records a handler failure.
 - Handler work is dispatched off the receive loop, so slow handlers no longer block frame intake, but they should still be kept small and idempotent.
+- Treat `AsyncHandlerOverflowError` as a terminal local subscription failure. Await callback subscriptions' `completion` promises or consume the notification iterator, which rejects with the same error. The client also emits `fitz.connection.handler_saturated`, increments `fitz.async_handlers.saturated`, and maintains active/queued gauges.
+- Recovery is domain-specific: Notice and direct Schedule firing delivery cannot be replayed; KV/Queue/Lease/Stream notifications should trigger authoritative reads, claims, or reacquisition. RPC workers continue to return broker-visible backpressure on saturation.
 
 Example:
 

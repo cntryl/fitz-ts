@@ -5,7 +5,10 @@ export interface SubscriptionIteratorOptions {
 }
 
 export function createSubscriptionIterator<T>(
-  subscribe: (handler: (item: T) => void) => Promise<{ unsubscribe(): Promise<void> }>,
+  subscribe: (handler: (item: T) => void) => Promise<{
+    readonly completion: Promise<void>;
+    unsubscribe(): Promise<void>;
+  }>,
   options: SubscriptionIteratorOptions = {},
 ): AsyncIterable<T> {
   return {
@@ -17,9 +20,25 @@ export function createSubscriptionIterator<T>(
         wake?.();
         wake = undefined;
       });
+      let completionSettled = false;
+      let completionFailure: unknown;
+      const observeCompletion = subscription.completion.then(
+        () => {
+          completionSettled = true;
+          wake?.();
+          wake = undefined;
+        },
+        (error: unknown) => {
+          completionFailure = error;
+          wake?.();
+          wake = undefined;
+        },
+      );
 
       try {
         while (!options.signal?.aborted) {
+          if (completionFailure !== undefined) throw completionFailure;
+          if (completionSettled) return;
           if (values.length === 0) {
             await new Promise<void>((resolve) => {
               const signal = options.signal;
@@ -31,6 +50,8 @@ export function createSubscriptionIterator<T>(
               signal?.addEventListener("abort", settle, { once: true });
             });
           }
+          if (completionFailure !== undefined) throw completionFailure;
+          if (completionSettled) return;
           while (values.length > 0) {
             yield values.shift()!;
           }
@@ -38,6 +59,7 @@ export function createSubscriptionIterator<T>(
       } finally {
         wake = undefined;
         await subscription.unsubscribe();
+        await observeCompletion;
       }
     },
   };

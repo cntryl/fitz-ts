@@ -167,8 +167,6 @@ export function createConnection(
     tracer: observability?.tracer,
   });
 
-  const asyncHandlerQueueCapacity = Math.min(maxRequestQueueSize, 1024);
-
   const recordAsyncHandlerMetrics = (metrics: {
     activeCount: number;
     queuedCount: number;
@@ -186,7 +184,7 @@ export function createConnection(
       });
     },
     {
-      queueCapacity: asyncHandlerQueueCapacity,
+      queueCapacity: options.asyncHandlers?.queueCapacity ?? 1024,
       onSaturated: (metrics) => {
         log("warn", "fitz.connection.handler_saturated", {
           activeCount: metrics.activeCount,

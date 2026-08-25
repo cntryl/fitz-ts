@@ -79,10 +79,23 @@ describe("Client", () => {
     expect(
       (
         client as unknown as {
-          config: { asyncHandlers: { maxConcurrency: number; timeoutMs: number } };
+          config: {
+            asyncHandlers: { maxConcurrency: number; timeoutMs: number; queueCapacity: number };
+          };
         }
       ).config.asyncHandlers,
-    ).toEqual({ maxConcurrency: 10, timeoutMs: 30000 });
+    ).toEqual({ maxConcurrency: 10, timeoutMs: 30000, queueCapacity: 1024 });
+  });
+
+  it("resolves an explicit async handler queue capacity independently of the request queue", () => {
+    const client = createClient({
+      url: "ws://example.test",
+      maxRequestQueueSize: 3,
+      asyncHandlers: { queueCapacity: 99 },
+    });
+
+    expect(client.config.asyncHandlers.queueCapacity).toBe(99);
+    expect(client.config.maxRequestQueueSize).toBe(3);
   });
 
   it("defaults observability to an empty object when omitted", () => {

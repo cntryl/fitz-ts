@@ -70,8 +70,17 @@ contractual.
 
 - RPC calls return async iterators; cancellation and disconnect surface while
   awaiting `next()`.
-- Async handler fan-out is bounded by `asyncHandlers.maxConcurrency` and
-  `asyncHandlers.timeoutMs`.
+- Async handler fan-out is bounded by `asyncHandlers.maxConcurrency`; waiting
+  work is bounded independently by `asyncHandlers.queueCapacity` (default
+  1,024), and `asyncHandlers.timeoutMs` reports handler deadlines.
+- `maxRequestQueueSize` controls pending requests only and never changes the
+  async-handler queue.
+- A callback subscription's `completion` promise resolves after normal
+  unsubscribe and rejects with `AsyncHandlerOverflowError` if a decoded
+  notification cannot enter the handler queue. Notification iterators reject
+  with the same error. Overflow is terminal for that local subscription; the
+  receive loop never waits for queue space. RPC worker overflow remains
+  protocol backpressure rather than a subscription failure.
 - Duplicate local subscriptions on the same pattern share one wire
   subscription and must not duplicate broker-side registration.
 - `QueueItem`, `Lease`, `KvTransaction`, and `StreamSession` handles from the
@@ -102,6 +111,13 @@ contractual.
   `lease://realm/area/resource` route.
 - Every notification carries its exact concrete route. Queue availability
   notifications also carry ready, delayed, and inflight counts.
+- Notice delivery is ephemeral and an overflowed notice cannot be recovered.
+  KV, Queue, Lease, and Stream notifications are wake/change signals: recover
+  authoritative state with a new transaction/read, `reserve()`, `query()` or
+  `acquire()`, or Stream read from an application-owned offset. Schedule
+  definitions are durable, but a missed firing notification is not replayed to
+  the failed subscription; use Queue-backed scheduled work when processing
+  must be durable.
 - Queue reserve accepts general whole-segment patterns capable of matching three
   segments. Stream read and subscribe accept the complete documented ten-shape
   selector matrix; Stream last is concrete-route only. Every reserved Queue item and every Stream read or
@@ -116,6 +132,12 @@ canonical aliases. Global READ cursors carry optional `lastGlobalOffset`,
 `cursorFingerprint`, and `capturedWatermark`; continuation sends the latter
 two values back as optional u64 fields. Schedule LIST is message 702 and uses
 optional offset/limit fields with a `totalCount` response.
+
+Schedule backend unavailability and broker saturation use the coded Schedule
+error `ErrCodeScheduleBackendError` (`7010`). It is retryable according to
+operation safety and configured policy. It is distinct from Schedule parse and
+cron errors; clients must not tell callers that schedule input was malformed
+when the broker backend was merely unavailable or busy.
 
 ## Packaging
 

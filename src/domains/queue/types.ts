@@ -120,6 +120,8 @@ export type AvailabilityHandler = (notification: AvailabilityNotification) => vo
  * Queue availability subscription.
  */
 export interface QueueSubscription extends AsyncDisposable {
+  /** Resolves after unsubscribe; rejects with `AsyncHandlerOverflowError` on local overflow. */
+  readonly completion: Promise<void>;
   /** Stops this handler; shared wire state remains until the last local handler leaves. */
   unsubscribe(): Promise<void>;
 }

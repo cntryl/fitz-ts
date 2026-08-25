@@ -20,6 +20,7 @@ const client = createClient({
   tokenProvider: async () => "your-jwt-token",
   asyncHandlers: {
     maxConcurrency: 32,
+    queueCapacity: 1024,
     timeoutMs: 5000,
   },
 });
@@ -145,7 +146,8 @@ record and cursor layout, including `globalOffset`, `lastGlobalOffset`,
 - Different domains can operate concurrently on one client connection.
 - Multiple independent KV transactions and stream sessions can also be active concurrently.
 - Do not issue overlapping operations against the same KV transaction, stream session, queue item, or lease. Those stateful handles are intended to be used sequentially.
-- Notification and RPC worker handlers run through a shared async dispatcher. Use `asyncHandlers.maxConcurrency` and `asyncHandlers.timeoutMs` to bound handler fan-out in production.
+- Notification and RPC worker handlers run through a shared async dispatcher. Use `asyncHandlers.maxConcurrency`, `asyncHandlers.queueCapacity`, and `asyncHandlers.timeoutMs` to bound handler work in production. The handler queue is independent from `maxRequestQueueSize`.
+- Every callback subscription exposes `completion`: normal unsubscribe resolves it, while local handler-queue overflow rejects it with `AsyncHandlerOverflowError` and terminates that local subscription. Notification iterators reject with the same typed error. RPC workers keep their protocol backpressure behavior.
 
 ## Transport Support
 

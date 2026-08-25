@@ -15,14 +15,7 @@ import type {
 } from "../base";
 import { KvCodec } from "./codec";
 import { createKvTransaction, KvTransaction } from "./transaction";
-import {
-  createKvSubscription,
-  KvBeginOptions,
-  KvHandler,
-  KvNotification,
-  KvStatus,
-  KvSubscription,
-} from "./types";
+import { KvBeginOptions, KvHandler, KvNotification, KvStatus, KvSubscription } from "./types";
 import {
   MSG_KV_BEGIN,
   MSG_KV_NOTIFY,
@@ -41,9 +34,14 @@ import {
 } from "../internal/subscription-iterator";
 import {
   awaitPendingUnsubscribe,
+  createSubscriptionController,
   createGenerationCounter,
   isCurrentEmptyState,
 } from "../internal/subscription-handle";
+import {
+  dispatchSubscriptionHandler,
+  type SubscriptionHandlerRegistration,
+} from "../internal/subscription-dispatch";
 
 type KvConnectionPort = RequestPort &
   DisconnectListenerPort &
@@ -56,7 +54,7 @@ type KvConnectionPort = RequestPort &
 
 type KvSubscriptionState = {
   subId: bigint;
-  handlers: Map<number, KvHandler>;
+  handlers: Map<number, SubscriptionHandlerRegistration<KvNotification>>;
   generation: number;
   // Set while a wire UNSUBSCRIBE for this pattern is awaiting its broker
   // round-trip. subscribe()'s "reuse the existing state" path must wait it
@@ -209,14 +207,15 @@ export function createKvClient(connection: KvConnectionPort): KvClient {
       try {
         const decoded = KvCodec.decodeNotification(payload);
         const pattern = patternsBySubId.get(decoded.subId);
-        const state = pattern === undefined ? undefined : subscriptionsByPattern.get(pattern);
+        if (pattern === undefined) return;
+        const state = subscriptionsByPattern.get(pattern);
         if (!state) return;
         const notification: KvNotification = {
           route: decoded.route,
           mutationCount: decoded.mutationCount,
         };
-        for (const handler of state.handlers.values()) {
-          connection.dispatchAsyncHandler(async () => handler(notification));
+        for (const registration of state.handlers.values()) {
+          dispatchSubscriptionHandler(connection, registration, notification, "kv", pattern);
         }
       } catch (error) {
         connection.reportBackgroundError?.("fitz.kv.notification_malformed", error, {
@@ -258,7 +257,7 @@ export function createKvClient(connection: KvConnectionPort): KvClient {
       state = await registerSingleFlight(pattern, async () => {
         const registered = {
           subId: await subscribeWire(pattern),
-          handlers: new Map<number, KvHandler>(),
+          handlers: new Map<number, SubscriptionHandlerRegistration<KvNotification>>(),
           generation: subIdGeneration.next(),
         };
         subscriptionsByPattern.set(pattern, registered);
@@ -269,8 +268,12 @@ export function createKvClient(connection: KvConnectionPort): KvClient {
     }
 
     const handlerId = nextHandlerId++;
-    state.handlers.set(handlerId, handler);
-    return createKvSubscription(async () => unsubscribe(pattern, handlerId), options?.signal);
+    const controller = createSubscriptionController<KvSubscription>(
+      async () => unsubscribe(pattern, handlerId),
+      options?.signal,
+    );
+    state.handlers.set(handlerId, { handler, fail: (error) => controller.fail(error) });
+    return controller.handle;
   };
 
   const notifications = (

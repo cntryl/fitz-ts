@@ -75,6 +75,8 @@ export interface FitzObservability {
 export interface AsyncHandlerOptions {
   /** Maximum handlers run concurrently. Defaults to `Infinity`; must be at least 1. */
   maxConcurrency?: number;
+  /** Maximum handlers waiting for a concurrency slot. Defaults to 1,024. */
+  queueCapacity?: number;
   /** Per-handler deadline in milliseconds. Defaults to 30,000. */
   timeoutMs?: number;
 }
@@ -152,7 +154,7 @@ export interface ClientConfig {
   maxRequestQueueSize?: number;
   /** Optional logging, tracing, metrics, and lifecycle adapters. */
   observability?: FitzObservability;
-  /** Concurrency and timeout limits for user callbacks. */
+  /** Concurrency, queue, and timeout limits for user callbacks. */
   asyncHandlers?: AsyncHandlerOptions;
 }
 

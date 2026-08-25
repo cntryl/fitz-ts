@@ -30,9 +30,14 @@ import {
 } from "../internal/subscription-iterator";
 import {
   awaitPendingUnsubscribe,
+  createSubscriptionController,
   createGenerationCounter,
   isCurrentEmptyState,
 } from "../internal/subscription-handle";
+import {
+  dispatchSubscriptionHandler,
+  type SubscriptionHandlerRegistration,
+} from "../internal/subscription-dispatch";
 import { LeaseCodec } from "./codec";
 import { createBufferReader } from "../../core/buffer";
 import { parseStandardResponse } from "../../protocol/response";
@@ -47,12 +52,11 @@ import {
   LeaseAuthority,
   WithLeaseOptions,
   createLease,
-  createLeaseSubscription,
 } from "./types";
 
 type LeaseSubscriptionState = {
   subId: bigint;
-  handlers: Map<number, ChangeHandler>;
+  handlers: Map<number, SubscriptionHandlerRegistration<ChangeNotification>>;
   generation: number;
   // Set while a wire UNSUBSCRIBE for this route is awaiting its broker
   // round-trip. subscribe()'s "reuse the existing state" path must wait it
@@ -147,7 +151,10 @@ export function createLeaseClient(connection: LeaseConnectionPort): LeaseClient 
   connection.onDisconnect(() => {
     const error = new LeaseError("Lease acquisition interrupted by disconnect", "DISCONNECTED");
     for (const queued of queuedAcquisitions.splice(0)) {
-      if (!queued.settled) queued.reject(error);
+      if (!queued.settled) {
+        queued.settled = true;
+        queued.reject(error);
+      }
     }
   });
 
@@ -192,60 +199,92 @@ export function createLeaseClient(connection: LeaseConnectionPort): LeaseClient 
     assertWaitSeconds(options.waitSeconds ?? 0);
     if (options.signal?.aborted)
       throw options.signal.reason ?? new Error("Lease acquisition canceled");
-    initAcquireHandler();
-    const payload = LeaseCodec.encodeAcquire(route, ttlSecs, options.waitSeconds ?? 0);
-    let queuedResolve!: (response: Uint8Array) => void;
-    let queuedReject!: (error: unknown) => void;
-    const queuedResponse = new Promise<Uint8Array>((resolve, reject) => {
-      queuedResolve = resolve;
-      queuedReject = reject;
+    const waitSeconds = options.waitSeconds ?? 0;
+    const payload = LeaseCodec.encodeAcquire(route, ttlSecs, waitSeconds);
+    let disconnected = false;
+    const unregisterAcquireDisconnect = connection.onDisconnect(() => {
+      disconnected = true;
     });
-    const queued = { resolve: queuedResolve, reject: queuedReject, settled: false };
-    queuedAcquisitions.push(queued);
+    let queuedResponse: Promise<Uint8Array> | undefined;
+    let queued:
+      | {
+          resolve: (response: Uint8Array) => void;
+          reject: (error: unknown) => void;
+          settled: boolean;
+        }
+      | undefined;
+
+    if (waitSeconds > 0) {
+      initAcquireHandler();
+      let queuedResolve!: (response: Uint8Array) => void;
+      let queuedReject!: (error: unknown) => void;
+      queuedResponse = new Promise<Uint8Array>((resolve, reject) => {
+        queuedResolve = resolve;
+        queuedReject = reject;
+      });
+      // Observe the internal promise immediately. Callers still receive its
+      // rejection when runAcquire awaits it, but a disconnect or abort that
+      // wins while the primary ACQUIRE request is pending can never become an
+      // unhandled rejection in the meantime.
+      void queuedResponse.catch(() => undefined);
+      queued = { resolve: queuedResolve, reject: queuedReject, settled: false };
+      queuedAcquisitions.push(queued);
+    }
+
     const removeQueued = (): void => {
+      if (!queued) return;
       const index = queuedAcquisitions.indexOf(queued);
       if (index >= 0) queuedAcquisitions.splice(index, 1);
     };
     const onAbort = (): void => {
+      if (!queued || queued.settled) return;
       queued.settled = true;
       removeQueued();
-      queuedReject(options.signal?.reason ?? new Error("Lease acquisition canceled"));
+      queued.reject(options.signal?.reason ?? new Error("Lease acquisition canceled"));
     };
-    options.signal?.addEventListener("abort", onAbort, { once: true });
+    if (queued) options.signal?.addEventListener("abort", onAbort, { once: true });
 
-    let decoded;
     try {
-      const response = await requestFrame(MSG_LEASE_ACQUIRE, payload, options.signal);
-      decoded = LeaseCodec.decodeAcquireResponse(response);
-    } catch (error) {
-      queued.settled = true;
-      removeQueued();
-      options.signal?.removeEventListener("abort", onAbort);
-      queuedResponse.catch(() => undefined);
-      throw error;
-    }
-
-    if (decoded.responseType === 2 || decoded.responseType === 3) {
-      decoded = LeaseCodec.decodeAcquireResponse(await queuedResponse);
-      options.signal?.removeEventListener("abort", onAbort);
-      if (decoded.responseType !== 0 && decoded.responseType !== 1) {
-        throw new LeaseError("ACQUIRE returned a second queued response", "INVALID_RESPONSE");
+      let decoded;
+      try {
+        const response = await requestFrame(MSG_LEASE_ACQUIRE, payload, options.signal);
+        decoded = LeaseCodec.decodeAcquireResponse(response);
+      } catch (error) {
+        if (options.signal?.aborted) {
+          throw options.signal.reason ?? new Error("Lease acquisition canceled");
+        }
+        if (disconnected) {
+          throw new LeaseError("Lease acquisition interrupted by disconnect", "DISCONNECTED");
+        }
+        throw error;
       }
-    } else {
-      queued.settled = true;
+
+      if (decoded.responseType === 2 || decoded.responseType === 3) {
+        if (!queuedResponse) {
+          throw new LeaseError("ACQUIRE queued without a wait request", "INVALID_RESPONSE");
+        }
+        decoded = LeaseCodec.decodeAcquireResponse(await queuedResponse);
+        if (decoded.responseType !== 0 && decoded.responseType !== 1) {
+          throw new LeaseError("ACQUIRE returned a second queued response", "INVALID_RESPONSE");
+        }
+      }
+
+      if (decoded.token === undefined) {
+        throw new LeaseError("ACQUIRE failed", "ACQUIRE_FAILED");
+      }
+
+      const expiresAt =
+        decoded.expiresAt ?? BigInt(Math.floor(Date.now() / 1000)) + BigInt(ttlSecs);
+      return {
+        lease: createLease(decoded.token, expiresAt, route, connection),
+        authority: Object.freeze({ fencingToken: decoded.token }),
+      };
+    } finally {
+      if (queued) queued.settled = true;
       removeQueued();
       options.signal?.removeEventListener("abort", onAbort);
+      unregisterAcquireDisconnect();
     }
-
-    if (decoded.token === undefined) {
-      throw new LeaseError("ACQUIRE failed", "ACQUIRE_FAILED");
-    }
-
-    const expiresAt = decoded.expiresAt ?? BigInt(Math.floor(Date.now() / 1000)) + BigInt(ttlSecs);
-    return {
-      lease: createLease(decoded.token, expiresAt, route, connection),
-      authority: Object.freeze({ fencingToken: decoded.token }),
-    };
   };
 
   const acquireWithAuthority = (
@@ -492,8 +531,12 @@ export function createLeaseClient(connection: LeaseConnectionPort): LeaseClient 
       subscriptionsByRoute.set(route, subscription);
     }
 
-    subscription.handlers.set(handlerId, handler);
-    return createLeaseSubscription(async () => unsubscribe(route, handlerId), signal);
+    const controller = createSubscriptionController<LeaseSubscription>(
+      async () => unsubscribe(route, handlerId),
+      signal,
+    );
+    subscription.handlers.set(handlerId, { handler, fail: (error) => controller.fail(error) });
+    return controller.handle;
   };
 
   const unsubscribe = async (route: string, handlerId: number): Promise<void> => {
@@ -558,10 +601,8 @@ export function createLeaseClient(connection: LeaseConnectionPort): LeaseClient 
         }
 
         const notification: ChangeNotification = { route };
-        for (const handler of subscription.handlers.values()) {
-          connection.dispatchAsyncHandler(async () => {
-            await handler(notification);
-          });
+        for (const registration of subscription.handlers.values()) {
+          dispatchSubscriptionHandler(connection, registration, notification, "lease", route);
         }
       } catch (error) {
         connection.reportBackgroundError?.("fitz.lease.notification_malformed", error, {

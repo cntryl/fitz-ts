@@ -25,6 +25,8 @@ export type ChangeHandler = (notif: ChangeNotification) => void | Promise<void>;
  * Active lease change subscription
  */
 export interface LeaseSubscription extends AsyncDisposable {
+  /** Resolves after unsubscribe; rejects with `AsyncHandlerOverflowError` on local overflow. */
+  readonly completion: Promise<void>;
   /** Stops this local listener and releases shared wire state after the final listener leaves. */
   unsubscribe(): Promise<void>;
 }

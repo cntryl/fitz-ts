@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vite-plus/test";
 
 import { createBufferWriter } from "../../../src/core/buffer";
 import { createScheduleClient } from "../../../src/domains/schedule/client";
+import { AsyncHandlerOverflowError } from "../../../src/core/errors";
 import {
   MSG_SCHEDULE_NOTIFY,
   MSG_SCHEDULE_SUBSCRIBE,
@@ -17,6 +18,7 @@ class FakeScheduleConsumerConnection {
   readonly gates = new Map<number, Promise<void>>();
   subscribeSubId = 11n;
   unsubscribeCount = 0;
+  asyncDispatchAccepted = true;
 
   async request(messageType: number): Promise<Uint8Array> {
     const gate = this.gates.get(messageType);
@@ -39,8 +41,10 @@ class FakeScheduleConsumerConnection {
     this.handlers.set(messageType, handler);
   }
 
-  dispatchAsyncHandler(task: () => void | Promise<void>): void {
+  dispatchAsyncHandler(task: () => void | Promise<void>): boolean {
+    if (!this.asyncDispatchAccepted) return false;
     void Promise.resolve().then(task);
+    return true;
   }
 
   onReconnect(listener: () => void | Promise<void>): () => void {
@@ -150,6 +154,24 @@ describe("ScheduleClient notifications", () => {
     controller.abort();
 
     await expect(pending).resolves.toMatchObject({ done: true });
+    expect(connection.unsubscribeCount).toBe(1);
+  });
+
+  it("rejects and unsubscribes the notification iterator when handler dispatch overflows", async () => {
+    const connection = new FakeScheduleConsumerConnection();
+    const client = createScheduleClient(connection);
+    const iterator = client
+      .notifications("schedule://realm/area/resource/run")
+      [Symbol.asyncIterator]();
+    const pending = iterator.next();
+    await vi.waitFor(() => {
+      expect(connection.handlers.has(MSG_SCHEDULE_NOTIFY)).toBe(true);
+    });
+    connection.asyncDispatchAccepted = false;
+
+    connection.notify(new Uint8Array([9]));
+
+    await expect(pending).rejects.toBeInstanceOf(AsyncHandlerOverflowError);
     expect(connection.unsubscribeCount).toBe(1);
   });
 

@@ -228,6 +228,8 @@ export type StreamCommitHandler = (notification: StreamCommitNotification) => vo
 
 /** Active stream commit subscription. */
 export interface StreamSubscription extends AsyncDisposable {
+  /** Resolves after unsubscribe; rejects with `AsyncHandlerOverflowError` on local overflow. */
+  readonly completion: Promise<void>;
   /** Stops this consumer and releases shared wire state after the final consumer leaves. */
   unsubscribe(): Promise<void>;
 }

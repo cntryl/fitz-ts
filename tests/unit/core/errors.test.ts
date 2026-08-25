@@ -15,6 +15,7 @@ import {
   ErrCodeRpcUnauthorized,
   ErrCodeRpcWorkerNotFound,
   ErrCodeRpcWrongWorker,
+  ErrCodeScheduleBackendError,
   ErrKvConflictingWrite,
   ErrKvLeaseExpired,
   ErrKvOperationNotAllowed,
@@ -45,6 +46,7 @@ import {
   LeaseError,
   QueueError,
   RpcError,
+  ScheduleError,
   StreamError,
   TimeoutError,
   TransportError,
@@ -94,6 +96,7 @@ describe("core errors", () => {
       ErrScheduleInvalidCron,
       ErrScheduleInvalidDelay,
       ErrScheduleInvalidTimestamp,
+      ErrCodeScheduleBackendError,
     }).toEqual({
       ErrKvTransactionAborted: 1,
       ErrKvLeaseExpired: 2,
@@ -135,6 +138,7 @@ describe("core errors", () => {
       ErrScheduleInvalidCron: 3,
       ErrScheduleInvalidDelay: 4,
       ErrScheduleInvalidTimestamp: 5,
+      ErrCodeScheduleBackendError: 7010,
     });
   });
 
@@ -157,6 +161,9 @@ describe("core errors", () => {
       isRetryable(
         new RpcError("route missing", "ROUTE_NOT_REGISTERED", ErrCodeRpcRouteNotRegistered),
       ),
+    ).toBe(true);
+    expect(
+      isRetryable(new ScheduleError("backend busy", "BACKEND_ERROR", ErrCodeScheduleBackendError)),
     ).toBe(true);
     expect(
       isRetryable(

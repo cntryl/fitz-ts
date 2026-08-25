@@ -17,7 +17,34 @@ import type {
   StreamFilterSet,
   StreamReadItem,
 } from "../../../src/domains/stream/types";
+import {
+  MSG_STREAM_APPEND,
+  MSG_STREAM_BEGIN,
+  MSG_STREAM_COMMIT,
+  MSG_STREAM_GET_METADATA,
+  MSG_STREAM_LAST,
+  MSG_STREAM_READ,
+  MSG_STREAM_ROLLBACK,
+  MSG_STREAM_SUBSCRIBE,
+  MSG_STREAM_UNSUBSCRIBE,
+} from "../../../src/frame/types";
 import { testData } from "../helpers/test-utils";
+
+function encodePlainStreamError(message: string, trailingByte?: number): Uint8Array {
+  const writer = createBufferWriter(64);
+  writer.writeU8(1);
+  writer.writeString(message);
+  if (trailingByte !== undefined) writer.writeU8(trailingByte);
+  return writer.getBuffer();
+}
+
+function encodeCodedStreamError(code: number, message: string): Uint8Array {
+  const writer = createBufferWriter(64);
+  writer.writeU8(1);
+  writer.writeU32BE(code);
+  writer.writeString(message);
+  return writer.getBuffer();
+}
 
 function writeOptionalU64(writer: BufferWriter, value: bigint | undefined): void {
   if (value === undefined) {
@@ -402,6 +429,58 @@ describe("StreamCodec", () => {
 
       expect(encoded).toBeInstanceOf(Uint8Array);
       expect(encoded[8]).toBe(1);
+    });
+  });
+
+  describe("operation-specific error envelopes", () => {
+    it.each([
+      ["BEGIN", MSG_STREAM_BEGIN],
+      ["APPEND", MSG_STREAM_APPEND],
+      ["COMMIT", MSG_STREAM_COMMIT],
+      ["ROLLBACK", MSG_STREAM_ROLLBACK],
+      ["LAST", MSG_STREAM_LAST],
+      ["GET_METADATA", MSG_STREAM_GET_METADATA],
+      ["SUBSCRIBE", MSG_STREAM_SUBSCRIBE],
+      ["UNSUBSCRIBE", MSG_STREAM_UNSUBSCRIBE],
+    ])("should_decode_%s_plain_error_with_exact_broker_message", (_operation, messageType) => {
+      const decoded = StreamCodec.decodeResponse(
+        encodePlainStreamError("backend unavailable"),
+        messageType,
+      );
+
+      expect(decoded).toMatchObject({
+        status: 1,
+        errorMessage: "backend unavailable",
+        errorCode: undefined,
+      });
+    });
+
+    it("should_keep_READ_on_the_coded_error_envelope", () => {
+      const decoded = StreamCodec.decodeResponse(
+        encodeCodedStreamError(4005, "stream read failed"),
+        MSG_STREAM_READ,
+      );
+
+      expect(decoded).toMatchObject({
+        status: 1,
+        errorCode: 4005,
+        errorMessage: "stream read failed",
+      });
+    });
+
+    it("should_reject_trailing_data_in_a_plain_error", () => {
+      expect(() =>
+        StreamCodec.decodeResponse(
+          encodePlainStreamError("backend unavailable", 0xff),
+          MSG_STREAM_COMMIT,
+        ),
+      ).toThrowError(expect.objectContaining({ code: "STREAM_COMMIT_INVALID_RESPONSE" }));
+    });
+
+    it("should_reject_a_truncated_coded_READ_error", () => {
+      expect(() =>
+        StreamCodec.decodeResponse(new Uint8Array([1, 0, 0, 0]), MSG_STREAM_READ),
+      ).toThrow();
     });
   });
 

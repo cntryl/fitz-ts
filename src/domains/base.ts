@@ -62,7 +62,7 @@ export interface DisconnectListenerPort {
 }
 
 export interface AsyncDispatchPort {
-  dispatchAsyncHandler(task: AsyncHandlerTask): void;
+  dispatchAsyncHandler(task: AsyncHandlerTask): boolean | void;
   tryDispatchAsyncHandler?(task: AsyncHandlerTask): boolean;
 }
 

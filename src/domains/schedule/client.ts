@@ -30,7 +30,6 @@ import {
   ScheduleSubscription,
   ScheduleListPage,
   ScheduleStatusNames,
-  createScheduleSubscription,
 } from "./types";
 import { ScheduleError } from "../../core/errors";
 import { formatStatusName } from "../internal/status";
@@ -39,9 +38,14 @@ import { restoreMapEntriesAtomically } from "../internal/restore";
 import { createKeyedSingleFlight } from "../internal/keyed-single-flight";
 import {
   awaitPendingUnsubscribe,
+  createSubscriptionController,
   createGenerationCounter,
   isCurrentEmptyState,
 } from "../internal/subscription-handle";
+import {
+  dispatchSubscriptionHandler,
+  type SubscriptionHandlerRegistration,
+} from "../internal/subscription-dispatch";
 import { createPendingNotificationBuffer } from "../internal/pending-notifications";
 import {
   createSubscriptionIterator,
@@ -50,7 +54,7 @@ import {
 
 type ScheduleSubscriptionState = {
   subId: bigint;
-  handlers: Map<number, ScheduleHandler>;
+  handlers: Map<number, SubscriptionHandlerRegistration<ScheduleNotification>>;
   generation: number;
   // Set while a wire UNSUBSCRIBE for this pattern is awaiting its broker
   // round-trip. subscribe()'s "reuse the existing state" path must wait it
@@ -139,10 +143,14 @@ export function createScheduleClient(connection: ScheduleConnectionPort): Schedu
       const pattern = patternsBySubId.get(subId);
       return pattern === undefined ? undefined : subscriptionsByPattern.get(pattern);
     },
-    (handler, notification) => {
-      connection.dispatchAsyncHandler(async () => {
-        await handler(notification);
-      });
+    (registration, notification) => {
+      dispatchSubscriptionHandler(
+        connection,
+        registration,
+        notification,
+        "schedule",
+        notification.route,
+      );
     },
   );
   let notifyHandlerInitialized = false;
@@ -302,9 +310,13 @@ export function createScheduleClient(connection: ScheduleConnectionPort): Schedu
       patternsBySubId.set(subId, pattern);
     }
 
-    subscription.handlers.set(handlerId, handler);
+    const controller = createSubscriptionController<ScheduleSubscription>(
+      async () => unsubscribe(pattern, handlerId),
+      signal,
+    );
+    subscription.handlers.set(handlerId, { handler, fail: (error) => controller.fail(error) });
     pendingNotifications.flush(subId);
-    return createScheduleSubscription(async () => unsubscribe(pattern, handlerId), signal);
+    return controller.handle;
   };
 
   const unsubscribe = async (pattern: string, handlerId: number): Promise<void> => {
