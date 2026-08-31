@@ -185,6 +185,89 @@ export interface QueryResponse {
   expiresAt?: bigint;
 }
 
+/** Opaque continuation position for one LIST scan. Pass back verbatim to continue that scan. */
+export interface LeaseListCursor {
+  /** Opaque id of the snapshot this scan is paging through. */
+  snapshotId: bigint;
+  /** Offset within that snapshot to resume from. */
+  offset: number;
+}
+
+/** One lease returned by LIST. */
+export interface LeaseListItem {
+  /** Concrete lease route. */
+  route: string;
+  /** Logical owner_id the caller passed to ACQUIRE; never a raw session id. */
+  ownerId: string;
+  /** Opaque incarnation, stable for one live session and distinct per session/reconnect. */
+  holderIncarnation: bigint;
+  /** RFC3339 acquisition timestamp. */
+  acquiredAt: string;
+  /** Remaining lease lifetime in seconds at the time the page was produced. */
+  expiresInSecs: bigint;
+  /** Number of successful renewals observed for this holding. */
+  renewals: number;
+}
+
+/** One decoded LIST response page. */
+export interface LeaseListPage {
+  /** Leases matching the pattern in this page. */
+  items: readonly LeaseListItem[];
+  /** Pass back verbatim to `listPage`/`list` to continue this scan; absent when exhausted. */
+  nextCursor?: LeaseListCursor;
+}
+
+/** Options for {@link import("./client").LeaseClient.observeInventory}. */
+export interface LeaseInventoryOptions {
+  /**
+   * Cancels the observer's bootstrap and, once running, its background
+   * work (notification-triggered and periodic LIST reconciliation).
+   * Does not itself call `close()` — the observer still requires an
+   * explicit `close()`/`[Symbol.asyncDispose]()` to unsubscribe.
+   */
+  signal?: AbortSignal;
+  /**
+   * Full-relist backstop interval in milliseconds, guarding against a
+   * missed or dropped `LEASE_NOTIFY`. Each cycle applies an independent
+   * ±20% jitter so a fleet of observers doesn't reconcile in lockstep.
+   * Defaults to 60_000ms. Pass `0` to disable periodic reconciliation.
+   */
+  reconcileIntervalMs?: number;
+}
+
+/**
+ * Race-safe, high-level view over every lease matching a pattern.
+ *
+ * Owns the bootstrap sequence (subscribe, invalidate, list, install, drain),
+ * coalesced full-LIST updates on notification, periodic reconciliation, and
+ * reconnect recovery, so callers never hand-roll it.
+ * See {@link import("./client").LeaseClient.observeInventory}.
+ */
+export interface LeaseInventoryObserver extends AsyncDisposable {
+  /**
+   * `true` once the current view reflects a completed bootstrap or
+   * reconciliation pass; `false` while the initial bootstrap or a
+   * post-reconnect re-bootstrap is in flight. The view itself is only ever
+   * replaced with a fresher one — a caller reading `snapshot()` while not
+   * `ready` still sees the last-known-good view, never a partial one.
+   */
+  readonly ready: boolean;
+  /** Defensive-copy snapshot of the current observed view, keyed by route. */
+  snapshot(): ReadonlyMap<string, LeaseListItem>;
+  /**
+   * Registers a callback invoked after the view changes (initial install,
+   * buffered-notification drain, a notification-triggered relist, periodic
+   * reconciliation, or a post-reconnect re-bootstrap). Returns a function
+   * that removes the callback.
+   */
+  onUpdate(handler: (snapshot: ReadonlyMap<string, LeaseListItem>) => void): () => void;
+  /**
+   * Stops background reconciliation, unsubscribes the underlying wire
+   * subscription, and releases resources. Safe to call more than once.
+   */
+  close(): Promise<void>;
+}
+
 /**
  * Response to SUBSCRIBE request
  */

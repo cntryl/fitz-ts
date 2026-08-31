@@ -51,6 +51,7 @@ export const MSG_LEASE_QUERY = 403;
 export const MSG_LEASE_SUBSCRIBE = 407;
 export const MSG_LEASE_UNSUBSCRIBE = 408;
 export const MSG_LEASE_NOTIFY = 409; // Server -> Client only
+export const MSG_LEASE_LIST = 410;
 
 // Notice Domain (500-599)
 export const MSG_NOTICE_PUBLISH = 500;

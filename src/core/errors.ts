@@ -74,6 +74,10 @@ export const ErrCodeLeaseHeld = 5001;
 export const ErrCodeLeaseBadRequest = 5008;
 /** Lease error code: invalid change-subscription route. */
 export const ErrCodeLeaseInvalidSubscriptionRoute = 5010;
+/** Lease error code: LIST cursor is unknown, evicted, or reused with a different pattern. */
+export const ErrCodeLeaseInvalidListCursor = 5011;
+/** Lease error code: LIST pattern is malformed. */
+export const ErrCodeLeaseInvalidListPattern = 5012;
 
 /** Notice status: publish or subscription failed without a more specific status. */
 export const ErrNoticeGeneral = 1;

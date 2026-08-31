@@ -168,4 +168,180 @@ describe("LeaseCodec", () => {
       expect(decoded.route).toBe("lease://acme/resources/db_connection");
     });
   });
+
+  describe("LIST encoding", () => {
+    it("encodes a cursor-less request with the default limit", () => {
+      const encoded = LeaseCodec.encodeList("lease://acme/renderers/*");
+      const reader = createBufferReaderCompat(encoded);
+      expect(reader.readString()).toBe("lease://acme/renderers/*");
+      expect(reader.readU8()).toBe(0); // has_cursor = false
+      expect(reader.readU32BE()).toBe(0); // limit = 0 (server default)
+      expect(reader.isEOF()).toBe(true);
+    });
+
+    it("encodes a request carrying a cursor and an explicit limit", () => {
+      const encoded = LeaseCodec.encodeList("lease://acme/**", {
+        cursor: { snapshotId: 777n, offset: 200 },
+        limit: 50,
+      });
+      const reader = createBufferReaderCompat(encoded);
+      expect(reader.readString()).toBe("lease://acme/**");
+      expect(reader.readU8()).toBe(1); // has_cursor = true
+      expect(reader.readU64BE()).toBe(777n);
+      expect(reader.readU32BE()).toBe(200);
+      expect(reader.readU32BE()).toBe(50); // limit
+      expect(reader.isEOF()).toBe(true);
+    });
+
+    it("rejects a negative limit instead of bit-coercing it onto the wire", () => {
+      expect(() => LeaseCodec.encodeList("lease://acme/**", { limit: -1 })).toThrow(LeaseError);
+    });
+
+    it("rejects a fractional limit", () => {
+      expect(() => LeaseCodec.encodeList("lease://acme/**", { limit: 1.5 })).toThrow(LeaseError);
+    });
+
+    it("rejects a non-finite limit", () => {
+      expect(() => LeaseCodec.encodeList("lease://acme/**", { limit: Infinity })).toThrow(
+        LeaseError,
+      );
+      expect(() => LeaseCodec.encodeList("lease://acme/**", { limit: Number.NaN })).toThrow(
+        LeaseError,
+      );
+    });
+
+    it("rejects a limit above the u32 range", () => {
+      expect(() => LeaseCodec.encodeList("lease://acme/**", { limit: 0x1_0000_0000 })).toThrow(
+        LeaseError,
+      );
+    });
+
+    it("rejects an invalid cursor offset", () => {
+      expect(() =>
+        LeaseCodec.encodeList("lease://acme/**", {
+          cursor: { snapshotId: 1n, offset: -1 },
+        }),
+      ).toThrow(LeaseError);
+      expect(() =>
+        LeaseCodec.encodeList("lease://acme/**", {
+          cursor: { snapshotId: 1n, offset: 1.5 },
+        }),
+      ).toThrow(LeaseError);
+      expect(() =>
+        LeaseCodec.encodeList("lease://acme/**", {
+          cursor: { snapshotId: 1n, offset: 0x1_0000_0000 },
+        }),
+      ).toThrow(LeaseError);
+    });
+
+    it("accepts the full valid u32 range at the boundary", () => {
+      expect(() => LeaseCodec.encodeList("lease://acme/**", { limit: 0xffff_ffff })).not.toThrow();
+      expect(() =>
+        LeaseCodec.encodeList("lease://acme/**", {
+          cursor: { snapshotId: 1n, offset: 0xffff_ffff },
+        }),
+      ).not.toThrow();
+    });
+  });
+
+  describe("LIST decoding", () => {
+    it("decodes a page with items and no further cursor", () => {
+      const writer = createBufferWriter(128);
+      writer.writeU8(0); // status = success
+      writer.writeU32BE(1); // item_count
+      writer.writeString("lease://acme/renderers/one"); // route
+      writer.writeString("worker-42"); // owner_id
+      writer.writeU64BE(9001n); // holder_incarnation
+      writer.writeString("2026-08-29T00:00:00Z"); // acquired_at
+      writer.writeU64BE(120n); // expires_in_secs
+      writer.writeU32BE(3); // renewals
+      writer.writeU8(0); // has_next = false
+
+      const decoded = LeaseCodec.decodeListResponse(writer.getBuffer());
+      expect(decoded.items).toHaveLength(1);
+      expect(decoded.items[0]).toEqual({
+        route: "lease://acme/renderers/one",
+        ownerId: "worker-42",
+        holderIncarnation: 9001n,
+        acquiredAt: "2026-08-29T00:00:00Z",
+        expiresInSecs: 120n,
+        renewals: 3,
+      });
+      expect(decoded.nextCursor).toBeUndefined();
+    });
+
+    it("decodes an empty page carrying a continuation cursor", () => {
+      const writer = createBufferWriter(32);
+      writer.writeU8(0);
+      writer.writeU32BE(0); // item_count
+      writer.writeU8(1); // has_next = true
+      writer.writeU64BE(555n); // snapshot_id
+      writer.writeU32BE(100); // offset
+
+      const decoded = LeaseCodec.decodeListResponse(writer.getBuffer());
+      expect(decoded.items).toHaveLength(0);
+      expect(decoded.nextCursor).toEqual({ snapshotId: 555n, offset: 100 });
+    });
+
+    it("throws a LeaseError carrying the domain code for ERR_INVALID_LIST_CURSOR", () => {
+      const writer = createBufferWriter(64);
+      writer.writeU8(1);
+      writer.writeU32BE(5011);
+      writer.writeString("unknown cursor snapshot");
+
+      try {
+        LeaseCodec.decodeListResponse(writer.getBuffer());
+        throw new Error("expected LIST decoding to fail");
+      } catch (error) {
+        expect(error).toBeInstanceOf(LeaseError);
+        expect((error as LeaseError).domainCode).toBe(5011);
+      }
+    });
+
+    it("throws a LeaseError carrying the domain code for ERR_INVALID_LIST_PATTERN", () => {
+      const writer = createBufferWriter(64);
+      writer.writeU8(1);
+      writer.writeU32BE(5012);
+      writer.writeString("malformed list pattern");
+
+      try {
+        LeaseCodec.decodeListResponse(writer.getBuffer());
+        throw new Error("expected LIST decoding to fail");
+      } catch (error) {
+        expect(error).toBeInstanceOf(LeaseError);
+        expect((error as LeaseError).domainCode).toBe(5012);
+      }
+    });
+  });
 });
+
+// Minimal local reader used only to assert exact wire byte layout in these
+// tests without depending on LeaseCodec's own (equally-under-test) reader.
+function createBufferReaderCompat(buffer: Uint8Array) {
+  let offset = 0;
+  const view = new DataView(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+  return {
+    readU8(): number {
+      return buffer[offset++]!;
+    },
+    readU32BE(): number {
+      const value = view.getUint32(offset);
+      offset += 4;
+      return value;
+    },
+    readU64BE(): bigint {
+      const value = view.getBigUint64(offset);
+      offset += 8;
+      return value;
+    },
+    readString(): string {
+      const len = this.readU32BE();
+      const bytes = buffer.subarray(offset, offset + len);
+      offset += len;
+      return new TextDecoder().decode(bytes);
+    },
+    isEOF(): boolean {
+      return offset >= buffer.length;
+    },
+  };
+}

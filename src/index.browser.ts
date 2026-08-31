@@ -71,6 +71,8 @@ export {
   ErrCodeLeaseHeld,
   ErrCodeLeaseBadRequest,
   ErrCodeLeaseInvalidSubscriptionRoute,
+  ErrCodeLeaseInvalidListCursor,
+  ErrCodeLeaseInvalidListPattern,
   ErrNoticeGeneral,
   ErrCodeNoticeInvalidPattern,
   ErrCodeNoticeSubscriptionLimit,
@@ -166,6 +168,11 @@ export type {
   LeaseLifecycleError,
   LeaseAuthority,
   WithLeaseOptions,
+  LeaseListCursor,
+  LeaseListItem,
+  LeaseListPage,
+  LeaseInventoryOptions,
+  LeaseInventoryObserver,
 } from "./domains/lease/types";
 export type { NoticeClient } from "./domains/notice/client";
 export type {

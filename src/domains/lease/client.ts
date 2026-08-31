@@ -16,12 +16,13 @@ import type {
 import { LeaseError } from "../../core/errors";
 import {
   MSG_LEASE_ACQUIRE,
+  MSG_LEASE_LIST,
   MSG_LEASE_NOTIFY,
   MSG_LEASE_QUERY,
   MSG_LEASE_SUBSCRIBE,
   MSG_LEASE_UNSUBSCRIBE,
 } from "../../frame/types";
-import { isRouteShape } from "../_routes";
+import { isRegistrationPatternShape, isRouteShape } from "../_routes";
 import { restoreMapEntriesAtomically } from "../internal/restore";
 import { createKeyedSingleFlight } from "../internal/keyed-single-flight";
 import {
@@ -50,6 +51,11 @@ import {
   LeaseLifecycleError,
   LeaseAcquireOptions,
   LeaseAuthority,
+  LeaseListCursor,
+  LeaseListItem,
+  LeaseListPage,
+  LeaseInventoryOptions,
+  LeaseInventoryObserver,
   WithLeaseOptions,
   createLease,
 } from "./types";
@@ -75,8 +81,11 @@ type LeaseConnectionPort = RequestPort &
 
 /**
  * Distributed lease facade for manual handles and managed fenced critical
- * sections. Every method requires a concrete `lease://realm/area/resource`
- * route; lease subscriptions intentionally do not accept wildcards.
+ * sections. `acquire`, `withLease`, `query`, `extend`, and `release` all
+ * require a concrete `lease://realm/area/resource` route. `subscribe`,
+ * `unsubscribe`, `listPage`, and `list` additionally accept whole-segment `*`
+ * wildcards in any position and a trailing `**` alias (e.g.
+ * `lease://acme/renderers/*`, `lease://acme/**`).
  */
 export interface LeaseClient {
   /**
@@ -131,12 +140,68 @@ export interface LeaseClient {
     route: string,
     options?: SubscriptionIteratorOptions,
   ): AsyncIterable<ChangeNotification>;
+  /**
+   * Returns one page of leases matching `pattern`. The server snapshots the
+   * full matching set on the cursor-less first call, so paging through one
+   * scan (same `snapshotId`) never produces duplicates or omissions even
+   * under concurrent acquire/release/expiry elsewhere. Reusing a cursor with
+   * a different pattern, or after that snapshot is evicted or the broker
+   * restarts, fails with `ERR_INVALID_LIST_CURSOR`.
+   */
+  listPage(
+    pattern: string,
+    options?: {
+      /** Continuation cursor from a previous page; omit to start a new scan. */
+      cursor?: LeaseListCursor;
+      /** Requested page size; 0 or omitted uses the server default, clamped to its max. */
+      limit?: number;
+      /** Cancels this read-only page fetch. */
+      signal?: AbortSignal;
+    },
+  ): Promise<LeaseListPage>;
+  /**
+   * Iterates pages of leases matching `pattern`. Each yielded value is a
+   * page; break iteration to stop fetching additional pages.
+   */
+  list(
+    pattern: string,
+    options?: {
+      /** Requested leases per broker page. */
+      pageSize?: number;
+      /** Cancels listing and closes the iterator. */
+      signal?: AbortSignal;
+    },
+  ): AsyncIterableIterator<readonly LeaseListItem[]>;
+  /**
+   * Starts a race-safe, high-level observer of every lease matching
+   * `pattern`: subscribes and waits for acknowledgement, buffers
+   * notifications while it lists the current matching set to completion,
+   * installs that as the initial view, then drains anything buffered
+   * during bootstrap. Afterward, notifications coalesce into full LIST
+   * reconciliation passes so every item retains the complete inventory
+   * shape. Periodic reconciliation backstops missed notifications, and a
+   * broker reconnect invalidates the view and re-runs bootstrap.
+   *
+   * The returned promise resolves once the initial bootstrap installs its
+   * first view (`ready` is already `true`). Always `close()` (or
+   * `await using`) the result.
+   */
+  observeInventory(
+    pattern: string,
+    options?: LeaseInventoryOptions,
+  ): Promise<LeaseInventoryObserver>;
 }
 
 export function createLeaseClient(connection: LeaseConnectionPort): LeaseClient {
   const registerSingleFlight = createKeyedSingleFlight<string, bigint>();
   const { requestFrame, requestReconnectFrame, runWithRetry } = createDomainClient(connection);
   const subscriptionsByRoute = new Map<string, LeaseSubscriptionState>();
+  // Maps a live wire subId to the pattern/route it was subscribed under.
+  // LEASE_NOTIFY carries the concrete route that changed, not the
+  // subscribed pattern, so dispatch must resolve subId -> pattern first
+  // (a plain subscriptionsByRoute.get(decodedRoute) lookup only ever
+  // matches an exact-route subscription, never a wildcard one).
+  const patternsBySubId = new Map<bigint, string>();
   const subIdGeneration = createGenerationCounter();
   let initialized = false;
   let acquireHandlerInitialized = false;
@@ -177,6 +242,10 @@ export function createLeaseClient(connection: LeaseConnectionPort): LeaseClient 
         );
       },
     );
+    patternsBySubId.clear();
+    for (const [route, state] of subscriptionsByRoute) {
+      patternsBySubId.set(state.subId, route);
+    }
   });
 
   const initAcquireHandler = (): void => {
@@ -468,9 +537,12 @@ export function createLeaseClient(connection: LeaseConnectionPort): LeaseClient 
   const subscribe = async (
     route: string,
     handler: ChangeHandler,
-    options?: { signal?: AbortSignal },
+    options?: {
+      signal?: AbortSignal;
+      preDispatch?: (notification: ChangeNotification) => void;
+    },
   ): Promise<LeaseSubscription> => {
-    assertExactLeaseRoute(route);
+    assertLeaseSubscriptionPattern(route);
     initNotifyHandler();
 
     while (true) {
@@ -484,11 +556,17 @@ export function createLeaseClient(connection: LeaseConnectionPort): LeaseClient 
           await awaitPendingUnsubscribe(existing);
           continue;
         }
-        return addLocalSubscription(route, existing.subId, handler, options?.signal);
+        return addLocalSubscription(
+          route,
+          existing.subId,
+          handler,
+          options?.signal,
+          options?.preDispatch,
+        );
       }
 
       const subId = await registerSingleFlight(route, () => subscribeWire(route));
-      return addLocalSubscription(route, subId, handler, options?.signal);
+      return addLocalSubscription(route, subId, handler, options?.signal, options?.preDispatch);
     }
   };
 
@@ -523,19 +601,25 @@ export function createLeaseClient(connection: LeaseConnectionPort): LeaseClient 
     subId: bigint,
     handler: ChangeHandler,
     signal?: AbortSignal,
+    preDispatch?: (notification: ChangeNotification) => void,
   ): LeaseSubscription => {
     const handlerId = nextHandlerId++;
     let subscription = subscriptionsByRoute.get(route);
     if (!subscription) {
       subscription = { subId, handlers: new Map(), generation: subIdGeneration.next() };
       subscriptionsByRoute.set(route, subscription);
+      patternsBySubId.set(subId, route);
     }
 
     const controller = createSubscriptionController<LeaseSubscription>(
       async () => unsubscribe(route, handlerId),
       signal,
     );
-    subscription.handlers.set(handlerId, { handler, fail: (error) => controller.fail(error) });
+    subscription.handlers.set(handlerId, {
+      handler,
+      fail: (error) => controller.fail(error),
+      preDispatch,
+    });
     return controller.handle;
   };
 
@@ -583,6 +667,7 @@ export function createLeaseClient(connection: LeaseConnectionPort): LeaseClient 
     // genuinely empty.
     if (isCurrentEmptyState(subscriptionsByRoute, route, subscription)) {
       subscriptionsByRoute.delete(route);
+      patternsBySubId.delete(subscription.subId);
     }
   };
 
@@ -594,8 +679,13 @@ export function createLeaseClient(connection: LeaseConnectionPort): LeaseClient 
     initialized = true;
     connection.registerNotificationHandler(MSG_LEASE_NOTIFY, (payload) => {
       try {
-        const { route } = LeaseCodec.decodeNotification(payload);
-        const subscription = subscriptionsByRoute.get(route);
+        const { subId, route } = LeaseCodec.decodeNotification(payload);
+        // `route` is the concrete lease route that changed, not necessarily
+        // the (possibly wildcard) pattern it was subscribed under — resolve
+        // the owning subscription by subId first, matching every other
+        // pattern-subscribing domain.
+        const pattern = patternsBySubId.get(subId);
+        const subscription = pattern === undefined ? undefined : subscriptionsByRoute.get(pattern);
         if (!subscription) {
           return;
         }
@@ -612,21 +702,243 @@ export function createLeaseClient(connection: LeaseConnectionPort): LeaseClient 
     });
   };
 
+  const listPage = async (
+    pattern: string,
+    options: { cursor?: LeaseListCursor; limit?: number; signal?: AbortSignal } = {},
+  ): Promise<LeaseListPage> => {
+    assertLeaseSubscriptionPattern(pattern);
+    return runWithRetry(
+      {
+        domain: "lease",
+        operation: "list",
+        retryClass: "replayable_read",
+      },
+      async () => {
+        const payload = LeaseCodec.encodeList(pattern, {
+          cursor: options.cursor,
+          limit: options.limit,
+        });
+        const response = await requestFrame(MSG_LEASE_LIST, payload, options.signal);
+        return LeaseCodec.decodeListResponse(response);
+      },
+    );
+  };
+
+  const list = async function* (
+    pattern: string,
+    options: { pageSize?: number; signal?: AbortSignal } = {},
+  ): AsyncIterableIterator<readonly LeaseListItem[]> {
+    let cursor: LeaseListCursor | undefined;
+    while (true) {
+      const page = await listPage(pattern, {
+        cursor,
+        limit: options.pageSize,
+        signal: options.signal,
+      });
+      yield Object.freeze(page.items.slice());
+      if (!page.nextCursor) {
+        return;
+      }
+      cursor = page.nextCursor;
+    }
+  };
+
+  const observeInventory = async (
+    pattern: string,
+    options: LeaseInventoryOptions = {},
+  ): Promise<LeaseInventoryObserver> => {
+    assertLeaseSubscriptionPattern(pattern);
+    const baseIntervalMs = options.reconcileIntervalMs ?? DEFAULT_RECONCILE_INTERVAL_MS;
+    if (!Number.isFinite(baseIntervalMs) || baseIntervalMs < 0) {
+      throw new LeaseError(
+        "reconcileIntervalMs must be a non-negative finite number of milliseconds",
+        "INVALID_OBSERVE_OPTIONS",
+      );
+    }
+
+    let view = new Map<string, LeaseListItem>();
+    let ready = false;
+    let subscriptionReady = false;
+    let reconcileRequested = true;
+    let activeReconcile: Promise<void> | undefined;
+    let closed = false;
+    let reconcileTimer: ReturnType<typeof setTimeout> | undefined;
+    const updateHandlers = new Set<(snapshot: ReadonlyMap<string, LeaseListItem>) => void>();
+
+    const emitUpdate = (): void => {
+      const snapshot = new Map(view);
+      for (const handler of updateHandlers) {
+        try {
+          handler(snapshot);
+        } catch (error) {
+          connection.reportBackgroundError?.("fitz.lease.observer_handler_failed", error, {
+            pattern,
+          });
+        }
+      }
+    };
+
+    const fullRelist = async (): Promise<Map<string, LeaseListItem>> => {
+      const next = new Map<string, LeaseListItem>();
+      for await (const page of list(pattern, { signal: options.signal })) {
+        for (const item of page) next.set(item.route, item);
+      }
+      return next;
+    };
+
+    const requestReconcile = (): Promise<void> => {
+      reconcileRequested = true;
+      if (!subscriptionReady || closed) return Promise.resolve();
+      if (activeReconcile) return activeReconcile;
+
+      activeReconcile = (async () => {
+        ready = false;
+        while (reconcileRequested && !closed) {
+          reconcileRequested = false;
+          const candidate = await fullRelist();
+          if (closed) return;
+          if (reconcileRequested) continue;
+
+          // No invalidation raced this complete pass. Installing the view,
+          // marking ready, and leaving bootstrap mode are synchronous, so a
+          // later notification starts a new coalesced pass instead of
+          // slipping through an acknowledgement/list handoff gap.
+          view = candidate;
+          ready = true;
+          emitUpdate();
+        }
+      })().finally(() => {
+        activeReconcile = undefined;
+        if (reconcileRequested && subscriptionReady && !closed) {
+          void requestReconcile().catch((error) => {
+            connection.reportBackgroundError?.("fitz.lease.observer_reconcile_failed", error, {
+              pattern,
+            });
+          });
+        }
+      });
+      return activeReconcile;
+    };
+
+    const invalidate = (): void => {
+      void requestReconcile().catch((error) => {
+        connection.reportBackgroundError?.("fitz.lease.observer_reconcile_failed", error, {
+          pattern,
+        });
+      });
+    };
+
+    // Step 1: establish the patterned subscription and wait for its
+    // acknowledgement. Notifications that arrive before this resolves set
+    // the pending reconciliation flag and are covered by the first LIST.
+    const subscription = await subscribe(pattern, () => undefined, {
+      signal: options.signal,
+      preDispatch: invalidate,
+    });
+    subscriptionReady = true;
+
+    // Steps 2-5: every notification sets `reconcileRequested`. LIST passes
+    // repeat until one completes without a raced invalidation, and only that
+    // pass is installed as ready. QUERY is deliberately not used because it
+    // omits holder incarnation, acquisition time, and renewal count.
+    try {
+      await requestReconcile();
+    } catch (error) {
+      await subscription.unsubscribe();
+      throw error;
+    }
+
+    const unsubscribeReconnect = connection.onReconnect(async () => {
+      if (closed) return;
+      try {
+        await requestReconcile();
+      } catch (error) {
+        connection.reportBackgroundError?.("fitz.lease.observer_rebootstrap_failed", error, {
+          pattern,
+        });
+      }
+    });
+
+    const scheduleReconcile = (): void => {
+      if (closed || baseIntervalMs <= 0) return;
+      const jitter = 1 + (Math.random() * 0.4 - 0.2); // +/- 20%
+      const delay = Math.max(0, Math.round(baseIntervalMs * jitter));
+      reconcileTimer = setTimeout(() => {
+        if (closed) return;
+        void (async () => {
+          try {
+            await requestReconcile();
+          } catch (error) {
+            connection.reportBackgroundError?.("fitz.lease.observer_reconcile_failed", error, {
+              pattern,
+            });
+          } finally {
+            scheduleReconcile();
+          }
+        })();
+      }, delay);
+    };
+    scheduleReconcile();
+
+    const close = async (): Promise<void> => {
+      if (closed) return;
+      closed = true;
+      if (reconcileTimer !== undefined) clearTimeout(reconcileTimer);
+      unsubscribeReconnect();
+      updateHandlers.clear();
+      if (activeReconcile) await activeReconcile.catch(() => undefined);
+      await subscription.unsubscribe();
+    };
+
+    return {
+      get ready(): boolean {
+        return ready;
+      },
+      snapshot: (): ReadonlyMap<string, LeaseListItem> => new Map(view),
+      onUpdate: (handler: (snapshot: ReadonlyMap<string, LeaseListItem>) => void): (() => void) => {
+        updateHandlers.add(handler);
+        return () => updateHandlers.delete(handler);
+      },
+      close,
+      async [Symbol.asyncDispose](): Promise<void> {
+        try {
+          await close();
+        } catch {
+          // Disposal is explicitly best effort.
+        }
+      },
+    };
+  };
+
   return {
     acquire,
     withLease,
     query,
     subscribe,
     notifications,
+    listPage,
+    list,
+    observeInventory,
   };
 }
 
 export * from "./types";
 
+const DEFAULT_RECONCILE_INTERVAL_MS = 60_000;
+
 function assertExactLeaseRoute(route: string): void {
   if (!isRouteShape(route, "lease", 3)) {
     throw new LeaseError(
       `Invalid lease route: ${route} (expected lease://{realm}/{area}/{resource}, no empty segments or wildcards)`,
+      "INVALID_ROUTE",
+    );
+  }
+}
+
+function assertLeaseSubscriptionPattern(pattern: string): void {
+  if (!isRegistrationPatternShape(pattern, "lease", 3)) {
+    throw new LeaseError(
+      `Invalid lease pattern: ${pattern} (expected an exact lease://{realm}/{area}/{resource} route, whole-segment * wildcards, or a trailing ** alias)`,
       "INVALID_ROUTE",
     );
   }

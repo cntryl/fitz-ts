@@ -8,6 +8,7 @@ import { createLeaseClient } from "../../../src/domains/lease/client";
 import { LeaseCodec } from "../../../src/domains/lease/codec";
 import {
   MSG_LEASE_ACQUIRE,
+  MSG_LEASE_LIST,
   MSG_LEASE_NOTIFY,
   MSG_LEASE_RENEW,
   MSG_LEASE_RELEASE,
@@ -696,6 +697,452 @@ describe("lease subscribe/unsubscribe", () => {
 
     connection.respond(MSG_LEASE_UNSUBSCRIBE, plainSuccessResponse());
     await subscription.unsubscribe();
+  });
+});
+
+describe("lease subscribe/unsubscribe pattern grammar", () => {
+  it("accepts a whole-segment wildcard pattern for subscribe", async () => {
+    const connection = new FullLeaseConnection();
+    connection.respond(MSG_LEASE_SUBSCRIBE, subscribeResponse(1n));
+    const client = createLeaseClient(connection as unknown as Connection);
+
+    const subscription = await client.subscribe("lease://acme/renderers/*", async () => undefined);
+    expect(connection.requests[0]).toMatchObject({ messageType: MSG_LEASE_SUBSCRIBE });
+
+    connection.respond(MSG_LEASE_UNSUBSCRIBE, plainSuccessResponse());
+    await subscription.unsubscribe();
+  });
+
+  it("accepts a trailing ** wildcard pattern for subscribe", async () => {
+    const connection = new FullLeaseConnection();
+    connection.respond(MSG_LEASE_SUBSCRIBE, subscribeResponse(1n));
+    const client = createLeaseClient(connection as unknown as Connection);
+
+    const subscription = await client.subscribe("lease://acme/**", async () => undefined);
+    expect(connection.requests[0]).toMatchObject({ messageType: MSG_LEASE_SUBSCRIBE });
+
+    connection.respond(MSG_LEASE_UNSUBSCRIBE, plainSuccessResponse());
+    await subscription.unsubscribe();
+  });
+
+  it("rejects a partial-wildcard pattern for subscribe", async () => {
+    const connection = new FullLeaseConnection();
+    const client = createLeaseClient(connection as unknown as Connection);
+
+    await expect(
+      client.subscribe("lease://acme/renderers/lock*", async () => undefined),
+    ).rejects.toMatchObject({ code: "LEASE_INVALID_ROUTE" });
+  });
+
+  it("rejects a wrong-depth pattern for subscribe", async () => {
+    const connection = new FullLeaseConnection();
+    const client = createLeaseClient(connection as unknown as Connection);
+
+    await expect(client.subscribe("lease://acme/*", async () => undefined)).rejects.toMatchObject({
+      code: "LEASE_INVALID_ROUTE",
+    });
+  });
+
+  it("still rejects a wildcard route for acquire", async () => {
+    const connection = new FullLeaseConnection();
+    const client = createLeaseClient(connection as unknown as Connection);
+
+    await expect(
+      client.acquire("lease://acme/renderers/*", { ttlSeconds: 30 }),
+    ).rejects.toMatchObject({ code: "LEASE_INVALID_ROUTE" });
+  });
+
+  it("still rejects a wildcard route for query", async () => {
+    const connection = new FullLeaseConnection();
+    const client = createLeaseClient(connection as unknown as Connection);
+
+    await expect(client.query("lease://acme/renderers/*")).rejects.toMatchObject({
+      code: "LEASE_INVALID_ROUTE",
+    });
+  });
+});
+
+describe("lease list", () => {
+  function listItem(overrides: Partial<Record<string, unknown>> = {}) {
+    return {
+      route: "lease://acme/renderers/one",
+      ownerId: "worker-1",
+      holderIncarnation: 1n,
+      acquiredAt: "2026-08-29T00:00:00Z",
+      expiresInSecs: 60n,
+      renewals: 0,
+      ...overrides,
+    };
+  }
+
+  function encodeListPage(
+    items: ReturnType<typeof listItem>[],
+    nextCursor?: { snapshotId: bigint; offset: number },
+  ): Uint8Array {
+    const writer = createBufferWriter();
+    writer.writeU8(0);
+    writer.writeU32BE(items.length);
+    for (const item of items) {
+      writer.writeString(item.route as string);
+      writer.writeString(item.ownerId as string);
+      writer.writeU64BE(item.holderIncarnation as bigint);
+      writer.writeString(item.acquiredAt as string);
+      writer.writeU64BE(item.expiresInSecs as bigint);
+      writer.writeU32BE(item.renewals as number);
+    }
+    writer.writeU8(nextCursor ? 1 : 0);
+    if (nextCursor) {
+      writer.writeU64BE(nextCursor.snapshotId);
+      writer.writeU32BE(nextCursor.offset);
+    }
+    return writer.getBuffer();
+  }
+
+  it("listPage() sends a LIST frame and decodes the returned page", async () => {
+    const connection = new FullLeaseConnection();
+    connection.respond(MSG_LEASE_LIST, encodeListPage([listItem()]));
+    const client = createLeaseClient(connection as unknown as Connection);
+
+    const page = await client.listPage("lease://acme/renderers/*");
+
+    expect(connection.requests[0]?.messageType).toBe(MSG_LEASE_LIST);
+    expect(page.items).toEqual([listItem()]);
+    expect(page.nextCursor).toBeUndefined();
+  });
+
+  it("list() pages through multiple LIST calls using the returned cursor", async () => {
+    const connection = new FullLeaseConnection();
+    connection.respond(
+      MSG_LEASE_LIST,
+      encodeListPage([listItem({ route: "lease://acme/renderers/one" })], {
+        snapshotId: 42n,
+        offset: 1,
+      }),
+    );
+    connection.respond(
+      MSG_LEASE_LIST,
+      encodeListPage([listItem({ route: "lease://acme/renderers/two" })]),
+    );
+    const client = createLeaseClient(connection as unknown as Connection);
+
+    const pages: string[][] = [];
+    for await (const page of client.list("lease://acme/renderers/*")) {
+      pages.push(page.map((item) => item.route));
+    }
+
+    expect(pages).toEqual([["lease://acme/renderers/one"], ["lease://acme/renderers/two"]]);
+    expect(connection.requests).toHaveLength(2);
+  });
+
+  it("rejects a malformed list pattern before sending a wire request", async () => {
+    const connection = new FullLeaseConnection();
+    const client = createLeaseClient(connection as unknown as Connection);
+
+    await expect(client.listPage("lease://acme/renderers/lock*")).rejects.toMatchObject({
+      code: "LEASE_INVALID_ROUTE",
+    });
+    expect(connection.requests).toHaveLength(0);
+  });
+
+  it("rejects an invalid listPage() limit before sending a wire request", async () => {
+    const connection = new FullLeaseConnection();
+    const client = createLeaseClient(connection as unknown as Connection);
+
+    await expect(client.listPage("lease://acme/renderers/*", { limit: -1 })).rejects.toMatchObject({
+      code: "LEASE_INVALID_LIST_ARGUMENT",
+    });
+    expect(connection.requests).toHaveLength(0);
+  });
+
+  it("rejects an invalid listPage() cursor offset before sending a wire request", async () => {
+    const connection = new FullLeaseConnection();
+    const client = createLeaseClient(connection as unknown as Connection);
+
+    await expect(
+      client.listPage("lease://acme/renderers/*", {
+        cursor: { snapshotId: 1n, offset: -1 },
+      }),
+    ).rejects.toMatchObject({
+      code: "LEASE_INVALID_LIST_ARGUMENT",
+    });
+    expect(connection.requests).toHaveLength(0);
+  });
+
+  it("rejects an invalid list() pageSize before sending any wire request", async () => {
+    const connection = new FullLeaseConnection();
+    const client = createLeaseClient(connection as unknown as Connection);
+
+    const iterator = client.list("lease://acme/renderers/*", { pageSize: 1.5 });
+    await expect(iterator.next()).rejects.toMatchObject({
+      code: "LEASE_INVALID_LIST_ARGUMENT",
+    });
+    expect(connection.requests).toHaveLength(0);
+  });
+});
+
+describe("lease observeInventory", () => {
+  /** Flushes many microtask ticks — the observer's chains (dispatch defer,
+   * requestFrame, connection.request) resolve over several ticks. */
+  async function flush(ticks = 20): Promise<void> {
+    for (let i = 0; i < ticks; i++) {
+      await Promise.resolve();
+    }
+  }
+
+  function inventoryItem(overrides: Partial<Record<string, unknown>> = {}) {
+    return {
+      route: "lease://acme/renderers/one",
+      ownerId: "worker-1",
+      holderIncarnation: 1n,
+      acquiredAt: "2026-08-29T00:00:00Z",
+      expiresInSecs: 60n,
+      renewals: 0,
+      ...overrides,
+    };
+  }
+
+  function encodeListPage(
+    items: ReturnType<typeof inventoryItem>[],
+    nextCursor?: { snapshotId: bigint; offset: number },
+  ): Uint8Array {
+    const writer = createBufferWriter();
+    writer.writeU8(0);
+    writer.writeU32BE(items.length);
+    for (const item of items) {
+      writer.writeString(item.route as string);
+      writer.writeString(item.ownerId as string);
+      writer.writeU64BE(item.holderIncarnation as bigint);
+      writer.writeString(item.acquiredAt as string);
+      writer.writeU64BE(item.expiresInSecs as bigint);
+      writer.writeU32BE(item.renewals as number);
+    }
+    writer.writeU8(nextCursor ? 1 : 0);
+    if (nextCursor) {
+      writer.writeU64BE(nextCursor.snapshotId);
+      writer.writeU32BE(nextCursor.offset);
+    }
+    return writer.getBuffer();
+  }
+
+  const pattern = "lease://acme/renderers/*";
+
+  it("subscribes and waits for its ack before listing, and buffers notifications until the first list installs", async () => {
+    const connection = new FullLeaseConnection();
+    const releaseSubscribe = connection.gate(MSG_LEASE_SUBSCRIBE);
+    connection.respond(MSG_LEASE_SUBSCRIBE, subscribeResponse(9n));
+    const releaseList = connection.gate(MSG_LEASE_LIST);
+    connection.respond(MSG_LEASE_LIST, encodeListPage([inventoryItem()]));
+    const client = createLeaseClient(connection as unknown as Connection);
+
+    const observerPromise = client.observeInventory(pattern);
+    await flush();
+    expect(connection.requests.some((r) => r.messageType === MSG_LEASE_LIST)).toBe(false);
+
+    // Let SUBSCRIBE's ack land, then give bootstrap() a turn to flip
+    // buffering on and reach the (still gated) LIST call.
+    releaseSubscribe();
+    await flush();
+    expect(connection.requests.some((r) => r.messageType === MSG_LEASE_SUBSCRIBE)).toBe(true);
+    // LIST itself is still gated — its call is in flight (blocked inside
+    // FullLeaseConnection.request awaiting the gate) but not yet recorded,
+    // since recording happens only once the gate releases.
+
+    // A notification arrives while the initial LIST is still gated — it must
+    // invalidate the in-flight pass and must not be visible yet.
+    connection.emitNotification(
+      MSG_LEASE_NOTIFY,
+      encodeLeaseNotification(9n, "lease://acme/renderers/two"),
+    );
+    // A second LIST response for the buffered-notification drain pass.
+    connection.respond(
+      MSG_LEASE_LIST,
+      encodeListPage([inventoryItem(), inventoryItem({ route: "lease://acme/renderers/two" })]),
+    );
+    releaseList();
+
+    const observer = await observerPromise;
+    expect(observer.ready).toBe(true);
+    // Two LIST calls: the initial bootstrap list, then the drain relist.
+    expect(connection.requests.filter((r) => r.messageType === MSG_LEASE_LIST)).toHaveLength(2);
+    const snapshot = observer.snapshot();
+    expect(snapshot.has("lease://acme/renderers/one")).toBe(true);
+    expect(snapshot.has("lease://acme/renderers/two")).toBe(true);
+
+    connection.respond(MSG_LEASE_UNSUBSCRIBE, plainSuccessResponse());
+    await observer.close();
+  });
+
+  it("does not drain a second time when nothing was buffered during the initial list", async () => {
+    const connection = new FullLeaseConnection();
+    connection.respond(MSG_LEASE_SUBSCRIBE, subscribeResponse(1n));
+    connection.respond(MSG_LEASE_LIST, encodeListPage([inventoryItem()]));
+    const client = createLeaseClient(connection as unknown as Connection);
+
+    const observer = await client.observeInventory(pattern);
+
+    expect(connection.requests.filter((r) => r.messageType === MSG_LEASE_LIST)).toHaveLength(1);
+    expect(observer.ready).toBe(true);
+    expect(observer.snapshot().get("lease://acme/renderers/one")).toEqual(inventoryItem());
+
+    connection.respond(MSG_LEASE_UNSUBSCRIBE, plainSuccessResponse());
+    await observer.close();
+  });
+
+  it("reconciles with LIST on steady-state notifications and preserves full items", async () => {
+    const connection = new FullLeaseConnection();
+    connection.respond(MSG_LEASE_SUBSCRIBE, subscribeResponse(2n));
+    connection.respond(MSG_LEASE_LIST, encodeListPage([inventoryItem()]));
+    const client = createLeaseClient(connection as unknown as Connection);
+    const observer = await client.observeInventory(pattern);
+
+    const updates: number[] = [];
+    observer.onUpdate((snapshot) => updates.push(snapshot.size));
+
+    connection.respond(
+      MSG_LEASE_LIST,
+      encodeListPage([
+        inventoryItem(),
+        inventoryItem({
+          route: "lease://acme/renderers/two",
+          holderIncarnation: 22n,
+          renewals: 7,
+        }),
+      ]),
+    );
+    connection.emitNotification(
+      MSG_LEASE_NOTIFY,
+      encodeLeaseNotification(2n, "lease://acme/renderers/two"),
+    );
+    await flush();
+
+    expect(connection.requests.filter((r) => r.messageType === MSG_LEASE_LIST)).toHaveLength(2);
+    expect(observer.snapshot().get("lease://acme/renderers/two")).toMatchObject({
+      holderIncarnation: 22n,
+      renewals: 7,
+    });
+    expect(updates.length).toBeGreaterThan(0);
+
+    // A release notification for an already-observed route removes it.
+    connection.respond(
+      MSG_LEASE_LIST,
+      encodeListPage([
+        inventoryItem({
+          route: "lease://acme/renderers/two",
+          holderIncarnation: 22n,
+          renewals: 7,
+        }),
+      ]),
+    );
+    connection.emitNotification(
+      MSG_LEASE_NOTIFY,
+      encodeLeaseNotification(2n, "lease://acme/renderers/one"),
+    );
+    await flush();
+
+    expect(observer.snapshot().has("lease://acme/renderers/one")).toBe(false);
+    expect(connection.requests.filter((r) => r.messageType === MSG_LEASE_LIST)).toHaveLength(3);
+
+    connection.respond(MSG_LEASE_UNSUBSCRIBE, plainSuccessResponse());
+    await observer.close();
+  });
+
+  it("periodically reconciles with a full relist on a jittered interval", async () => {
+    vi.useFakeTimers();
+    try {
+      const randomSpy = vi.spyOn(Math, "random").mockReturnValue(0.5); // no jitter at 0.5
+      const connection = new FullLeaseConnection();
+      connection.respond(MSG_LEASE_SUBSCRIBE, subscribeResponse(3n));
+      connection.respond(MSG_LEASE_LIST, encodeListPage([inventoryItem()]));
+      const client = createLeaseClient(connection as unknown as Connection);
+      const observer = await client.observeInventory(pattern, { reconcileIntervalMs: 1000 });
+
+      expect(connection.requests.filter((r) => r.messageType === MSG_LEASE_LIST)).toHaveLength(1);
+
+      connection.respond(
+        MSG_LEASE_LIST,
+        encodeListPage([inventoryItem({ route: "lease://acme/renderers/reconciled" })]),
+      );
+      await vi.advanceTimersByTimeAsync(1000);
+
+      expect(connection.requests.filter((r) => r.messageType === MSG_LEASE_LIST)).toHaveLength(2);
+      expect(observer.snapshot().has("lease://acme/renderers/reconciled")).toBe(true);
+      expect(observer.snapshot().has("lease://acme/renderers/one")).toBe(false);
+
+      randomSpy.mockRestore();
+      connection.respond(MSG_LEASE_UNSUBSCRIBE, plainSuccessResponse());
+      await observer.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("invalidates readiness and re-runs the bootstrap on reconnect", async () => {
+    const connection = new FullLeaseConnection();
+    connection.respond(MSG_LEASE_SUBSCRIBE, subscribeResponse(4n));
+    connection.respond(MSG_LEASE_LIST, encodeListPage([inventoryItem()]));
+    const client = createLeaseClient(connection as unknown as Connection);
+    const observer = await client.observeInventory(pattern);
+    expect(observer.ready).toBe(true);
+
+    // The client's own generic reconnect-restore resends SUBSCRIBE for the
+    // still-registered route.
+    connection.respond(MSG_LEASE_SUBSCRIBE, subscribeResponse(5n));
+    connection.respond(
+      MSG_LEASE_LIST,
+      encodeListPage([inventoryItem({ route: "lease://acme/renderers/after-reconnect" })]),
+    );
+
+    const reconnectPromise = connection.reconnect();
+    // Readiness must flip false synchronously-ish while the re-bootstrap is
+    // in flight (before the reconnect's awaited listeners settle).
+    await reconnectPromise;
+
+    expect(observer.ready).toBe(true);
+    expect(connection.requests.filter((r) => r.messageType === MSG_LEASE_LIST)).toHaveLength(2);
+    expect(observer.snapshot().has("lease://acme/renderers/after-reconnect")).toBe(true);
+    expect(observer.snapshot().has("lease://acme/renderers/one")).toBe(false);
+
+    connection.respond(MSG_LEASE_UNSUBSCRIBE, plainSuccessResponse());
+    await observer.close();
+  });
+
+  it("close() unsubscribes and stops background work", async () => {
+    vi.useFakeTimers();
+    try {
+      const connection = new FullLeaseConnection();
+      connection.respond(MSG_LEASE_SUBSCRIBE, subscribeResponse(6n));
+      connection.respond(MSG_LEASE_LIST, encodeListPage([inventoryItem()]));
+      connection.respond(MSG_LEASE_UNSUBSCRIBE, plainSuccessResponse());
+      const client = createLeaseClient(connection as unknown as Connection);
+      const observer = await client.observeInventory(pattern, { reconcileIntervalMs: 1000 });
+
+      await observer.close();
+
+      expect(connection.requests.some((r) => r.messageType === MSG_LEASE_UNSUBSCRIBE)).toBe(true);
+
+      const listCallsBeforeAdvance = connection.requests.filter(
+        (r) => r.messageType === MSG_LEASE_LIST,
+      ).length;
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(connection.requests.filter((r) => r.messageType === MSG_LEASE_LIST).length).toBe(
+        listCallsBeforeAdvance,
+      );
+
+      // Idempotent.
+      await expect(observer.close()).resolves.toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("rejects an invalid pattern before subscribing", async () => {
+    const connection = new FullLeaseConnection();
+    const client = createLeaseClient(connection as unknown as Connection);
+
+    await expect(client.observeInventory("lease://acme/renderers/lock*")).rejects.toMatchObject({
+      code: "LEASE_INVALID_ROUTE",
+    });
+    expect(connection.requests).toHaveLength(0);
   });
 });
 

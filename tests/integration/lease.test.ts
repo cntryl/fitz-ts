@@ -5,6 +5,8 @@ import { TestFixture } from "./fixture/fixture";
 import { runWithBothTransports } from "./fixture/transport";
 import { ErrCodeLeaseHeld, LeaseError } from "../../src";
 
+const inventoryIt = it.skipIf(process.env.FITZ_PATTERNED_LEASE_INVENTORY === "0");
+
 describe("Lease integration", () => {
   runWithBothTransports(({ transport, authMode }) => {
     it("should acquire lease when it is free", async () => {
@@ -211,6 +213,71 @@ describe("Lease integration", () => {
       await subscription.unsubscribe();
 
       await expect(notification).resolves.toBe(route);
+    });
+
+    inventoryIt("should list a held lease matching a wildcard pattern", async () => {
+      const f = new TestFixture(transport, authMode);
+      await f.connectOrFail();
+
+      const route = f.uniqueRoute("lease");
+      const [realm, area] = route.slice("lease://".length).split("/");
+      const pattern = `lease://${realm}/${area}/*`;
+      const lease = await f.client().lease.acquire(route, { ttlSeconds: 30 });
+
+      const page = await f.client().lease.listPage(pattern);
+      expect(page.items.some((item) => item.route === route)).toBe(true);
+
+      await lease.release();
+    });
+
+    inventoryIt("should page through list() results using the returned cursor", async () => {
+      const f = new TestFixture(transport, authMode);
+      await f.connectOrFail();
+
+      const realm = f.uniqueRealm();
+      const area = f.uniqueArea();
+      const routes = [
+        `lease://${realm}/${area}/${f.uniqueResource()}`,
+        `lease://${realm}/${area}/${f.uniqueResource()}`,
+      ];
+      const leases = await Promise.all(
+        routes.map((route) => f.client().lease.acquire(route, { ttlSeconds: 30 })),
+      );
+
+      const seen = new Set<string>();
+      for await (const page of f.client().lease.list(`lease://${realm}/${area}/*`, {
+        pageSize: 1,
+      })) {
+        for (const item of page) seen.add(item.route);
+      }
+      for (const route of routes) expect(seen.has(route)).toBe(true);
+
+      await Promise.all(leases.map((lease) => lease.release()));
+    });
+
+    inventoryIt("observeInventory() bootstraps a view and tracks acquire/release", async () => {
+      const f = new TestFixture(transport, authMode);
+      await f.connectOrFail();
+
+      const realm = f.uniqueRealm();
+      const area = f.uniqueArea();
+      const pattern = `lease://${realm}/${area}/*`;
+      const route = `lease://${realm}/${area}/${f.uniqueResource()}`;
+
+      await using observer = await f.client().lease.observeInventory(pattern);
+      expect(observer.ready).toBe(true);
+      expect(observer.snapshot().has(route)).toBe(false);
+
+      const lease = await f.client().lease.acquire(route, { ttlSeconds: 30 });
+      await waitFor(() => observer.snapshot().has(route), {
+        timeoutMessage: "observer never picked up the acquired route",
+      });
+      expect(observer.snapshot().get(route)?.route).toBe(route);
+
+      await lease.release();
+      await waitFor(() => !observer.snapshot().has(route), {
+        timeoutMessage: "observer never dropped the released route",
+      });
     });
   });
 });

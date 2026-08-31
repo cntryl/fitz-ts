@@ -29,6 +29,7 @@ export function isRegistrationPatternShape(
   let segmentCount = 0;
   let doubleWildcardCount = 0;
   let segmentStart = start;
+  let previousWasDouble = false;
   for (let index = start; index <= route.length; index++) {
     if (index !== route.length && route.charCodeAt(index) !== 47) continue;
     const length = index - segmentStart;
@@ -39,7 +40,11 @@ export function isRegistrationPatternShape(
       route.charCodeAt(segmentStart) === 42 &&
       route.charCodeAt(segmentStart + 1) === 42;
     if (!single && !double && containsAsterisk(route, segmentStart, index)) return false;
-    if (double) doubleWildcardCount++;
+    if (double) {
+      if (previousWasDouble) return false;
+      doubleWildcardCount++;
+    }
+    previousWasDouble = double;
     segmentCount++;
     segmentStart = index + 1;
   }
