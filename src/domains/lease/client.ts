@@ -14,6 +14,7 @@ import type {
   RetryExecutionPort,
 } from "../base";
 import { LeaseError } from "../../core/errors";
+import { sleepWithAbort } from "../../client/internal/async";
 import {
   MSG_LEASE_ACQUIRE,
   MSG_LEASE_LIST,
@@ -232,20 +233,29 @@ export function createLeaseClient(connection: LeaseConnectionPort): LeaseClient 
       subscriptionsByRoute,
       async (route, state) => {
         const subId = await subscribeWire(route, requestReconnectFrame);
+        // Update the reverse index for THIS route the instant its own
+        // resubscribe lands, rather than waiting for every sibling route's
+        // round-trip (and the whole loop) to finish. The broker can ack and
+        // emit LEASE_NOTIFY for this route immediately, before a slower
+        // sibling route finishes resubscribing — deferring this update to
+        // the end of the loop left a window where the notify handler's
+        // patternsBySubId.get(newSubId) missed and silently dropped it.
+        patternsBySubId.delete(state.subId);
+        patternsBySubId.set(subId, route);
         // Carry the generation forward: this is the same logical
         // subscription surviving reconnect, not a new one.
         return { subId, handlers: new Map(state.handlers), generation: state.generation };
       },
-      async (route) => {
+      async (route, restoredState) => {
+        // This route's resubscribe succeeded but a sibling route's failed,
+        // so restoreMapEntriesAtomically is unwinding it — undo the reverse
+        // index entry set above along with the wire UNSUBSCRIBE below.
+        patternsBySubId.delete(restoredState.subId);
         parseStandardResponse(
           await requestReconnectFrame(MSG_LEASE_UNSUBSCRIBE, LeaseCodec.encodeUnsubscribe(route)),
         );
       },
     );
-    patternsBySubId.clear();
-    for (const [route, state] of subscriptionsByRoute) {
-      patternsBySubId.set(state.subId, route);
-    }
   });
 
   const initAcquireHandler = (): void => {
@@ -759,10 +769,12 @@ export function createLeaseClient(connection: LeaseConnectionPort): LeaseClient 
     let view = new Map<string, LeaseListItem>();
     let ready = false;
     let subscriptionReady = false;
+    let subscriptionGeneration = 0;
     let reconcileRequested = true;
     let activeReconcile: Promise<void> | undefined;
     let closed = false;
     let reconcileTimer: ReturnType<typeof setTimeout> | undefined;
+    let activeRecovery: Promise<void> | undefined;
     const updateHandlers = new Set<(snapshot: ReadonlyMap<string, LeaseListItem>) => void>();
 
     const emitUpdate = (): void => {
@@ -786,18 +798,52 @@ export function createLeaseClient(connection: LeaseConnectionPort): LeaseClient 
       return next;
     };
 
-    const requestReconcile = (): Promise<void> => {
+    // `requestReconcile(true)` is reserved for genuine-gap callers —
+    // bootstrap and post-reconnect re-bootstrap — where the view really is
+    // known-stale. Routine callers (a single notification's coalesced
+    // relist, the periodic backstop pass, or a chained follow-up pass below)
+    // call it with no argument: `snapshot()`'s contract already guarantees a
+    // stale read during a routine reconcile pass is safe, so flipping
+    // `ready` false for those would just be UI flicker with no benefit.
+    const requestReconcile = (suspectGap = false): Promise<void> => {
       reconcileRequested = true;
+      if (suspectGap) ready = false;
+      if (options.signal?.aborted) {
+        ready = false;
+        return Promise.resolve();
+      }
       if (!subscriptionReady || closed) return Promise.resolve();
       if (activeReconcile) return activeReconcile;
 
       activeReconcile = (async () => {
-        ready = false;
+        let attempts = 0;
         while (reconcileRequested && !closed) {
+          if (!subscriptionReady || options.signal?.aborted) return;
           reconcileRequested = false;
+          attempts++;
+          const passSubscriptionGeneration = subscriptionGeneration;
           const candidate = await fullRelist();
           if (closed) return;
-          if (reconcileRequested) continue;
+          if (!subscriptionReady || subscriptionGeneration !== passSubscriptionGeneration) {
+            // The wire subscription failed or was replaced during this LIST
+            // pass. Never install a candidate captured across that gap; the
+            // recovery loop will establish a new subscription and request a
+            // fresh pass.
+            reconcileRequested = true;
+            return;
+          }
+          if (reconcileRequested) {
+            // A known-raced page cannot make bootstrap ready. Back off so
+            // continuous churn cannot hammer LIST at wire speed, then keep
+            // trying until one complete pass has no raced invalidation (or
+            // the caller cancels the observer bootstrap).
+            const delayMs = Math.min(
+              OBSERVER_RECONCILE_RETRY_BASE_MS * 2 ** Math.min(attempts - 1, 5),
+              OBSERVER_RECONCILE_RETRY_MAX_MS,
+            );
+            await sleepWithAbort(delayMs, options.signal);
+            continue;
+          }
 
           // No invalidation raced this complete pass. Installing the view,
           // marking ready, and leaving bootstrap mode are synchronous, so a
@@ -806,6 +852,7 @@ export function createLeaseClient(connection: LeaseConnectionPort): LeaseClient 
           view = candidate;
           ready = true;
           emitUpdate();
+          break;
         }
       })().finally(() => {
         activeReconcile = undefined;
@@ -831,18 +878,101 @@ export function createLeaseClient(connection: LeaseConnectionPort): LeaseClient 
     // Step 1: establish the patterned subscription and wait for its
     // acknowledgement. Notifications that arrive before this resolves set
     // the pending reconciliation flag and are covered by the first LIST.
-    const subscription = await subscribe(pattern, () => undefined, {
+    let subscription = await subscribe(pattern, () => undefined, {
       signal: options.signal,
       preDispatch: invalidate,
     });
     subscriptionReady = true;
+    subscriptionGeneration++;
+
+    // The internal subscription's `completion` only rejects on a genuine
+    // local failure (e.g. the bounded async-dispatch queue overflowing),
+    // which also fires a real wire UNSUBSCRIBE and deletes this
+    // subscription's bookkeeping. Without watching it, that failure would
+    // silently degrade the observer to relying only on the periodic
+    // reconcile backstop (or freeze outright when reconcileIntervalMs is 0),
+    // contradicting the "race-safe" guarantee. Surface it and attempt to
+    // recover by resubscribing and re-running bootstrap, mirroring the
+    // reconnect path below.
+    const watchSubscriptionCompletion = (sub: LeaseSubscription): void => {
+      sub.completion.catch((error: unknown) => {
+        if (closed || sub !== subscription) return;
+        ready = false;
+        subscriptionReady = false;
+        subscriptionGeneration++;
+        reconcileRequested = true;
+        connection.reportBackgroundError?.("fitz.lease.observer_subscription_failed", error, {
+          pattern,
+        });
+        void recoverSubscription();
+      });
+    };
+
+    const recoverSubscription = (): Promise<void> => {
+      if (closed) return Promise.resolve();
+      if (activeRecovery) return activeRecovery;
+      ready = false;
+      subscriptionReady = false;
+      activeRecovery = (async () => {
+        let attempt = 0;
+        while (!closed && !options.signal?.aborted) {
+          if (!subscriptionReady) {
+            try {
+              const nextSubscription = await subscribe(pattern, () => undefined, {
+                signal: options.signal,
+                preDispatch: invalidate,
+              });
+              if (closed || options.signal?.aborted) {
+                await nextSubscription.unsubscribe().catch(() => undefined);
+                return;
+              }
+              subscription = nextSubscription;
+              subscriptionReady = true;
+              subscriptionGeneration++;
+              watchSubscriptionCompletion(subscription);
+            } catch (error) {
+              connection.reportBackgroundError?.("fitz.lease.observer_resubscribe_failed", error, {
+                pattern,
+              });
+            }
+          }
+
+          if (subscriptionReady) {
+            try {
+              await requestReconcile(true);
+              if (subscriptionReady && ready) return;
+            } catch (error) {
+              connection.reportBackgroundError?.("fitz.lease.observer_rebootstrap_failed", error, {
+                pattern,
+              });
+            }
+          }
+
+          attempt++;
+          const delayMs = Math.min(
+            OBSERVER_RECONCILE_RETRY_BASE_MS * 2 ** Math.min(attempt - 1, 5),
+            OBSERVER_RECONCILE_RETRY_MAX_MS,
+          );
+          try {
+            await sleepWithAbort(delayMs, options.signal);
+          } catch {
+            if (options.signal?.aborted) return;
+          }
+        }
+      })().finally(() => {
+        activeRecovery = undefined;
+      });
+      return activeRecovery;
+    };
+
+    watchSubscriptionCompletion(subscription);
 
     // Steps 2-5: every notification sets `reconcileRequested`. LIST passes
     // repeat until one completes without a raced invalidation, and only that
     // pass is installed as ready. QUERY is deliberately not used because it
     // omits holder incarnation, acquisition time, and renewal count.
     try {
-      await requestReconcile();
+      await requestReconcile(true);
     } catch (error) {
       await subscription.unsubscribe();
       throw error;
@@ -851,7 +981,7 @@ export function createLeaseClient(connection: LeaseConnectionPort): LeaseClient 
     const unsubscribeReconnect = connection.onReconnect(async () => {
       if (closed) return;
       try {
-        await requestReconcile();
+        await requestReconcile(true);
       } catch (error) {
         connection.reportBackgroundError?.("fitz.lease.observer_rebootstrap_failed", error, {
           pattern,
@@ -864,7 +994,10 @@ export function createLeaseClient(connection: LeaseConnectionPort): LeaseClient 
       const jitter = 1 + (Math.random() * 0.4 - 0.2); // +/- 20%
       const delay = Math.max(0, Math.round(baseIntervalMs * jitter));
       reconcileTimer = setTimeout(() => {
-        if (closed) return;
+        // `closed` alone isn't enough: `LeaseInventoryOptions.signal` is
+        // documented to cancel background work once running, so an aborted
+        // signal must stop this periodic timer too, not just close().
+        if (closed || options.signal?.aborted) return;
         void (async () => {
           try {
             await requestReconcile();
@@ -880,13 +1013,21 @@ export function createLeaseClient(connection: LeaseConnectionPort): LeaseClient 
     };
     scheduleReconcile();
 
+    const handleObserverAbort = (): void => {
+      ready = false;
+      if (reconcileTimer !== undefined) clearTimeout(reconcileTimer);
+    };
+    options.signal?.addEventListener("abort", handleObserverAbort, { once: true });
+
     const close = async (): Promise<void> => {
       if (closed) return;
       closed = true;
       if (reconcileTimer !== undefined) clearTimeout(reconcileTimer);
+      options.signal?.removeEventListener("abort", handleObserverAbort);
       unsubscribeReconnect();
       updateHandlers.clear();
       if (activeReconcile) await activeReconcile.catch(() => undefined);
+      if (activeRecovery) await activeRecovery.catch(() => undefined);
       await subscription.unsubscribe();
     };
 
@@ -925,6 +1066,8 @@ export function createLeaseClient(connection: LeaseConnectionPort): LeaseClient 
 export * from "./types";
 
 const DEFAULT_RECONCILE_INTERVAL_MS = 60_000;
+const OBSERVER_RECONCILE_RETRY_BASE_MS = 10;
+const OBSERVER_RECONCILE_RETRY_MAX_MS = 250;
 
 function assertExactLeaseRoute(route: string): void {
   if (!isRouteShape(route, "lease", 3)) {

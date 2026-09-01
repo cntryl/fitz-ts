@@ -45,6 +45,8 @@ class FullLeaseConnection {
   private readonly reconnectListeners = new Set<() => void | Promise<void>>();
   private readonly notificationHandlers = new Map<number, (payload: Uint8Array) => void>();
   requests: Array<{ messageType: number; payload: Uint8Array }> = [];
+  reportedErrors: Array<{ code: string; error: unknown; details?: Record<string, unknown> }> = [];
+  private readonly dispatchOverflowQueue: boolean[] = [];
 
   async request(
     messageType: number,
@@ -103,8 +105,21 @@ class FullLeaseConnection {
     this.notificationHandlers.set(messageType, handler);
   }
 
-  dispatchAsyncHandler(task: () => void | Promise<void>): void {
+  dispatchAsyncHandler(task: () => void | Promise<void>): boolean {
+    if (this.dispatchOverflowQueue.shift()) {
+      return false;
+    }
     void Promise.resolve().then(task);
+    return true;
+  }
+
+  /** Makes the next `dispatchAsyncHandler` call report a bounded-queue overflow. */
+  forceNextDispatchOverflow(): void {
+    this.dispatchOverflowQueue.push(true);
+  }
+
+  reportBackgroundError(code: string, error: unknown, details?: Record<string, unknown>): void {
+    this.reportedErrors.push({ code, error, details });
   }
 
   disconnect(): void {
@@ -294,24 +309,19 @@ describe("lease acquisition", () => {
     async (waitSeconds) => {
       const connection = new DisconnectingAcquireConnection();
       const client = createLeaseClient(connection as unknown as Connection);
-      const unhandled = vi.fn();
-      process.on("unhandledRejection", unhandled);
+      const pending = client.acquire("lease://realm/area/resource", {
+        ttlSeconds: 30,
+        waitSeconds,
+      });
+      await Promise.resolve();
 
-      try {
-        const pending = client.acquire("lease://realm/area/resource", {
-          ttlSeconds: 30,
-          waitSeconds,
-        });
-        await Promise.resolve();
+      connection.disconnect();
 
-        connection.disconnect();
-
-        await expect(pending).rejects.toMatchObject({ code: "LEASE_DISCONNECTED" });
-        await new Promise<void>((resolve) => setImmediate(resolve));
-        expect(unhandled).not.toHaveBeenCalled();
-      } finally {
-        process.off("unhandledRejection", unhandled);
-      }
+      // Vitest fails the test on any unhandled rejection, including one
+      // raised by an orphaned internal deferred promise after the public
+      // acquisition has been observed here.
+      await expect(pending).rejects.toMatchObject({ code: "LEASE_DISCONNECTED" });
+      await new Promise<void>((resolve) => globalThis.setTimeout(resolve, 0));
     },
   );
 });
@@ -697,6 +707,105 @@ describe("lease subscribe/unsubscribe", () => {
 
     connection.respond(MSG_LEASE_UNSUBSCRIBE, plainSuccessResponse());
     await subscription.unsubscribe();
+  });
+});
+
+describe("lease reconnect resubscribe race", () => {
+  /** Flushes many microtask ticks. */
+  async function flush(ticks = 20): Promise<void> {
+    for (let i = 0; i < ticks; i++) {
+      await Promise.resolve();
+    }
+  }
+
+  it("delivers a notification for a fast route's new subId while a sibling route is still resubscribing", async () => {
+    const connection = new FullLeaseConnection();
+    const client = createLeaseClient(connection as unknown as Connection);
+    const routeA = "lease://realm/area/fast";
+    const routeB = "lease://realm/area/slow";
+
+    // Establish two independent lease subscriptions before reconnect.
+    connection.respond(MSG_LEASE_SUBSCRIBE, subscribeResponse(1n));
+    let receivedA = false;
+    const subA = await client.subscribe(routeA, () => {
+      receivedA = true;
+    });
+    connection.respond(MSG_LEASE_SUBSCRIBE, subscribeResponse(2n));
+    let receivedB = false;
+    const subB = await client.subscribe(routeB, () => {
+      receivedB = true;
+    });
+
+    // Reconnect resubscribes both routes. Gate SUBSCRIBE so route A's
+    // resubscribe resolves first while route B's is still in flight.
+    const releaseFirst = connection.gate(MSG_LEASE_SUBSCRIBE);
+    connection.respond(MSG_LEASE_SUBSCRIBE, subscribeResponse(101n)); // routeA's new subId
+    connection.respond(MSG_LEASE_SUBSCRIBE, subscribeResponse(102n)); // routeB's new subId
+
+    const reconnectPromise = connection.reconnect();
+    await flush();
+    expect(connection.requests.filter((r) => r.messageType === MSG_LEASE_SUBSCRIBE)).toHaveLength(
+      2,
+    );
+
+    // Release routeA's resubscribe, then immediately re-arm the gate so
+    // routeB's resubscribe (issued next, since restoreMapEntriesAtomically
+    // processes routes sequentially) blocks before it resolves — recreating
+    // the window where routeA's new subId is live at the broker but the
+    // whole reconnect pass (covering routeB too) has not finished.
+    releaseFirst();
+    const releaseSecond = connection.gate(MSG_LEASE_SUBSCRIBE);
+    await flush();
+
+    // routeB's resubscribe is still pending; routeA's notify handler must
+    // already resolve routeA's brand-new subId (101n) to its subscription —
+    // not silently drop it while waiting on the loop as a whole.
+    connection.emitNotification(MSG_LEASE_NOTIFY, encodeLeaseNotification(101n, routeA));
+    await flush();
+    expect(receivedA).toBe(true);
+    expect(receivedB).toBe(false);
+
+    releaseSecond();
+    await reconnectPromise;
+
+    connection.respond(MSG_LEASE_UNSUBSCRIBE, plainSuccessResponse());
+    await subA.unsubscribe();
+    connection.respond(MSG_LEASE_UNSUBSCRIBE, plainSuccessResponse());
+    await subB.unsubscribe();
+  });
+
+  it("does not lose the reverse index for a successfully-restored route when a sibling route's resubscribe fails", async () => {
+    const connection = new FullLeaseConnection();
+    const client = createLeaseClient(connection as unknown as Connection);
+    const routeA = "lease://realm/area/ok";
+    const routeB = "lease://realm/area/broken";
+
+    // routeA is subscribed first, so restoreMapEntriesAtomically resubscribes
+    // it before routeB on reconnect.
+    connection.respond(MSG_LEASE_SUBSCRIBE, subscribeResponse(1n));
+    let receivedA = false;
+    await client.subscribe(routeA, () => {
+      receivedA = true;
+    });
+    connection.respond(MSG_LEASE_SUBSCRIBE, subscribeResponse(2n));
+    await client.subscribe(routeB, () => undefined);
+
+    // routeA's resubscribe succeeds with a new subId; routeB's has no
+    // queued response and rejects, triggering rollback (a wire UNSUBSCRIBE
+    // for routeA's just-restored new subId).
+    connection.respond(MSG_LEASE_SUBSCRIBE, subscribeResponse(201n));
+    connection.respond(MSG_LEASE_UNSUBSCRIBE, plainSuccessResponse());
+
+    await expect(connection.reconnect()).rejects.toThrow();
+
+    // routeA's rollback UNSUBSCRIBE was sent, undoing its resubscribe.
+    expect(connection.requests.some((r) => r.messageType === MSG_LEASE_UNSUBSCRIBE)).toBe(true);
+
+    // A notification for routeA's now-torn-down new subId (201n) must not
+    // resolve to anything — its reverse-index entry was rolled back too.
+    connection.emitNotification(MSG_LEASE_NOTIFY, encodeLeaseNotification(201n, routeA));
+    await flush();
+    expect(receivedA).toBe(false);
   });
 });
 
@@ -1143,6 +1252,193 @@ describe("lease observeInventory", () => {
       code: "LEASE_INVALID_ROUTE",
     });
     expect(connection.requests).toHaveLength(0);
+  });
+
+  it("surfaces and recovers from the internal subscription's completion rejecting (async-dispatch overflow)", async () => {
+    const connection = new FullLeaseConnection();
+    connection.respond(MSG_LEASE_SUBSCRIBE, subscribeResponse(10n));
+    connection.respond(MSG_LEASE_LIST, encodeListPage([inventoryItem()]));
+    const client = createLeaseClient(connection as unknown as Connection);
+    const observer = await client.observeInventory(pattern);
+    expect(observer.ready).toBe(true);
+
+    // Force the observer's internal subscription to fail on its next
+    // notification dispatch (the bounded async-dispatch queue overflowing),
+    // which rejects its `completion` and fires a real wire UNSUBSCRIBE —
+    // exactly what dispatchSubscriptionHandler does on overflow.
+    connection.forceNextDispatchOverflow();
+    connection.respond(MSG_LEASE_UNSUBSCRIBE, plainSuccessResponse());
+    // The notification's preDispatch also triggers its own (unrelated,
+    // routine) coalesced relist before the overflow is discovered.
+    connection.respond(MSG_LEASE_LIST, encodeListPage([inventoryItem()]));
+    // Recovery: the first replacement SUBSCRIBE fails transiently. The
+    // observer must keep retrying because overflow removed the old wire
+    // registration; periodic LIST-only reconciliation is not sufficient.
+    connection.respond(MSG_LEASE_SUBSCRIBE, errorResponse(5010, "transient subscribe failure"));
+    connection.respond(MSG_LEASE_SUBSCRIBE, subscribeResponse(11n));
+    connection.respond(
+      MSG_LEASE_LIST,
+      encodeListPage([inventoryItem({ route: "lease://acme/renderers/recovered" })]),
+    );
+
+    connection.emitNotification(
+      MSG_LEASE_NOTIFY,
+      encodeLeaseNotification(10n, "lease://acme/renderers/one"),
+    );
+    await flush(80);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    await flush(80);
+
+    // The failure must be surfaced, not silently swallowed.
+    expect(
+      connection.reportedErrors.some((e) => e.code === "fitz.lease.observer_subscription_failed"),
+    ).toBe(true);
+    expect(
+      connection.reportedErrors.some((e) => e.code === "fitz.lease.observer_resubscribe_failed"),
+    ).toBe(true);
+
+    // And the observer must recover, rather than freezing on the periodic
+    // backstop alone (or forever, if reconcileIntervalMs were 0).
+    expect(connection.requests.filter((r) => r.messageType === MSG_LEASE_SUBSCRIBE)).toHaveLength(
+      3,
+    );
+    expect(observer.ready).toBe(true);
+    expect(observer.snapshot().has("lease://acme/renderers/recovered")).toBe(true);
+
+    connection.respond(MSG_LEASE_UNSUBSCRIBE, plainSuccessResponse());
+    await observer.close();
+  });
+
+  it("backs off under invalidation churn and waits for a clean bootstrap pass", async () => {
+    vi.useFakeTimers();
+    try {
+      const connection = new FullLeaseConnection();
+      connection.respond(MSG_LEASE_SUBSCRIBE, subscribeResponse(30n));
+      const client = createLeaseClient(connection as unknown as Connection);
+
+      const racedPasses = 6;
+      let release = connection.gate(MSG_LEASE_LIST);
+      for (let i = 0; i <= racedPasses; i++) {
+        connection.respond(
+          MSG_LEASE_LIST,
+          encodeListPage([inventoryItem({ route: `lease://acme/renderers/pass-${i}` })]),
+        );
+      }
+
+      let bootstrapSettled = false;
+      const observerPromise = client.observeInventory(pattern).then((observer) => {
+        bootstrapSettled = true;
+        return observer;
+      });
+      await flush();
+
+      for (let i = 0; i < racedPasses; i++) {
+        connection.emitNotification(
+          MSG_LEASE_NOTIFY,
+          encodeLeaseNotification(30n, "lease://acme/renderers/churn"),
+        );
+        release();
+        release = connection.gate(MSG_LEASE_LIST);
+        await flush();
+
+        // A page known to have raced an invalidation must never make the
+        // observer ready, and the next LIST must wait for the retry backoff.
+        expect(bootstrapSettled).toBe(false);
+        expect(
+          connection.requests.filter((request) => request.messageType === MSG_LEASE_LIST),
+        ).toHaveLength(i + 1);
+
+        await vi.advanceTimersByTimeAsync(1_000);
+        await flush();
+      }
+
+      // Let one final pass complete without a raced notification.
+      release();
+      await flush();
+
+      const observer = await observerPromise;
+      expect(observer.ready).toBe(true);
+      expect(observer.snapshot().has(`lease://acme/renderers/pass-${racedPasses}`)).toBe(true);
+
+      connection.respond(MSG_LEASE_UNSUBSCRIBE, plainSuccessResponse());
+      await observer.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("stops the periodic reconcile timer once the signal aborts, without close()", async () => {
+    vi.useFakeTimers();
+    try {
+      const connection = new FullLeaseConnection();
+      connection.respond(MSG_LEASE_SUBSCRIBE, subscribeResponse(50n));
+      connection.respond(MSG_LEASE_LIST, encodeListPage([inventoryItem()]));
+      const client = createLeaseClient(connection as unknown as Connection);
+      const controller = new AbortController();
+      const observer = await client.observeInventory(pattern, {
+        reconcileIntervalMs: 1000,
+        signal: controller.signal,
+      });
+
+      // Consumed by the internal subscription's own signal-abort
+      // auto-unsubscribe (it shares `options.signal`).
+      connection.respond(MSG_LEASE_UNSUBSCRIBE, plainSuccessResponse());
+      controller.abort();
+      expect(observer.ready).toBe(false);
+
+      const listCallsBeforeAdvance = connection.requests.filter(
+        (r) => r.messageType === MSG_LEASE_LIST,
+      ).length;
+      await vi.advanceTimersByTimeAsync(10_000);
+
+      // The documented cancellation contract: once the signal aborts, no
+      // further background reconcile attempts occur — not just at close().
+      expect(connection.requests.filter((r) => r.messageType === MSG_LEASE_LIST).length).toBe(
+        listCallsBeforeAdvance,
+      );
+
+      await observer.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps ready true across a routine periodic reconcile pass", async () => {
+    vi.useFakeTimers();
+    try {
+      const randomSpy = vi.spyOn(Math, "random").mockReturnValue(0.5); // no jitter at 0.5
+      const connection = new FullLeaseConnection();
+      connection.respond(MSG_LEASE_SUBSCRIBE, subscribeResponse(40n));
+      connection.respond(MSG_LEASE_LIST, encodeListPage([inventoryItem()]));
+      const client = createLeaseClient(connection as unknown as Connection);
+      const observer = await client.observeInventory(pattern, { reconcileIntervalMs: 1000 });
+      expect(observer.ready).toBe(true);
+
+      const releaseList = connection.gate(MSG_LEASE_LIST);
+      connection.respond(
+        MSG_LEASE_LIST,
+        encodeListPage([inventoryItem({ route: "lease://acme/renderers/periodic" })]),
+      );
+
+      await vi.advanceTimersByTimeAsync(1000);
+      // The periodic pass's LIST call is now gated (in flight). This is a
+      // routine backstop reconcile, not bootstrap or a post-reconnect
+      // re-bootstrap, so it must not flip readiness false —
+      // `snapshot()`'s contract already guarantees a stale read during a
+      // reconcile pass is safe.
+      expect(observer.ready).toBe(true);
+
+      releaseList();
+      await flush();
+      expect(observer.ready).toBe(true);
+      expect(observer.snapshot().has("lease://acme/renderers/periodic")).toBe(true);
+
+      randomSpy.mockRestore();
+      connection.respond(MSG_LEASE_UNSUBSCRIBE, plainSuccessResponse());
+      await observer.close();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
