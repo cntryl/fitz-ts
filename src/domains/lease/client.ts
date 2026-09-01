@@ -841,7 +841,12 @@ export function createLeaseClient(connection: LeaseConnectionPort): LeaseClient 
               OBSERVER_RECONCILE_RETRY_BASE_MS * 2 ** Math.min(attempts - 1, 5),
               OBSERVER_RECONCILE_RETRY_MAX_MS,
             );
-            await sleepWithAbort(delayMs, options.signal);
+            try {
+              await sleepWithAbort(delayMs, options.signal);
+            } catch (error) {
+              if (options.signal?.aborted) return;
+              throw error;
+            }
             continue;
           }
 
@@ -908,11 +913,11 @@ export function createLeaseClient(connection: LeaseConnectionPort): LeaseClient 
       });
     };
 
-    const recoverSubscription = (): Promise<void> => {
+    const recoverSubscription = (replaceSubscription = true): Promise<void> => {
       if (closed) return Promise.resolve();
       if (activeRecovery) return activeRecovery;
       ready = false;
-      subscriptionReady = false;
+      if (replaceSubscription) subscriptionReady = false;
       activeRecovery = (async () => {
         let attempt = 0;
         while (!closed && !options.signal?.aborted) {
@@ -986,6 +991,11 @@ export function createLeaseClient(connection: LeaseConnectionPort): LeaseClient 
         connection.reportBackgroundError?.("fitz.lease.observer_rebootstrap_failed", error, {
           pattern,
         });
+        // A failed reconnect LIST leaves the view knowingly stale even
+        // though the generic reconnect path restored the subscription.
+        // Retry the relist with bounded backoff rather than waiting for a
+        // notification or the periodic backstop.
+        void recoverSubscription(false);
       }
     });
 

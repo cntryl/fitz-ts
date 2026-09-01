@@ -1215,6 +1215,35 @@ describe("lease observeInventory", () => {
     await observer.close();
   });
 
+  it("retries a transient LIST failure after reconnect", async () => {
+    const connection = new FullLeaseConnection();
+    connection.respond(MSG_LEASE_SUBSCRIBE, subscribeResponse(4n));
+    connection.respond(MSG_LEASE_LIST, encodeListPage([inventoryItem()]));
+    const client = createLeaseClient(connection as unknown as Connection);
+    const observer = await client.observeInventory(pattern);
+
+    connection.respond(MSG_LEASE_SUBSCRIBE, subscribeResponse(5n));
+    connection.respond(MSG_LEASE_LIST, errorResponse(1, "transient LIST failure"));
+    connection.respond(
+      MSG_LEASE_LIST,
+      encodeListPage([inventoryItem({ route: "lease://acme/renderers/recovered" })]),
+    );
+
+    await connection.reconnect();
+
+    await vi.waitFor(
+      () => {
+        expect(observer.ready).toBe(true);
+        expect(observer.snapshot().has("lease://acme/renderers/recovered")).toBe(true);
+      },
+      { timeout: 1000, interval: 5 },
+    );
+    expect(connection.requests.filter((r) => r.messageType === MSG_LEASE_LIST)).toHaveLength(3);
+
+    connection.respond(MSG_LEASE_UNSUBSCRIBE, plainSuccessResponse());
+    await observer.close();
+  });
+
   it("close() unsubscribes and stops background work", async () => {
     vi.useFakeTimers();
     try {
@@ -1295,9 +1324,15 @@ describe("lease observeInventory", () => {
       MSG_LEASE_NOTIFY,
       encodeLeaseNotification(10n, "lease://acme/renderers/one"),
     );
-    await flush(80);
-    await new Promise((resolve) => setTimeout(resolve, 30));
-    await flush(80);
+    await vi.waitFor(
+      () => {
+        expect(
+          connection.requests.filter((r) => r.messageType === MSG_LEASE_SUBSCRIBE),
+        ).toHaveLength(3);
+        expect(observer.ready).toBe(true);
+      },
+      { timeout: 1000, interval: 5 },
+    );
 
     // The failure must be surfaced, not silently swallowed.
     expect(
