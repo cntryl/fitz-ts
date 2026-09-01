@@ -16,7 +16,7 @@
 # - Anon TCP:     tcp://127.0.0.1:${FITZ_ANON_HOST_TCP_PORT:-4191}
 
 x-broker-common: &broker-common
-  image: "${FITZ_BROKER_IMAGE:-ghcr.io/cntryl/fitz@sha256:3c128b890f7e6ff504d07f7ff5764ebd51cbf68495647d165d99b6b9f19755d5}"
+  image: "${FITZ_BROKER_IMAGE:-ghcr.io/cntryl/fitz@sha256:f12f7466dec3af750df577712856553fd0800105a5148f121992af028c7e3ad3}"
   restart: unless-stopped
   stop_grace_period: 15s
   healthcheck:

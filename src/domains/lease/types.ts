@@ -230,7 +230,11 @@ export interface LeaseInventoryOptions {
    * Full-relist backstop interval in milliseconds, guarding against a
    * missed or dropped `LEASE_NOTIFY`. Each cycle applies an independent
    * ±20% jitter so a fleet of observers doesn't reconcile in lockstep.
-   * Defaults to 60_000ms. Pass `0` to disable periodic reconciliation.
+   * Defaults to 60_000ms. For a known workload, use
+   * `clamp(shortest expected lease TTL / 2, 5_000ms, 60_000ms)`: this gives
+   * targets two backstop passes during the shortest lease lifetime
+   * without polling faster than one bounded full LIST every five seconds per
+   * observer. Must be positive.
    */
   reconcileIntervalMs?: number;
 }
