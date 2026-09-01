@@ -118,7 +118,7 @@
     "cross-env": "^10.1.0",
     "publint": "0.3.23",
     "typescript": "7.0.2",
-    "vite-plus": "0.2.9"
+    "vite-plus": "0.3.0"
   },
   "engines": {
     "node": ">=22.0.0"
