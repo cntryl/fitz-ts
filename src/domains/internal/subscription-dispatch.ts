@@ -4,6 +4,8 @@ import type { AsyncDispatchPort } from "../base";
 export interface SubscriptionHandlerRegistration<TNotification> {
   readonly handler: (notification: TNotification) => void | Promise<void>;
   readonly fail: (error: unknown) => void;
+  /** Runs synchronously at notification dispatch before bounded async delivery. */
+  readonly preDispatch?: (notification: TNotification) => void;
 }
 
 export function dispatchSubscriptionHandler<TNotification>(
@@ -13,6 +15,7 @@ export function dispatchSubscriptionHandler<TNotification>(
   domain: string,
   subscription: string,
 ): void {
+  registration.preDispatch?.(notification);
   const accepted = connection.dispatchAsyncHandler(async () => {
     await registration.handler(notification);
   });

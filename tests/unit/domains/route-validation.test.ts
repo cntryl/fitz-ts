@@ -122,7 +122,7 @@ describe("route validation", () => {
       "queue://realm/**",
       "queue://*/area/resource",
       "queue://**/resource",
-      "queue://realm/**/**",
+      "queue://**/renderers/**",
     ];
 
     expect(patterns.every((pattern) => isRegistrationPatternShape(pattern, "queue", 3))).toBe(true);
@@ -140,6 +140,27 @@ describe("route validation", () => {
     expect(patterns.every((pattern) => !isRegistrationPatternShape(pattern, "queue", 3))).toBe(
       true,
     );
+  });
+
+  it("rejects registration patterns with adjacent ** segments, matching the broker compiler", () => {
+    const cases: Array<[string, string]> = [
+      ["queue://realm/**/**", "queue"],
+      ["notice://realm/**/**", "notice"],
+      ["rpc://realm/**/**", "rpc"],
+      ["lease://realm/**/**", "lease"],
+      ["schedule://realm/**/**", "schedule"],
+      ["queue://realm/**/**/resource", "queue"],
+    ];
+
+    expect(
+      cases.every(([pattern, scheme]) => !isRegistrationPatternShape(pattern, scheme, 0)),
+    ).toBe(true);
+  });
+
+  it("still accepts non-adjacent ** compositions in registration patterns", () => {
+    const patterns = ["queue://**/renderers/**", "queue://acme/**", "queue://**"];
+
+    expect(patterns.every((pattern) => isRegistrationPatternShape(pattern, "queue", 0))).toBe(true);
   });
 
   it("matches middle and repeated double wildcards without crossing schemes", () => {
@@ -235,10 +256,26 @@ describe("route validation", () => {
     const connection = new FakeConnection(new Uint8Array([0, 1]));
     const client = createRpcClient(connection as unknown as Connection);
 
-    const worker = await client.registerWorker("rpc://*/orders/**/**", async () => undefined);
+    const worker = await client.registerWorker(
+      "rpc://*/orders/**/renderers",
+      async () => undefined,
+    );
 
     expect(worker).not.toHaveProperty("route");
     expect(connection.lastRequest).not.toBeNull();
+  });
+
+  it("rejects adjacent ** rpc worker patterns before sending", async () => {
+    const connection = new FakeConnection(new Uint8Array([0, 1]));
+    const client = createRpcClient(connection as unknown as Connection);
+
+    await expectRouteValidationFailure(
+      client.registerWorker("rpc://*/orders/**/**", async () => undefined),
+      RpcError,
+      "RPC_INVALID_ROUTE",
+      "Invalid rpc worker pattern",
+    );
+    expect(connection.lastRequest).toBeNull();
   });
 
   it("rejects invalid stream begin routes before sending", async () => {
@@ -274,15 +311,25 @@ describe("route validation", () => {
     expect(connection.lastRequest?.messageType).toBe(MSG_STREAM_READ);
   });
 
-  it("rejects wildcard lease subscription routes before sending", async () => {
+  it("accepts a whole-segment wildcard lease subscription route", async () => {
+    const connection = new FakeConnection(new Uint8Array([0, ...u64Bytes(7n)]));
+    const client = createLeaseClient(connection as unknown as Connection);
+
+    const subscription = await client.subscribe("lease://example/area/*", async () => undefined);
+
+    expect(subscription).not.toHaveProperty("subId");
+    expect(connection.lastRequest).not.toBeNull();
+  });
+
+  it("rejects a partial-wildcard lease subscription route before sending", async () => {
     const connection = new FakeConnection(new Uint8Array([0, ...u64Bytes(7n)]));
     const client = createLeaseClient(connection as unknown as Connection);
 
     await expectRouteValidationFailure(
-      client.subscribe("lease://example/**", async () => undefined),
+      client.subscribe("lease://example/area/lock*", async () => undefined),
       LeaseError,
       "LEASE_INVALID_ROUTE",
-      "expected lease://",
+      "expected an exact lease://",
     );
     expect(connection.lastRequest).toBeNull();
   });
