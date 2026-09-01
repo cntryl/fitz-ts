@@ -759,9 +759,9 @@ export function createLeaseClient(connection: LeaseConnectionPort): LeaseClient 
   ): Promise<LeaseInventoryObserver> => {
     assertLeaseSubscriptionPattern(pattern);
     const baseIntervalMs = options.reconcileIntervalMs ?? DEFAULT_RECONCILE_INTERVAL_MS;
-    if (!Number.isFinite(baseIntervalMs) || baseIntervalMs < 0) {
+    if (!Number.isFinite(baseIntervalMs) || baseIntervalMs <= 0) {
       throw new LeaseError(
-        "reconcileIntervalMs must be a non-negative finite number of milliseconds",
+        "reconcileIntervalMs must be a positive finite number of milliseconds",
         "INVALID_OBSERVE_OPTIONS",
       );
     }

@@ -1254,6 +1254,16 @@ describe("lease observeInventory", () => {
     expect(connection.requests).toHaveLength(0);
   });
 
+  it("rejects a disabled periodic reconciliation interval before subscribing", async () => {
+    const connection = new FullLeaseConnection();
+    const client = createLeaseClient(connection as unknown as Connection);
+
+    await expect(
+      client.observeInventory(pattern, { reconcileIntervalMs: 0 }),
+    ).rejects.toMatchObject({ code: "LEASE_INVALID_OBSERVE_OPTIONS" });
+    expect(connection.requests).toHaveLength(0);
+  });
+
   it("surfaces and recovers from the internal subscription's completion rejecting (async-dispatch overflow)", async () => {
     const connection = new FullLeaseConnection();
     connection.respond(MSG_LEASE_SUBSCRIBE, subscribeResponse(10n));
