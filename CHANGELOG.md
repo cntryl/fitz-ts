@@ -6,6 +6,18 @@ The format is based on Keep a Changelog and the project follows Semantic Version
 
 ## [Unreleased]
 
+## [0.0.22] - 2026-09-02
+
+### Added
+
+- Expose typed, paginated Lease inventory listing and wildcard subscriptions across the public Node and browser entry points.
+- Add a bounded, closable Lease inventory observer with subscribe-before-list buffering and periodic reconciliation.
+
+### Fixed
+
+- Recover Lease inventory observation across reconnect gaps, internal subscription failures, invalidated snapshots, and bounded update-buffer overflow.
+- Match the broker's fixed-depth Lease selector grammar and reject invalid unsigned pagination inputs before encoding.
+
 ## [0.0.21] - 2026-08-25
 
 ### Fixed
