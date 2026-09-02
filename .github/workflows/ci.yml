@@ -62,7 +62,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
-      FITZ_BROKER_IMAGE: ${{ github.event_name == 'schedule' && 'ghcr.io/cntryl/fitz:latest' || 'ghcr.io/cntryl/fitz@sha256:f12f7466dec3af750df577712856553fd0800105a5148f121992af028c7e3ad3' }}
+      FITZ_BROKER_IMAGE: ${{ github.event_name == 'schedule' && 'ghcr.io/cntryl/fitz:latest' || 'ghcr.io/cntryl/fitz@sha256:987770b7039873313a1c4d0102f06ea8eed0e5435550ea28d5d8107521f0b287' }}
       FITZ_PATTERNED_LEASE_INVENTORY: "1"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
