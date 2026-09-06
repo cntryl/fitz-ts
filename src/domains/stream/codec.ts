@@ -52,8 +52,8 @@ export interface StreamWireReadOptions {
 export const StreamCodec = {
   /**
    * Decode the response envelope selected by the authoritative request message type.
-   * Stream READ is the only operation whose error includes a numeric domain code;
-   * every other Stream error is `[status][message]`.
+   * Status 2 carries `[u32 code][string message]` for Stream errors.
+   * Legacy status 1 is coded for READ and plain text for other operations.
    */
   decodeResponse(
     payload: Uint8Array,
@@ -70,7 +70,7 @@ export const StreamCodec = {
     if (status === 0) {
       return { status, data: reader.remaining() };
     }
-    if (status !== 1) {
+    if (status !== 1 && status !== 2) {
       if (!reader.isEOF()) {
         throw new StreamError(
           `${operation} status response has trailing bytes`,
@@ -81,7 +81,8 @@ export const StreamCodec = {
       return { status, data: new Uint8Array(0) };
     }
 
-    const errorCode = messageType === MSG_STREAM_READ ? reader.readU32BE() : undefined;
+    const errorCode =
+      status === 2 || messageType === MSG_STREAM_READ ? reader.readU32BE() : undefined;
     const errorMessage = reader.readString();
     if (!reader.isEOF()) {
       throw new StreamError(
