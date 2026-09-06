@@ -6,6 +6,13 @@ The format is based on Keep a Changelog and the project follows Semantic Version
 
 ## [Unreleased]
 
+## [0.0.23] - 2026-09-06
+
+### Fixed
+
+- Preserve numeric Stream domain codes from status-2 error responses, including APPEND and COMMIT concurrency conflicts (`2001`), independently of message wording.
+- Retain legacy status-1 response decoding for compatibility with earlier brokers. Upgrade clients before deploying the broker error-envelope change (Fitz #238).
+
 ## [0.0.22] - 2026-09-02
 
 ### Added
