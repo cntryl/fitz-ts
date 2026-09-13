@@ -123,6 +123,18 @@ describe("Multiplexer", () => {
     expect(meter.histograms).toContain("fitz.request.duration");
   });
 
+  it("routes a later phase normally after its correlation already completed", () => {
+    const multiplexer = createMultiplexer();
+    multiplexer.setConnected();
+    const handler = vi.fn();
+    multiplexer.registerNotificationHandler(400, handler);
+
+    multiplexer.dispatch(400, new Uint8Array([7]), 999n);
+
+    expect(handler).toHaveBeenCalledWith(new Uint8Array([7]));
+    expect(multiplexer.getMetrics().responsesDropped).toBe(0);
+  });
+
   it("records timeout failures once and closes the span", async () => {
     vi.useFakeTimers();
     const tracer = new FakeTracer();
