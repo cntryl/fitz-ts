@@ -5,6 +5,10 @@
  */
 
 import { CodecError } from "../core/errors";
+import { MSG_CORRELATE } from "./types";
+
+/** Wire width of a correlation value. */
+const CORRELATION_BYTES = 8;
 
 export interface Frame {
   messageType: number;
@@ -108,12 +112,57 @@ const calculateFrameSize = (messageType: number, payloadLength: number): number 
   return getMessageTypeSize(messageType) + 2 + payloadLength;
 };
 
+/**
+ * Encode a CORRELATE record labelling the request that follows it.
+ *
+ * The two records travel in one transport frame, so the broker sees the label
+ * immediately before the record it belongs to. Zero is reserved as the absent
+ * value and is rejected here rather than on the wire.
+ */
+const encodeCorrelate = (correlationId: bigint): Uint8Array => {
+  if (correlationId <= 0n || correlationId > 0xffffffffffffffffn) {
+    throw new CodecError(`Invalid correlation id: ${correlationId}`);
+  }
+  const value = new Uint8Array(CORRELATION_BYTES);
+  new DataView(value.buffer).setBigUint64(0, correlationId, false);
+  return encodeFrame(MSG_CORRELATE, value);
+};
+
+/** Read a correlation value from a CORRELATE/CORRELATED record payload. */
+const decodeCorrelation = (payload: Uint8Array): bigint | undefined => {
+  if (payload.length !== CORRELATION_BYTES) {
+    return undefined;
+  }
+  const view = new DataView(payload.buffer, payload.byteOffset, payload.byteLength);
+  const value = view.getBigUint64(0, false);
+  return value === 0n ? undefined : value;
+};
+
+/** Read a SERVER_HELLO body, ignoring trailing bytes a later version may append. */
+const decodeServerHello = (
+  payload: Uint8Array,
+): { protocolVersion: number; capabilities: number } | undefined => {
+  if (payload.length < 6) {
+    return undefined;
+  }
+  const view = new DataView(payload.buffer, payload.byteOffset, payload.byteLength);
+  return {
+    protocolVersion: view.getUint16(0, false),
+    capabilities: view.getUint32(2, false),
+  };
+};
+
 export const FrameCodec = {
   encodeFrame,
   decodeFrame,
   getMessageTypeSize,
   calculateFrameSize,
+  encodeCorrelate,
+  decodeCorrelation,
+  decodeServerHello,
 };
+
+export { encodeCorrelate, decodeCorrelation, decodeServerHello };
 
 /**
  * Helper for streaming frame parsing

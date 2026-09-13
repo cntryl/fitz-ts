@@ -7,11 +7,22 @@
  * MessageType 255+: escape byte 0xFF + u16 BE
  *
  * Key Pattern: Single MessageType per operation (request AND response use same type)
- * Responses matched via FIFO ordering in multiplexer, NOT separate message types
+ *
+ * Responses are matched by correlation identifier when the broker advertises
+ * CAP_CORRELATION, and by one-in-flight-per-message-type FIFO otherwise.
  */
 
 // Control messages (0-99)
 export const MSG_CONNECT = 1;
+/** Labels the record that immediately follows it, in the same transport frame. */
+export const MSG_CORRELATE = 2;
+/** Echoes a request's correlation onto the response that follows it. */
+export const MSG_CORRELATED = 3;
+/** Unsolicited capability advertisement, sent once per session on CONNECT success. */
+export const MSG_SERVER_HELLO = 4;
+
+/** Broker accepts CORRELATE and echoes CORRELATED. */
+export const CAP_CORRELATION = 1 << 0;
 
 // KV Domain (100-199)
 export const MSG_KV_BEGIN = 100;

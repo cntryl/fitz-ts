@@ -20,7 +20,8 @@ import {
 import { createScope, Scope } from "../core/lifecycle";
 import { utf8Encoder } from "../core/buffer";
 import { createFrameParser, FrameCodec } from "../frame/codec";
-import { MSG_CONNECT } from "../frame/types";
+import { MSG_CONNECT, MSG_CORRELATED, MSG_SERVER_HELLO } from "../frame/types";
+import { decodeCorrelation, decodeServerHello } from "../frame/codec";
 import {
   AuthenticationError,
   ConnectionError,
@@ -834,8 +835,26 @@ export function createConnection(
           confirmSession();
         }
 
+        // A CORRELATED record labels the record that follows it, and a
+        // SERVER_HELLO answers nothing at all. Both are consumed here so the
+        // multiplexer only ever sees real messages.
+        let pendingCorrelation: bigint | undefined;
         for (const frame of frames) {
-          multiplexer.dispatch(frame.messageType, frame.payload);
+          if (frame.messageType === MSG_SERVER_HELLO) {
+            const hello = decodeServerHello(frame.payload);
+            if (hello) {
+              multiplexer.setCapabilities(hello.protocolVersion, hello.capabilities);
+            }
+            continue;
+          }
+
+          if (frame.messageType === MSG_CORRELATED) {
+            pendingCorrelation = decodeCorrelation(frame.payload);
+            continue;
+          }
+
+          multiplexer.dispatch(frame.messageType, frame.payload, pendingCorrelation);
+          pendingCorrelation = undefined;
         }
       } catch (error) {
         if (receiveLoopAbort || closeRequested) {

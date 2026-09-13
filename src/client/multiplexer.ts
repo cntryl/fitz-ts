@@ -17,6 +17,8 @@ import {
 } from "../core/types";
 import { ConnectionError, TimeoutError } from "../core/errors";
 import { abortError } from "../core/abort";
+import { encodeCorrelate } from "../frame/codec";
+import { CAP_CORRELATION } from "../frame/types";
 
 export interface MultiplexerObservability {
   meter?: FitzMeter;
@@ -25,6 +27,8 @@ export interface MultiplexerObservability {
 
 export interface PendingRequest {
   deferred: Deferred<Uint8Array>;
+  /** Set when this request was labelled; matched by id rather than by order. */
+  correlationId?: bigint;
   deadline: number;
   discardResponse: boolean;
   timeoutIndex: number;
@@ -63,6 +67,26 @@ export function createMultiplexer(observability: MultiplexerObservability = {}) 
   };
 
   const pending: Record<number, PendingQueue | undefined> = {};
+  /**
+   * Correlated requests, keyed by their identifier.
+   *
+   * Kept alongside `pending` rather than replacing it: the per-type FIFO is
+   * also the legacy-broker path and stays forever.
+   */
+  const pendingByCorrelation: Map<bigint, PendingRequest> = new Map();
+  /**
+   * One-in-flight-per-message-type gate for the uncorrelated path.
+   *
+   * The broker does not answer same-type requests in receive order - a parked
+   * Queue RESERVE is answered after a later one that completed immediately - so
+   * without correlation, pipelining them hands a response to the wrong caller.
+   * Each entry is the tail of a promise chain that serialises that type.
+   */
+  const uncorrelatedLanes: Map<number, Promise<void>> = new Map();
+  let correlationEnabled = false;
+  let brokerProtocolVersion = 0;
+  let brokerCapabilities = 0;
+  let nextCorrelationId = 1n;
   const notificationHandlers: Map<number, NotificationHandler> = new Map();
   const pushClassifiers: Map<number, PushFrameClassifier> = new Map();
   const optionalResponses: Map<number, number> = new Map();
@@ -221,9 +245,74 @@ export function createMultiplexer(observability: MultiplexerObservability = {}) 
     state = ConnectionState.Authenticated;
   };
 
+  /**
+   * Record the broker's advertised capabilities.
+   *
+   * Called when SERVER_HELLO arrives. Until then - and forever, against a broker
+   * that never sends one - requests stay uncorrelated and are serialised per
+   * message type. Capability bits this client does not implement are ignored
+   * rather than rejected, so a newer broker does not break an older client.
+   */
+  const setCapabilities = (protocolVersion: number, capabilities: number): void => {
+    brokerProtocolVersion = protocolVersion;
+    brokerCapabilities = capabilities;
+    correlationEnabled = (capabilities & CAP_CORRELATION) !== 0;
+  };
+
+  const getCapabilities = (): {
+    protocolVersion: number;
+    capabilities: number;
+    correlationEnabled: boolean;
+  } => ({
+    protocolVersion: brokerProtocolVersion,
+    capabilities: brokerCapabilities,
+    correlationEnabled,
+  });
+
+  /**
+   * Run `send` with at most one request of `messageType` in flight.
+   *
+   * Only used when the broker cannot correlate. The broker does not answer
+   * same-type requests in receive order, so two in flight at once can resolve
+   * to each other's callers; the lane is what makes the uncorrelated path
+   * correct rather than merely slow. Correlated requests bypass it entirely.
+   */
+  const withUncorrelatedLane = async <T>(
+    messageType: number,
+    run: () => Promise<T>,
+  ): Promise<T> => {
+    const previous = uncorrelatedLanes.get(messageType) ?? Promise.resolve();
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    uncorrelatedLanes.set(
+      messageType,
+      previous.then(() => held),
+    );
+    await previous;
+    try {
+      return await run();
+    } finally {
+      release();
+      // Drop the lane once nothing is queued behind it, so the map does not
+      // grow one permanent entry per message type ever used.
+      if (uncorrelatedLanes.get(messageType) === held) {
+        uncorrelatedLanes.delete(messageType);
+      }
+    }
+  };
+
   const setDisconnected = (): void => {
     state = ConnectionState.Disconnected;
     optionalResponses.clear();
+    // Capabilities belong to the session, not the client. A reconnect may land
+    // on a broker that cannot correlate, so the next session must re-learn this
+    // from its own SERVER_HELLO rather than inherit the previous one's.
+    correlationEnabled = false;
+    brokerProtocolVersion = 0;
+    brokerCapabilities = 0;
+    uncorrelatedLanes.clear();
     cancelAll();
   };
 
@@ -300,7 +389,29 @@ export function createMultiplexer(observability: MultiplexerObservability = {}) 
     };
   };
 
+  /**
+   * Issue a request and resolve with its response.
+   *
+   * Correlated requests run immediately and are matched by identifier.
+   * Uncorrelated ones queue behind any other request of the same message type,
+   * because the broker may answer same-type requests out of receive order.
+   */
   const request = (
+    messageType: number,
+    frameData: Uint8Array,
+    send: (data: Uint8Array) => Promise<void>,
+    timeoutMs: number,
+    signal?: AbortSignal,
+  ): Promise<Uint8Array> => {
+    if (!correlationEnabled) {
+      return withUncorrelatedLane(messageType, () =>
+        issueRequest(messageType, frameData, send, timeoutMs, signal),
+      );
+    }
+    return issueRequest(messageType, frameData, send, timeoutMs, signal);
+  };
+
+  const issueRequest = (
     messageType: number,
     frameData: Uint8Array,
     send: (data: Uint8Array) => Promise<void>,
@@ -325,6 +436,21 @@ export function createMultiplexer(observability: MultiplexerObservability = {}) 
     const deferred = createDeferred<Uint8Array>();
     let settled = false;
     let onAbort: (() => void) | undefined;
+
+    // Label the request when the broker said it accepts labels. The CORRELATE
+    // record goes in the same transport frame, immediately before the request
+    // it names.
+    let correlationId: bigint | undefined;
+    let outboundFrame = frameData;
+    if (correlationEnabled) {
+      correlationId = nextCorrelationId;
+      nextCorrelationId += 1n;
+      const label = encodeCorrelate(correlationId);
+      const combined = new Uint8Array(label.length + frameData.length);
+      combined.set(label, 0);
+      combined.set(frameData, label.length);
+      outboundFrame = combined;
+    }
 
     const nowMs = Date.now();
     let requestEntry: PendingRequest;
@@ -368,6 +494,7 @@ export function createMultiplexer(observability: MultiplexerObservability = {}) 
 
     requestEntry = {
       deferred,
+      correlationId,
       deadline: nowMs + timeoutMs,
       discardResponse: false,
       timeoutIndex: timeoutEntries.length,
@@ -424,8 +551,12 @@ export function createMultiplexer(observability: MultiplexerObservability = {}) 
 
     scheduleTimeout(requestEntry.deadline);
 
-    const queue = getOrCreatePendingQueue(messageType);
-    enqueuePendingRequest(queue, requestEntry);
+    if (requestEntry.correlationId !== undefined) {
+      pendingByCorrelation.set(requestEntry.correlationId, requestEntry);
+    } else {
+      const queue = getOrCreatePendingQueue(messageType);
+      enqueuePendingRequest(queue, requestEntry);
+    }
 
     requestsInFlight++;
     requestsTotal++;
@@ -434,7 +565,7 @@ export function createMultiplexer(observability: MultiplexerObservability = {}) 
 
     let sendResult: Promise<void>;
     try {
-      sendResult = send(frameData);
+      sendResult = send(outboundFrame);
     } catch (err) {
       const error = err instanceof Error ? err : new Error(String(err));
       failRequest(error);
@@ -497,6 +628,11 @@ export function createMultiplexer(observability: MultiplexerObservability = {}) 
   };
 
   const unregisterRequest = (messageType: number, requestEntry: PendingRequest): void => {
+    if (requestEntry.correlationId !== undefined) {
+      pendingByCorrelation.delete(requestEntry.correlationId);
+      return;
+    }
+
     const queueEntry = pending[messageType];
     if (!queueEntry || queueEntry.size === 0) return;
 
@@ -531,7 +667,32 @@ export function createMultiplexer(observability: MultiplexerObservability = {}) 
     recordRequestFinished(messageType);
   };
 
-  const dispatch = (messageType: number, payload: Uint8Array): void => {
+  const dispatch = (messageType: number, payload: Uint8Array, correlationId?: bigint): void => {
+    // A correlated frame answers exactly one request and nothing else. Resolve
+    // it before any type-based routing: a response and a notification can share
+    // a message type, and only the label distinguishes them reliably.
+    if (correlationId !== undefined) {
+      const correlated = pendingByCorrelation.get(correlationId);
+      pendingByCorrelation.delete(correlationId);
+      if (!correlated) {
+        responsesDropped++;
+        meter?.counter("fitz.response.dropped", 1, { messageType });
+        return;
+      }
+      if (correlated.discardResponse) {
+        responsesIgnored++;
+        meter?.counter("fitz.response.ignored", 1, { messageType });
+        return;
+      }
+      correlated.deadline = -1;
+      recordRequestFinished(messageType);
+      responsesTotal++;
+      meter?.counter("fitz.response.received", 1, { messageType });
+      correlated.deferred.resolve(payload);
+      correlated.onComplete?.();
+      return;
+    }
+
     const handler = notificationHandlers.get(messageType);
     const pushClassifier = pushClassifiers.get(messageType);
     if (handler && pushClassifier?.(payload)) {
@@ -614,6 +775,11 @@ export function createMultiplexer(observability: MultiplexerObservability = {}) 
     }
     const requestsToCancel: PendingRequest[] = [];
 
+    for (const request of pendingByCorrelation.values()) {
+      requestsToCancel.push(request);
+    }
+    pendingByCorrelation.clear();
+
     for (const queueEntry of Object.values(pending)) {
       if (!queueEntry) {
         continue;
@@ -662,6 +828,8 @@ export function createMultiplexer(observability: MultiplexerObservability = {}) 
   return {
     setConnected,
     setDisconnected,
+    setCapabilities,
+    getCapabilities,
     registerNotificationHandler,
     unregisterNotificationHandler,
     registerPushFrameClassifier,
