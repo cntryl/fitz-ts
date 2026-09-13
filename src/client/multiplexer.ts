@@ -277,30 +277,27 @@ export function createMultiplexer(observability: MultiplexerObservability = {}) 
    * to each other's callers; the lane is what makes the uncorrelated path
    * correct rather than merely slow. Correlated requests bypass it entirely.
    */
-  const withUncorrelatedLane = async <T>(
-    messageType: number,
-    run: () => Promise<T>,
-  ): Promise<T> => {
-    const previous = uncorrelatedLanes.get(messageType) ?? Promise.resolve();
-    let release!: () => void;
-    const held = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    uncorrelatedLanes.set(
-      messageType,
-      previous.then(() => held),
+  const withUncorrelatedLane = <T>(messageType: number, run: () => Promise<T>): Promise<T> => {
+    const previous = uncorrelatedLanes.get(messageType);
+    // Start the first request synchronously so its FIFO slot is registered
+    // before a receive loop can deliver the response in the same turn.
+    let result: Promise<T>;
+    if (previous === undefined) {
+      result = run();
+    } else {
+      result = previous.then(run);
+    }
+    const lane = result.then(
+      () => undefined,
+      () => undefined,
     );
-    await previous;
-    try {
-      return await run();
-    } finally {
-      release();
-      // Drop the lane once nothing is queued behind it, so the map does not
-      // grow one permanent entry per message type ever used.
-      if (uncorrelatedLanes.get(messageType) === held) {
+    uncorrelatedLanes.set(messageType, lane);
+    void lane.then(() => {
+      if (uncorrelatedLanes.get(messageType) === lane) {
         uncorrelatedLanes.delete(messageType);
       }
-    }
+    });
+    return result;
   };
 
   const setDisconnected = (): void => {

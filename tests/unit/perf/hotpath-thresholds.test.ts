@@ -113,10 +113,13 @@ perfDescribe("fitz-ts hot-path thresholds", () => {
   it("keeps the multiplexer hot paths within budget", async () => {
     const multiplexer = createMultiplexer();
     multiplexer.setConnected();
+    multiplexer.setCapabilities(1, 1);
+    let roundTripCorrelation = 1n;
 
     const roundTripElapsed = await measureAsync(10_000, async () => {
       const pending = multiplexer.request(302, body, async () => undefined, 1_000);
-      multiplexer.dispatch(302, body);
+      multiplexer.dispatch(302, body, roundTripCorrelation);
+      roundTripCorrelation += 1n;
       await pending;
     });
 
@@ -125,13 +128,14 @@ perfDescribe("fitz-ts hot-path thresholds", () => {
     const drainElapsed = await measureAsync(1, async () => {
       const drainingMux = createMultiplexer();
       drainingMux.setConnected();
+      drainingMux.setCapabilities(1, 1);
 
       const pending = Array.from({ length: 1_000 }, (_, index) =>
         drainingMux.request(302, encoder.encode(`response-${index}`), async () => undefined, 5_000),
       );
 
       for (let index = 0; index < 1_000; index += 1) {
-        drainingMux.dispatch(302, encoder.encode(`response-${index}`));
+        drainingMux.dispatch(302, encoder.encode(`response-${index}`), BigInt(index + 1));
       }
 
       await Promise.all(pending);

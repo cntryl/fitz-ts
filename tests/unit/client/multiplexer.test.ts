@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vite-plus/test";
 
 import { createMultiplexer } from "../../../src/client/multiplexer";
 import { ConnectionError, TimeoutError } from "../../../src/core/errors";
-import { MSG_RPC_REQUEST, MSG_RPC_RESPONSE } from "../../../src/frame/types";
+import { CAP_CORRELATION, MSG_RPC_REQUEST, MSG_RPC_RESPONSE } from "../../../src/frame/types";
 import { RpcCodec } from "../../../src/domains/rpc/codec";
 import type { FitzMeter, FitzSpan, FitzTracer } from "../../../src/core/types";
 
@@ -103,10 +103,11 @@ describe("Multiplexer", () => {
     const meter = new FakeMeter();
     const multiplexer = createMultiplexer({ tracer, meter });
     multiplexer.setConnected();
+    multiplexer.setCapabilities(1, CAP_CORRELATION);
 
     const request = multiplexer.request(77, new Uint8Array([1]), async () => undefined, 100);
 
-    multiplexer.dispatch(77, new Uint8Array([2]));
+    multiplexer.dispatch(77, new Uint8Array([2]), 1n);
 
     await expect(request).resolves.toEqual(new Uint8Array([2]));
     expect(tracer.spans).toHaveLength(1);
@@ -128,6 +129,7 @@ describe("Multiplexer", () => {
     const meter = new FakeMeter();
     const multiplexer = createMultiplexer({ tracer, meter });
     multiplexer.setConnected();
+    multiplexer.setCapabilities(1, CAP_CORRELATION);
 
     const request = multiplexer.request(88, new Uint8Array([1]), async () => undefined, 10);
 
@@ -150,6 +152,7 @@ describe("Multiplexer", () => {
     const controller = new AbortController();
     const removeAbortListener = vi.spyOn(controller.signal, "removeEventListener");
     multiplexer.setConnected();
+    multiplexer.setCapabilities(1, CAP_CORRELATION);
 
     const request = multiplexer.request(
       88,
@@ -175,6 +178,7 @@ describe("Multiplexer", () => {
     const multiplexer = createMultiplexer();
     const controller = new AbortController();
     multiplexer.setConnected();
+    multiplexer.setCapabilities(1, CAP_CORRELATION);
 
     const first = multiplexer.request(77, new Uint8Array([1]), async () => undefined, 1000);
     const second = multiplexer.request(
@@ -348,12 +352,13 @@ describe("Multiplexer", () => {
     const response = new Uint8Array([7]);
 
     multiplexer.setConnected();
+    multiplexer.setCapabilities(1, CAP_CORRELATION);
     multiplexer.registerNotificationHandler(901, handler);
     multiplexer.registerPushFrameClassifier(901, () => false);
 
     const pending = multiplexer.request(901, new Uint8Array([1]), async () => undefined, 1000);
 
-    multiplexer.dispatch(901, response);
+    multiplexer.dispatch(901, response, 1n);
 
     await expect(pending).resolves.toEqual(response);
     expect(handler).not.toHaveBeenCalled();
@@ -362,12 +367,13 @@ describe("Multiplexer", () => {
   it("does not cross same-type responses when dispatch order matches request order", async () => {
     const multiplexer = createMultiplexer();
     multiplexer.setConnected();
+    multiplexer.setCapabilities(1, CAP_CORRELATION);
 
     const first = multiplexer.request(901, new Uint8Array([1]), async () => undefined, 100);
     const second = multiplexer.request(901, new Uint8Array([2]), async () => undefined, 100);
 
-    multiplexer.dispatch(901, new Uint8Array([0xaa]));
-    multiplexer.dispatch(901, new Uint8Array([0xbb]));
+    multiplexer.dispatch(901, new Uint8Array([0xaa]), 1n);
+    multiplexer.dispatch(901, new Uint8Array([0xbb]), 2n);
 
     await expect(first).resolves.toEqual(new Uint8Array([0xaa]));
     await expect(second).resolves.toEqual(new Uint8Array([0xbb]));
@@ -376,12 +382,13 @@ describe("Multiplexer", () => {
   it("does not cross same-type responses when dispatch order differs from request order", async () => {
     const multiplexer = createMultiplexer();
     multiplexer.setConnected();
+    multiplexer.setCapabilities(1, CAP_CORRELATION);
 
     const first = multiplexer.request(901, new Uint8Array([1]), async () => undefined, 100);
     const second = multiplexer.request(901, new Uint8Array([2]), async () => undefined, 100);
 
-    multiplexer.dispatch(901, new Uint8Array([0xaa]));
-    multiplexer.dispatch(901, new Uint8Array([0xbb]));
+    multiplexer.dispatch(901, new Uint8Array([0xbb]), 2n);
+    multiplexer.dispatch(901, new Uint8Array([0xaa]), 1n);
 
     await expect(first).resolves.toEqual(new Uint8Array([0xaa]));
     await expect(second).resolves.toEqual(new Uint8Array([0xbb]));
@@ -390,14 +397,15 @@ describe("Multiplexer", () => {
   it("does not consume stale response after timeout for the earlier request", async () => {
     const multiplexer = createMultiplexer();
     multiplexer.setConnected();
+    multiplexer.setCapabilities(1, CAP_CORRELATION);
 
     const first = multiplexer.request(902, new Uint8Array([1]), async () => undefined, 20);
     await expect(first).rejects.toBeInstanceOf(TimeoutError);
 
     const second = multiplexer.request(902, new Uint8Array([2]), async () => undefined, 200);
 
-    multiplexer.dispatch(902, new Uint8Array([0xaa]));
-    multiplexer.dispatch(902, new Uint8Array([0xbb]));
+    multiplexer.dispatch(902, new Uint8Array([0xaa]), 1n);
+    multiplexer.dispatch(902, new Uint8Array([0xbb]), 2n);
 
     await expect(second).resolves.toEqual(new Uint8Array([0xbb]));
   });
@@ -405,6 +413,7 @@ describe("Multiplexer", () => {
   it("keeps a timed-out request's tombstone in place when its send() later rejects, instead of misdelivering a delayed response to the next caller", async () => {
     const multiplexer = createMultiplexer();
     multiplexer.setConnected();
+    multiplexer.setCapabilities(1, CAP_CORRELATION);
 
     let rejectSend: (error: Error) => void = () => undefined;
     const sendFailure = new Promise<void>((_resolve, reject) => {
@@ -434,8 +443,8 @@ describe("Multiplexer", () => {
 
     // This frame is consumed and discarded by `first`'s still-in-place
     // tombstone, not delivered to `second`.
-    multiplexer.dispatch(904, new Uint8Array([0xaa]));
-    multiplexer.dispatch(904, new Uint8Array([0xbb]));
+    multiplexer.dispatch(904, new Uint8Array([0xaa]), 1n);
+    multiplexer.dispatch(904, new Uint8Array([0xbb]), 2n);
 
     await expect(second).resolves.toEqual(new Uint8Array([0xbb]));
   });
@@ -443,6 +452,7 @@ describe("Multiplexer", () => {
   it("does not leak stale response across disconnect/connect cycles", async () => {
     const multiplexer = createMultiplexer();
     multiplexer.setConnected();
+    multiplexer.setCapabilities(1, CAP_CORRELATION);
 
     const first = multiplexer.request(903, new Uint8Array([1]), async () => undefined, 20);
     await expect(first).rejects.toBeInstanceOf(TimeoutError);
@@ -451,9 +461,10 @@ describe("Multiplexer", () => {
     multiplexer.dispatch(903, new Uint8Array([0xaa]));
 
     multiplexer.setConnected();
+    multiplexer.setCapabilities(1, CAP_CORRELATION);
     const second = multiplexer.request(903, new Uint8Array([2]), async () => undefined, 200);
 
-    multiplexer.dispatch(903, new Uint8Array([0xbb]));
+    multiplexer.dispatch(903, new Uint8Array([0xbb]), 2n);
     await expect(second).resolves.toEqual(new Uint8Array([0xbb]));
   });
 });
