@@ -181,6 +181,12 @@ export type Client<TConfig extends ClientConfig = ClientConfig> = {
   getUrl: () => string;
   /** Returns the current connection state. */
   getState: () => ConnectionState;
+  /** Returns capabilities advertised by the current broker session. */
+  getServerCapabilities: () => {
+    protocolVersion: number;
+    capabilities: number;
+    correlationEnabled: boolean;
+  };
 };
 
 export type ClientTransportFactory = (
@@ -513,6 +519,13 @@ export function createClientWithTransport<TConfig extends ClientConfig>(
     return state === ConnectionState.Closed ? ConnectionState.Disconnected : state;
   };
 
+  const getServerCapabilities = () =>
+    connection?.getServerCapabilities() ?? {
+      protocolVersion: 0,
+      capabilities: 0,
+      correlationEnabled: false,
+    };
+
   return {
     config: resolvedConfig,
     connect,
@@ -542,5 +555,6 @@ export function createClientWithTransport<TConfig extends ClientConfig>(
     },
     getUrl,
     getState,
+    getServerCapabilities,
   } satisfies Client<TConfig>;
 }

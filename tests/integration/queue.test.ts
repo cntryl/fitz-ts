@@ -24,6 +24,41 @@ describe("Queue integration", () => {
       await expect(items[0].complete()).resolves.toBeUndefined();
     });
 
+    it("should correlate same-type reserves when the broker responds out of order", async () => {
+      const f = new TestFixture(transport, authMode);
+      await f.connectOrFail();
+      await waitFor(() => f.client().getServerCapabilities().correlationEnabled, {
+        timeoutMs: 1000,
+        intervalMs: 10,
+        timeoutMessage: "broker did not advertise correlation capability",
+      });
+      expect(f.client().getServerCapabilities()).toEqual({
+        protocolVersion: 1,
+        capabilities: 1,
+        correlationEnabled: true,
+      });
+      const parkedRoute = f.uniqueRoute("queue");
+      const readyRoute = f.uniqueRoute("queue");
+      await f.client().queue.enqueue(readyRoute, { body: b("second") });
+
+      const parked = f.client().queue.reserve(parkedRoute, {
+        leaseSeconds: 30,
+        batchSize: 1,
+        waitSeconds: 5,
+      });
+      await sleep(100);
+      const second = await f.client().queue.reserve(readyRoute, {
+        leaseSeconds: 30,
+        batchSize: 1,
+        waitSeconds: 0,
+      });
+      expect(Buffer.from(second[0].body).toString()).toBe("second");
+
+      await f.client().queue.enqueue(parkedRoute, { body: b("first") });
+      const first = await parked;
+      expect(Buffer.from(first[0].body).toString()).toBe("first");
+    });
+
     it("should return message to queue after lease expiry", async () => {
       const f = new TestFixture(transport, authMode);
       await f.connectOrFail();

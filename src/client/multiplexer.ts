@@ -665,29 +665,26 @@ export function createMultiplexer(observability: MultiplexerObservability = {}) 
   };
 
   const dispatch = (messageType: number, payload: Uint8Array, correlationId?: bigint): void => {
-    // A correlated frame answers exactly one request and nothing else. Resolve
-    // it before any type-based routing: a response and a notification can share
-    // a message type, and only the label distinguishes them reliably.
+    // Resolve a live correlation before type-based routing. A correlation may
+    // produce more than one domain-defined phase, so an unknown identifier must
+    // fall through to the normal message-type path rather than be discarded.
     if (correlationId !== undefined) {
       const correlated = pendingByCorrelation.get(correlationId);
-      pendingByCorrelation.delete(correlationId);
-      if (!correlated) {
-        responsesDropped++;
-        meter?.counter("fitz.response.dropped", 1, { messageType });
+      if (correlated) {
+        pendingByCorrelation.delete(correlationId);
+        if (correlated.discardResponse) {
+          responsesIgnored++;
+          meter?.counter("fitz.response.ignored", 1, { messageType });
+          return;
+        }
+        correlated.deadline = -1;
+        recordRequestFinished(messageType);
+        responsesTotal++;
+        meter?.counter("fitz.response.received", 1, { messageType });
+        correlated.deferred.resolve(payload);
+        correlated.onComplete?.();
         return;
       }
-      if (correlated.discardResponse) {
-        responsesIgnored++;
-        meter?.counter("fitz.response.ignored", 1, { messageType });
-        return;
-      }
-      correlated.deadline = -1;
-      recordRequestFinished(messageType);
-      responsesTotal++;
-      meter?.counter("fitz.response.received", 1, { messageType });
-      correlated.deferred.resolve(payload);
-      correlated.onComplete?.();
-      return;
     }
 
     const handler = notificationHandlers.get(messageType);

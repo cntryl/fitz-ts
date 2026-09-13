@@ -841,6 +841,9 @@ export function createConnection(
         let pendingCorrelation: bigint | undefined;
         for (const frame of frames) {
           if (frame.messageType === MSG_SERVER_HELLO) {
+            if (pendingCorrelation !== undefined) {
+              throw new ProtocolError("A CORRELATED record cannot label SERVER_HELLO");
+            }
             const hello = decodeServerHello(frame.payload);
             if (hello) {
               multiplexer.setCapabilities(hello.protocolVersion, hello.capabilities);
@@ -849,12 +852,18 @@ export function createConnection(
           }
 
           if (frame.messageType === MSG_CORRELATED) {
+            if (pendingCorrelation !== undefined) {
+              throw new ProtocolError("A CORRELATED record cannot label another CORRELATED record");
+            }
             pendingCorrelation = decodeCorrelation(frame.payload);
             continue;
           }
 
           multiplexer.dispatch(frame.messageType, frame.payload, pendingCorrelation);
           pendingCorrelation = undefined;
+        }
+        if (pendingCorrelation !== undefined) {
+          throw new ProtocolError("Transport frame ended after a CORRELATED record");
         }
       } catch (error) {
         if (receiveLoopAbort || closeRequested) {
@@ -1127,6 +1136,7 @@ export function createConnection(
     getState,
     isConnected,
     getUrl,
+    getServerCapabilities: multiplexer.getCapabilities,
     reportBackgroundError,
   };
 }
