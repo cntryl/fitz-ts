@@ -2,6 +2,12 @@ name: CI
 
 on:
   workflow_dispatch:
+    inputs:
+      broker_tag:
+        description: Fitz broker image tag
+        type: choice
+        options: [main, develop]
+        default: main
   schedule:
     - cron: "0 6 * * *"
   push:
@@ -19,40 +25,84 @@ permissions:
 
 env:
   FORCE_COLOR: "1"
+  FITZ_BROKER_IMAGE: ghcr.io/cntryl/fitz:${{ inputs.broker_tag || 'main' }}
 
 jobs:
   quality:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
-        with: { node-version: "24", cache: npm }
-      - run: npm ci
-      - run: npm run fmt:check
-      - run: npm run lint
-      - run: npm run typecheck:contract
-      - run: npm run fixture:check
-      - if: github.event_name == 'schedule'
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Node 24
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Check formatting
+        run: npm run fmt:check
+
+      - name: Lint source
+        run: npm run lint
+
+      - name: Check public types
+        run: npm run typecheck:contract
+
+      - name: Check fixtures
+        run: npm run fixture:check
+
+      - name: Check upstream fixtures
+        if: github.event_name == 'schedule'
         run: npm run fixture:check -- --upstream
-      - run: npm audit --audit-level=moderate
-      - run: npm run build
-      - run: npm run package:lint
-      - run: npm run pack:smoke
-      - run: npm exec -- vp test run --project unit --coverage
+
+      - name: Audit dependencies
+        run: npm audit --audit-level=moderate
+
+      - name: Build package
+        run: npm run build
+
+      - name: Lint package contents
+        run: npm run package:lint
+
+      - name: Smoke test package
+        run: npm run pack:smoke
+
+      - name: Run unit tests with coverage
+        run: npm exec -- vp test run --project unit --coverage
 
   node-compat:
-    strategy: { fail-fast: false, matrix: { node: ["22", "24", "26"] } }
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ["22", "24", "26"]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
-        with: { node-version: "${{ matrix.node }}", cache: npm }
-      - run: npm ci
-      - run: npm run build
-      - run: npm run test:unit
-      - run: npm run pack:smoke
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Node ${{ matrix.node }}
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build package
+        run: npm run build
+
+      - name: Run unit tests
+        run: npm run test:unit
+
+      - name: Smoke test package
+        run: npm run pack:smoke
 
   broker:
     strategy:
@@ -62,14 +112,23 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
-      FITZ_BROKER_IMAGE: ${{ github.event_name == 'schedule' && 'ghcr.io/cntryl/fitz:latest' || 'ghcr.io/cntryl/fitz@sha256:976b4baa57b91841021e43563112cf0b686a3e79af89c1242a4f5cbf362e7afa' }}
       FITZ_PATTERNED_LEASE_INVENTORY: "1"
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
-        with: { node-version: "24", cache: npm }
-      - run: npm ci
-      - run: docker compose up -d
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Node 24
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Start broker stack
+        run: docker compose up -d
+
       - name: Wait for broker
         run: |
           for attempt in {1..60}; do
@@ -78,38 +137,64 @@ jobs:
           done
           docker compose logs
           exit 1
-      - if: matrix.leg == 'integration'
+
+      - name: Run integration tests
+        if: matrix.leg == 'integration'
         run: time npm run test:integration -- --reporter=verbose
-      - if: matrix.leg != 'integration'
+
+      - name: Run conformance tests
+        if: matrix.leg != 'integration'
         env:
           CONFORMANCE_TRANSPORT: ${{ startsWith(matrix.leg, 'tcp-') && 'tcp' || 'ws' }}
           CONFORMANCE_AUTH_MODE: ${{ endsWith(matrix.leg, 'valid_jwt') && 'valid_jwt' || 'anonymous' }}
           CONFORMANCE_OUTPUT: artifacts/conformance-${{ matrix.leg }}.json
         run: time npm run test:conformance
-      - if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+
+      - name: Upload conformance results
+        if: always()
+        uses: actions/upload-artifact@v7
         with:
           name: broker-${{ matrix.leg }}
           path: artifacts/conformance-*.json
           if-no-files-found: ignore
-      - if: always()
+
+      - name: Save logs and stop broker stack
+        if: always()
         run: mkdir -p artifacts && docker compose logs > artifacts/broker-${{ matrix.leg }}.log && docker compose down --volumes
 
   browser:
-    strategy: { fail-fast: false, matrix: { browser: [chromium, firefox, webkit] } }
+    strategy:
+      fail-fast: false
+      matrix:
+        browser: [chromium, firefox, webkit]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
-        with: { node-version: "24", cache: npm }
-      - run: npm ci
-      - run: npx playwright install --with-deps ${{ matrix.browser }}
-      - run: docker compose up -d
-      - run: |
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Node 24
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright ${{ matrix.browser }}
+        run: npx playwright install --with-deps ${{ matrix.browser }}
+
+      - name: Start broker stack
+        run: docker compose up -d
+
+      - name: Run Playwright ${{ matrix.browser }} tests
+        run: |
           until curl --fail --silent http://127.0.0.1:4290/health; do sleep 1; done
           npx playwright test --project=${{ matrix.browser }}
-      - if: always()
+
+      - name: Stop broker stack
+        if: always()
         run: docker compose down --volumes
 
   package:
@@ -117,18 +202,32 @@ jobs:
     if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
-        with: { node-version: "24", cache: npm }
-      - run: npm ci && npm run build
-      - id: pack
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Node 24
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Install dependencies and build
+        run: npm ci && npm run build
+
+      - name: Pack npm tarball
+        id: pack
         run: |
           mkdir release
           npm pack --pack-destination release
           echo "path=$(find release -name '*.tgz')" >> "$GITHUB_OUTPUT"
-      - uses: actions/attest-build-provenance@43d14bc2b83dec42d39ecae14e916627a18bb661 # v3
-        with: { subject-path: "${{ steps.pack.outputs.path }}" }
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+
+      - name: Attest npm tarball
+        uses: actions/attest-build-provenance@v3
+        with:
+          subject-path: ${{ steps.pack.outputs.path }}
+
+      - name: Upload npm tarball
+        uses: actions/upload-artifact@v7
         with:
           name: npm-tarball-${{ github.sha }}
           path: release/*.tgz
@@ -139,7 +238,8 @@ jobs:
     needs: [quality, node-compat, broker, browser, package]
     runs-on: ubuntu-latest
     steps:
-      - run: |
+      - name: Verify required jobs
+        run: |
           test '${{ needs.quality.result }}' = success
           test '${{ needs.node-compat.result }}' = success
           test '${{ needs.broker.result }}' = success
