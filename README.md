@@ -102,6 +102,12 @@ Subscription-driven helpers built on the gate:
 
 Queue and stream subscriptions are wake signals, not work handlers. The authoritative work step remains `reserve()` or `read()`.
 
+## Notice and Schedule broker operations
+
+`notice.unsubscribeAll()` removes all Notice subscriptions for the current broker session and completes their local handles after the broker acknowledges opcode 503.
+
+Schedule `create()` and offset-based `entries()` remain the portable operations. Brokers exposing the additive Schedule extensions also support `createBatch(entries)` (706) and `listV2({ cursor, limit })` (707). A cursor page includes `entries`, `hasMore`, and an opaque `continuation` for the next request.
+
 ## Stream Replay
 
 ```typescript

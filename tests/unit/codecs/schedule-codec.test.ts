@@ -8,6 +8,60 @@ import { createBufferReader, createBufferWriter } from "../../../src/core/buffer
 import { testData } from "../helpers/test-utils";
 
 describe("ScheduleCodec", () => {
+  it("should encode CREATE_BATCH definitions with delivery modes", () => {
+    const encoded = ScheduleCodec.encodeCreateBatch([
+      {
+        route: "schedule://r/a/one/run",
+        cron: "* * * * *",
+        deliveryMode: "Broadcast",
+        payload: testData("one"),
+      },
+      {
+        route: "schedule://r/a/two/run",
+        cron: "0 * * * *",
+        deliveryMode: "Single",
+        payload: testData("two"),
+      },
+    ]);
+    const reader = createBufferReader(encoded);
+    expect(reader.readU32BE()).toBe(2);
+    expect(reader.readString()).toBe("schedule://r/a/one/run");
+    expect(reader.readString()).toBe("* * * * *");
+    expect(reader.readU8()).toBe(0);
+    expect(reader.readBytes(reader.readU32BE())).toEqual(testData("one"));
+    expect(reader.readString()).toBe("schedule://r/a/two/run");
+    expect(reader.readString()).toBe("0 * * * *");
+    expect(reader.readU8()).toBe(1);
+    expect(reader.readBytes(reader.readU32BE())).toEqual(testData("two"));
+    expect(reader.isEOF()).toBe(true);
+  });
+
+  it("should encode LIST_V2 cursor and decode a versioned page", () => {
+    const request = createBufferReader(ScheduleCodec.encodeListV2("prior", 5n));
+    expect(request.readU8()).toBe(1);
+    expect(request.readString()).toBe("prior");
+    expect(request.readU8()).toBe(1);
+    expect(request.readU64BE()).toBe(5n);
+    expect(request.isEOF()).toBe(true);
+
+    const response = createBufferWriter(128);
+    response.writeU8(1);
+    response.writeU8(1);
+    response.writeU8(1);
+    response.writeString("next");
+    response.writeU8(1);
+    response.writeString("schedule://r/a/one/run");
+    response.writeString("* * * * *");
+    response.writeU8(0);
+    response.writeU32BE(3);
+    response.writeBytes(testData("one"));
+    response.writeU8(0);
+    const page = ScheduleCodec.decodeListV2(response.getBuffer());
+    expect(page.hasMore).toBe(true);
+    expect(page.continuation).toBe("next");
+    expect(page.entries[0]?.payload).toEqual(testData("one"));
+  });
+
   describe("CREATE encoding", () => {
     it("should_encode_create_with_route_cron_payload", () => {
       // Arrange

@@ -46,6 +46,11 @@ export const NoticeCodec = {
     return buffer;
   },
 
+  /** UNSUBSCRIBE_ALL (503) has no request payload. */
+  encodeUnsubscribeAll(): Uint8Array {
+    return new Uint8Array();
+  },
+
   /**
    * Decode NOTIFY (504) message
    * Payload: [u64 subscription_id][string route][bytes body]

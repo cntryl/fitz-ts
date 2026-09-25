@@ -19,6 +19,7 @@ import {
   MSG_NOTICE_PUBLISH,
   MSG_NOTICE_SUBSCRIBE,
   MSG_NOTICE_UNSUBSCRIBE,
+  MSG_NOTICE_UNSUBSCRIBE_ALL,
 } from "../../frame/types";
 import { isRegistrationPatternShape, isRouteShape } from "../_routes";
 import { restoreMapEntriesAtomically } from "../internal/restore";
@@ -45,12 +46,16 @@ import {
 
 type NoticeSubscriptionState = {
   subId: bigint;
-  handlers: Map<number, SubscriptionHandlerRegistration<NoticeMsg>>;
+  handlers: Map<number, NoticeHandlerRegistration>;
   generation: number;
   // Set while a wire UNSUBSCRIBE for this pattern is awaiting its broker
   // round-trip. subscribe()'s "reuse the existing state" path must wait it
   // out rather than reuse it blindly — see awaitPendingUnsubscribe().
   pendingUnsubscribe?: Promise<void>;
+};
+
+type NoticeHandlerRegistration = SubscriptionHandlerRegistration<NoticeMsg> & {
+  complete(): void;
 };
 
 type NoticeConnectionPort = RequestPort &
@@ -88,6 +93,8 @@ export interface NoticeClient {
       signal?: AbortSignal;
     },
   ): Promise<NoticeSubscription>;
+  /** Removes all Notice subscriptions on this broker session. */
+  unsubscribeAll(options?: { signal?: AbortSignal }): Promise<void>;
   /** Returns an async notice stream. Breaking iteration unsubscribes this consumer. */
   notifications(pattern: string, options?: SubscriptionIteratorOptions): AsyncIterable<NoticeMsg>;
 }
@@ -116,8 +123,38 @@ export function createNoticeClient(connection: NoticeConnectionPort): NoticeClie
   let initialized = false;
   let nextHandlerId = 1;
   const registerSingleFlight = createKeyedSingleFlight<string, bigint>();
+  let restoreInFlight: Promise<void> | undefined;
+  let pendingBulkUnsubscribes = 0;
+  let skippedRestore = false;
 
-  connection.onReconnect(async () => {
+  let mutationTail: Promise<void> = Promise.resolve();
+  const serialize = async <T>(operation: () => Promise<T>): Promise<T> => {
+    const previous = mutationTail;
+    let release!: () => void;
+    mutationTail = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await previous;
+    try {
+      return await operation();
+    } finally {
+      release();
+    }
+  };
+
+  connection.onReconnect(() => {
+    if (pendingBulkUnsubscribes > 0) {
+      skippedRestore = true;
+      return;
+    }
+    const restoring = restoreSubscriptions();
+    restoreInFlight = restoring;
+    return restoring.finally(() => {
+      if (restoreInFlight === restoring) restoreInFlight = undefined;
+    });
+  });
+
+  const restoreSubscriptions = async (): Promise<void> => {
     if (subscriptionsByPattern.size === 0) {
       return;
     }
@@ -145,7 +182,7 @@ export function createNoticeClient(connection: NoticeConnectionPort): NoticeClie
       patternsBySubId.set(state.subId, pattern);
       pendingNotifications.flush(state.subId);
     }
-  });
+  };
 
   const publish = async (
     route: string,
@@ -169,27 +206,79 @@ export function createNoticeClient(connection: NoticeConnectionPort): NoticeClie
     pattern: string,
     handler: NoticeHandler,
     options?: { signal?: AbortSignal },
-  ): Promise<NoticeSubscription> => {
-    assertNoticePattern(pattern);
-    initNotifyHandler();
+  ): Promise<NoticeSubscription> =>
+    serialize(async () => {
+      assertNoticePattern(pattern);
+      initNotifyHandler();
 
-    while (true) {
-      const existing = subscriptionsByPattern.get(pattern);
-      if (existing) {
-        if (existing.pendingUnsubscribe) {
-          // An UNSUBSCRIBE for this pattern is in flight — reusing this
-          // state now would register the handler locally without ever
-          // sending a fresh wire SUBSCRIBE. Wait it out, then re-decide
-          // against whatever state (or lack of one) remains.
-          await awaitPendingUnsubscribe(existing);
-          continue;
+      while (true) {
+        const existing = subscriptionsByPattern.get(pattern);
+        if (existing) {
+          if (existing.pendingUnsubscribe) {
+            // An UNSUBSCRIBE for this pattern is in flight — reusing this
+            // state now would register the handler locally without ever
+            // sending a fresh wire SUBSCRIBE. Wait it out, then re-decide
+            // against whatever state (or lack of one) remains.
+            await awaitPendingUnsubscribe(existing);
+            continue;
+          }
+          return addLocalSubscription(pattern, existing.subId, handler, options?.signal);
         }
-        return addLocalSubscription(pattern, existing.subId, handler, options?.signal);
-      }
 
-      const subId = await registerSingleFlight(pattern, () => subscribeWire(pattern));
-      return addLocalSubscription(pattern, subId, handler, options?.signal);
-    }
+        const subId = await registerSingleFlight(pattern, () => subscribeWire(pattern));
+        return addLocalSubscription(pattern, subId, handler, options?.signal);
+      }
+    });
+
+  const unsubscribeAll = (options: { signal?: AbortSignal } = {}): Promise<void> => {
+    pendingBulkUnsubscribes += 1;
+    return serialize(async () => {
+      try {
+        await restoreInFlight?.catch(() => undefined);
+        const parsed = parseStandardResponse(
+          await requestFrame(
+            MSG_NOTICE_UNSUBSCRIBE_ALL,
+            NoticeCodec.encodeUnsubscribeAll(),
+            options.signal,
+          ),
+        );
+        if (!parsed.success) {
+          throw new NoticeError(
+            `UNSUBSCRIBE_ALL failed: ${parsed.error ?? "unknown error"}`,
+            "UNSUBSCRIBE_ALL_FAILED",
+            parsed.errorCode,
+          );
+        }
+        if (parsed.data.length !== 0) {
+          throw new NoticeError("UNSUBSCRIBE_ALL response has trailing bytes", "INVALID_RESPONSE");
+        }
+        const completions = [...subscriptionsByPattern.values()].flatMap((state) =>
+          [...state.handlers.values()].map((registration) => () => registration.complete()),
+        );
+        for (const state of subscriptionsByPattern.values())
+          pendingNotifications.remove(state.subId);
+        subscriptionsByPattern.clear();
+        patternsBySubId.clear();
+        for (const complete of completions) complete();
+      } catch (error) {
+        if (skippedRestore) {
+          const failure = new NoticeError(
+            "UNSUBSCRIBE_ALL failed while reconnect restoration was deferred",
+            "UNSUBSCRIBE_ALL_RESTORE_FAILED",
+          );
+          for (const state of subscriptionsByPattern.values()) {
+            for (const registration of state.handlers.values()) registration.fail(failure);
+            pendingNotifications.remove(state.subId);
+          }
+          subscriptionsByPattern.clear();
+          patternsBySubId.clear();
+        }
+        throw error;
+      } finally {
+        skippedRestore = false;
+        pendingBulkUnsubscribes -= 1;
+      }
+    });
   };
 
   const notifications = (
@@ -234,7 +323,11 @@ export function createNoticeClient(connection: NoticeConnectionPort): NoticeClie
       async () => unsubscribe(pattern, handlerId),
       signal,
     );
-    subscription.handlers.set(handlerId, { handler, fail: (error) => controller.fail(error) });
+    subscription.handlers.set(handlerId, {
+      handler,
+      fail: (error) => controller.fail(error),
+      complete: () => controller.completeLocal(),
+    });
     pendingNotifications.flush(subId);
     return controller.handle;
   };
@@ -308,6 +401,7 @@ export function createNoticeClient(connection: NoticeConnectionPort): NoticeClie
   return {
     publish,
     subscribe,
+    unsubscribeAll,
     notifications,
   };
 }
