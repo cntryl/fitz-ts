@@ -108,6 +108,7 @@ export interface SubscriptionHandle extends AsyncDisposable {
 export interface SubscriptionController<T extends SubscriptionHandle> {
   readonly handle: T;
   fail(error: unknown): void;
+  completeLocal(): void;
 }
 
 export function createSubscriptionController<T extends SubscriptionHandle>(
@@ -116,6 +117,7 @@ export function createSubscriptionController<T extends SubscriptionHandle>(
 ): SubscriptionController<T> {
   let active = true;
   let terminalFailure = false;
+  let locallyCompleted = false;
   let pending: Promise<void> | undefined;
   let onAbort: (() => void) | undefined;
   let resolveCompletion!: () => void;
@@ -134,7 +136,7 @@ export function createSubscriptionController<T extends SubscriptionHandle>(
     active = false;
     if (signal && onAbort) signal.removeEventListener("abort", onAbort);
     pending = unsubscribeFn().catch((error: unknown) => {
-      active = true;
+      if (!locallyCompleted) active = true;
       throw error;
     });
     try {
@@ -170,13 +172,21 @@ export function createSubscriptionController<T extends SubscriptionHandle>(
       });
   };
 
+  const completeLocal = (): void => {
+    if (terminalFailure) return;
+    locallyCompleted = true;
+    active = false;
+    if (signal && onAbort) signal.removeEventListener("abort", onAbort);
+    resolveCompletion();
+  };
+
   if (signal) {
     onAbort = (): void => void handle[Symbol.asyncDispose]();
     if (signal.aborted) onAbort();
     else signal.addEventListener("abort", onAbort, { once: true });
   }
 
-  return { handle: handle as T, fail };
+  return { handle: handle as T, fail, completeLocal };
 }
 
 /**

@@ -11,8 +11,10 @@ export const ErrKvOperationNotAllowed = 5;
 
 /** KV error code: transaction isolation conflict; callers may retry a new transaction. */
 export const ErrCodeKvIsolationConflict = 1004;
-/** KV error code: backend failure; retry only according to the configured policy. */
+/** KV error code: backend failure with unknown operation outcome; do not blindly retry. */
 export const ErrCodeKvBackendError = 1009;
+/** KV error code: mailbox full before request admission. */
+export const ErrCodeKvBusy = 1014;
 /** KV error code: invalid subscription selector or request. */
 export const ErrCodeKvInvalidSubscription = 1012;
 /** KV error code: broker subscription limit reached. */
@@ -31,6 +33,12 @@ export const ErrQueueInvalidDelay = 5;
 
 /** Queue error code: capacity is exhausted; classified as retryable. */
 export const ErrCodeQueueFull = 4005;
+/** Stream error code: mailbox full before request admission. */
+export const ErrCodeStreamBusy = 2014;
+/** Notice error code: mailbox full before request admission. */
+export const ErrCodeNoticeBusy = 3006;
+/** Lease error code: request queue full before admission. */
+export const ErrCodeLeaseQueueFull = 5007;
 /** Queue error code: invalid availability subscription. */
 export const ErrCodeQueueInvalidSubscription = 4010;
 /** Queue error code: broker subscription limit reached. */
@@ -127,11 +135,14 @@ export const ErrCodeScheduleBackendError = 7010;
 const retryableErrorCodes = new Set([
   "KV_3",
   `KV_${ErrCodeKvIsolationConflict}`,
-  `KV_${ErrCodeKvBackendError}`,
+  `KV_${ErrCodeKvBusy}`,
+  `STREAM_${ErrCodeStreamBusy}`,
+  `NOTICE_${ErrCodeNoticeBusy}`,
   "QUEUE_4",
   `QUEUE_${ErrCodeQueueFull}`,
   "LEASE_1",
   `LEASE_${ErrCodeLeaseHeld}`,
+  `LEASE_${ErrCodeLeaseQueueFull}`,
   `RPC_${ErrCodeRpcTimeout}`,
   `RPC_${ErrCodeRpcWorkerNotFound}`,
   `RPC_${ErrCodeRpcBackpressure}`,

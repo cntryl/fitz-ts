@@ -15,7 +15,9 @@ import type {
 import {
   MSG_SCHEDULE_CANCEL,
   MSG_SCHEDULE_CREATE,
+  MSG_SCHEDULE_CREATE_BATCH,
   MSG_SCHEDULE_LIST_PAGE,
+  MSG_SCHEDULE_LIST_V2,
   MSG_SCHEDULE_NOTIFY,
   MSG_SCHEDULE_SUBSCRIBE,
   MSG_SCHEDULE_UNSUBSCRIBE,
@@ -29,6 +31,7 @@ import {
   ScheduleNotification,
   ScheduleSubscription,
   ScheduleListPage,
+  ScheduleCursorPage,
   ScheduleStatusNames,
 } from "./types";
 import { ScheduleError } from "../../core/errors";
@@ -92,6 +95,14 @@ export interface ScheduleClient {
       signal?: AbortSignal;
     },
   ): Promise<void>;
+  /** Submits multiple schedule definitions using broker extension 706. */
+  createBatch(entries: readonly ScheduleEntry[], options?: { signal?: AbortSignal }): Promise<void>;
+  /** Reads one cursor page using broker extension 707; canonical LIST remains 702. */
+  listV2(options?: {
+    cursor?: string;
+    limit?: bigint;
+    signal?: AbortSignal;
+  }): Promise<ScheduleCursorPage>;
   /** Cancels the schedule at `route`. */
   cancel(
     route: string,
@@ -209,6 +220,32 @@ export function createScheduleClient(connection: ScheduleConnectionPort): Schedu
       options.signal,
     );
     ScheduleCodec.decodeCreateResponse(assertPlainSuccess(response, "CREATE"));
+  };
+
+  const createBatch = async (
+    entries: readonly ScheduleEntry[],
+    options: { signal?: AbortSignal } = {},
+  ): Promise<void> => {
+    for (const entry of entries) assertConcreteScheduleRoute(entry.route);
+    const response = await requestFrame(
+      MSG_SCHEDULE_CREATE_BATCH,
+      ScheduleCodec.encodeCreateBatch(entries),
+      options.signal,
+    );
+    const data = assertExtensionSuccess(response, "CREATE_BATCH");
+    if (data.length !== 0)
+      throw new ScheduleError("CREATE_BATCH response has trailing bytes", "INVALID_RESPONSE");
+  };
+
+  const listV2 = async (
+    options: { cursor?: string; limit?: bigint; signal?: AbortSignal } = {},
+  ): Promise<ScheduleCursorPage> => {
+    const response = await requestFrame(
+      MSG_SCHEDULE_LIST_V2,
+      ScheduleCodec.encodeListV2(options.cursor, options.limit),
+      options.signal,
+    );
+    return ScheduleCodec.decodeListV2(assertExtensionSuccess(response, "LIST_V2"));
   };
 
   const cancel = async (route: string, options: { signal?: AbortSignal } = {}): Promise<void> => {
@@ -411,6 +448,15 @@ export function createScheduleClient(connection: ScheduleConnectionPort): Schedu
     return result.data;
   };
 
+  const assertExtensionSuccess = (payload: Uint8Array, operation: string): Uint8Array => {
+    if (payload.length >= 5 && payload[0] === 1) {
+      const plainLength =
+        (payload[1]! * 0x1000000 + (payload[2]! << 16) + (payload[3]! << 8) + payload[4]!) >>> 0;
+      if (plainLength + 5 === payload.length) return assertPlainSuccess(payload, operation);
+    }
+    return assertSuccess(payload, operation);
+  };
+
   const mapErrorCode = (message?: string): string => {
     const normalized = message?.toLowerCase() ?? "";
     if (normalized.includes("not found")) {
@@ -427,7 +473,9 @@ export function createScheduleClient(connection: ScheduleConnectionPort): Schedu
 
   return {
     create,
+    createBatch,
     cancel,
+    listV2,
     entries,
     subscribe,
     notifications,

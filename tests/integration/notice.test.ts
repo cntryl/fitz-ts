@@ -9,6 +9,22 @@ const b = (value: string) => Buffer.from(value);
 
 describe("Notice integration", () => {
   runWithBothTransports(({ transport, authMode }) => {
+    it("should complete all local handles after UNSUBSCRIBE_ALL and permit resubscribe", async () => {
+      const f = new TestFixture(transport, authMode);
+      await f.connectOrFail();
+      const first = f.uniqueRoute("notice");
+      const second = f.uniqueRoute("notice");
+      const one = await f.client().notice.subscribe(first, async () => undefined);
+      const two = await f.client().notice.subscribe(second, async () => undefined);
+
+      await f.client().notice.unsubscribeAll();
+      await expect(one.completion).resolves.toBeUndefined();
+      await expect(two.completion).resolves.toBeUndefined();
+      await expect(f.client().notice.unsubscribeAll()).resolves.toBeUndefined();
+      const again = await f.client().notice.subscribe(first, async () => undefined);
+      await again.unsubscribe();
+    });
+
     it("should receive notification for matching publish", async () => {
       const f = new TestFixture(transport, authMode);
       await f.connectOrFail();

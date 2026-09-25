@@ -46,7 +46,7 @@ import {
   TransportError,
 } from "../../core/errors";
 import { ConnectionState } from "../../core/types";
-import { createBufferWriter, readU128BEAt, utf8Encoder } from "../../core/buffer";
+import { createBufferWriter, readU128BEAt } from "../../core/buffer";
 import { isConcreteRouteShape, isRegistrationPatternShape, routeMatchesPattern } from "../_routes";
 import { restoreMapEntriesAtomically } from "../internal/restore";
 import { parseStandardResponse } from "../../protocol/response";
@@ -651,7 +651,9 @@ export function createRpcClient(connection: RpcConnectionPort): RpcClient {
 
         const message = error instanceof Error ? error.message : "Handler error";
         try {
-          await writer.end({ body: utf8Encoder.encode(`Handler error: ${message}`) });
+          await writer.end({
+            body: encodeRpcErrorBody(ErrCodeRpcBackendError, message.slice(0, 512)),
+          });
         } catch {
           // Best-effort error response.
         }
