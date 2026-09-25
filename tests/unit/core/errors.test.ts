@@ -44,6 +44,7 @@ import {
   ErrStreamSessionNotFound,
   KvError,
   LeaseError,
+  NoticeError,
   QueueError,
   RpcError,
   ScheduleError,
@@ -151,7 +152,16 @@ describe("core errors", () => {
     expect(
       isRetryable(new KvError("conflict", "CONFLICTING_WRITE", ErrCodeKvIsolationConflict)),
     ).toBe(true);
-    expect(isRetryable(new KvError("backend", "BACKEND_ERROR", ErrCodeKvBackendError))).toBe(true);
+    expect(isRetryable(new KvError("backend", "BACKEND_ERROR", ErrCodeKvBackendError))).toBe(false);
+    for (const [error, expected] of [
+      [new KvError("busy", "BUSY", 1014), true],
+      [new StreamError("busy", "BUSY", 2014), true],
+      [new NoticeError("busy", "BUSY", 3006), true],
+      [new LeaseError("queue full", "QUEUE_FULL", 5007), true],
+      [new KvError("unauthorized", "UNAUTHORIZED", 1011), false],
+    ] as const) {
+      expect(isRetryable(error)).toBe(expected);
+    }
     expect(isRetryable(new QueueError("full", "QUEUE_FULL", ErrCodeQueueFull))).toBe(true);
     expect(isRetryable(new LeaseError("held", "LEASE_HELD", ErrCodeLeaseHeld))).toBe(true);
     expect(isRetryable(new RpcError("backpressure", "BACKPRESSURE", ErrCodeRpcBackpressure))).toBe(

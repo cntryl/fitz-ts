@@ -83,6 +83,13 @@ export interface ScheduleListPage {
   totalCount: bigint;
 }
 
+/** One page from the broker's optional cursor-based Schedule LIST_V2 extension. */
+export interface ScheduleCursorPage {
+  entries: readonly ScheduleEntry[];
+  hasMore: boolean;
+  continuation?: string;
+}
+
 export interface ScheduleSubscribeResponse {
   subId: bigint;
 }

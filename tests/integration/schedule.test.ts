@@ -8,6 +8,36 @@ const b = (value: string) => Buffer.from(value);
 
 describe("Schedule integration", () => {
   runWithBothTransports(({ transport, authMode }) => {
+    it("should create a batch and continue LIST_V2 pages", async () => {
+      const f = new TestFixture(transport, authMode);
+      await f.connectOrFail();
+      const one = f.uniqueRoute("schedule");
+      const two = f.uniqueRoute("schedule");
+      const entries = [
+        { route: one, cron: "0 0 * * *", deliveryMode: "Broadcast" as const, payload: b("one") },
+        { route: two, cron: "0 0 * * *", deliveryMode: "Single" as const, payload: b("two") },
+      ];
+      await f.client().schedule.createBatch(entries);
+      try {
+        const seen = new Set<string>();
+        let cursor: string | undefined;
+        let hasMore = true;
+        while (hasMore) {
+          const page = await f.client().schedule.listV2({ cursor, limit: 1n });
+          for (const entry of page.entries) seen.add(entry.route);
+          hasMore = page.hasMore;
+          if (hasMore) {
+            expect(page.continuation).toBeDefined();
+            cursor = page.continuation;
+          }
+        }
+        expect(seen.has(one) && seen.has(two)).toBe(true);
+      } finally {
+        await f.client().schedule.cancel(one);
+        await f.client().schedule.cancel(two);
+      }
+    });
+
     it("should create schedule with a valid cron expression", async () => {
       const f = new TestFixture(transport, authMode);
       await f.connectOrFail();

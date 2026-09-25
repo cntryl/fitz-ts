@@ -3,9 +3,10 @@ import { describe, expect, it } from "vite-plus/test";
 import { MSG_SCHEDULE_SUBSCRIBE } from "../../../src/frame/types";
 import { createScheduleClient } from "../../../src/domains/schedule/client";
 import { ErrCodeScheduleBackendError, ScheduleError } from "../../../src/core/errors";
+import { createBufferWriter } from "../../../src/core/buffer";
 
 class FakeScheduleConnection {
-  constructor(private readonly response = new Uint8Array([0])) {}
+  constructor(private readonly response: Uint8Array = new Uint8Array([0])) {}
   readonly requestCalls: number[] = [];
   readonly notificationHandlers = new Map<number, (payload: Uint8Array) => void>();
   readonly reconnectListeners = new Set<() => void | Promise<void>>();
@@ -119,6 +120,21 @@ describe("ScheduleClient route validation", () => {
 });
 
 describe("ScheduleClient domain errors", () => {
+  it.each(["createBatch", "listV2"] as const)(
+    "should decode coded broker and plain domain errors for %s",
+    async (operation) => {
+      for (const coded of [false, true]) {
+        const writer = createBufferWriter(32);
+        writer.writeU8(1);
+        if (coded) writer.writeU32BE(7010);
+        writer.writeString("busy");
+        const client = createScheduleClient(new FakeScheduleConnection(writer.getBuffer()));
+        const action = operation === "createBatch" ? client.createBatch([]) : client.listV2();
+        await expect(action).rejects.toMatchObject({ domainCode: coded ? 7010 : undefined });
+      }
+    },
+  );
+
   it("should preserve the broker message given plain create errors when errors are mapped", async () => {
     const response = new Uint8Array([
       1,

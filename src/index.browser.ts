@@ -43,6 +43,7 @@ export {
   ErrKvOperationNotAllowed,
   ErrCodeKvIsolationConflict,
   ErrCodeKvBackendError,
+  ErrCodeKvBusy,
   ErrCodeKvInvalidSubscription,
   ErrCodeKvSubscriptionLimit,
   ErrQueueNotFound,
@@ -51,6 +52,9 @@ export {
   ErrQueueFull,
   ErrQueueInvalidDelay,
   ErrCodeQueueFull,
+  ErrCodeStreamBusy,
+  ErrCodeNoticeBusy,
+  ErrCodeLeaseQueueFull,
   ErrCodeQueueInvalidSubscription,
   ErrCodeQueueSubscriptionLimit,
   ErrCodeRpcTimeout,
@@ -213,4 +217,5 @@ export type {
   ScheduleSubscription,
   ScheduleStatus,
   ScheduleListPage,
+  ScheduleCursorPage,
 } from "./domains/schedule/types";

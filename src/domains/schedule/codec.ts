@@ -4,6 +4,7 @@
  */
 
 import {
+  createBufferWriter,
   createBufferReader,
   getRouteEncoding,
   utf8Encoder,
@@ -17,11 +18,66 @@ import {
   ScheduleCreateResponse,
   ScheduleCancelResponse,
   ScheduleListPage,
+  ScheduleCursorPage,
   ScheduleSubscribeResponse,
   ScheduleUnsubscribeResponse,
 } from "./types";
 
 export const ScheduleCodec = {
+  encodeCreateBatch(entries: readonly ScheduleEntry[]): Uint8Array {
+    if (entries.length > 0xffffffff) throw new Error("schedule batch has too many entries");
+    const writer = createBufferWriter(128);
+    writer.writeU32BE(entries.length);
+    for (const entry of entries) {
+      writer.writeBytes(
+        this.encodeCreate(entry.route, entry.cron, entry.deliveryMode, entry.payload),
+      );
+    }
+    return writer.getBuffer();
+  },
+
+  encodeListV2(cursor?: string, limit?: bigint): Uint8Array {
+    if (limit !== undefined && (limit < 0n || limit > 1000n)) {
+      throw new Error("schedule LIST_V2 limit must be between 0 and 1000");
+    }
+    const writer = createBufferWriter(64);
+    writer.writeU8(cursor === undefined ? 0 : 1);
+    if (cursor !== undefined) writer.writeString(cursor);
+    writer.writeOptionalU64(limit);
+    return writer.getBuffer();
+  },
+
+  decodeListV2(data: Uint8Array): ScheduleCursorPage {
+    const reader = createBufferReader(data);
+    if (reader.readU8() !== 1) throw new Error("LIST_V2 response has an invalid version");
+    const hasMoreByte = reader.readU8();
+    if (hasMoreByte !== 0 && hasMoreByte !== 1) {
+      throw new Error("LIST_V2 response has an invalid has_more flag");
+    }
+    const cursorFlag = reader.readU8();
+    if (cursorFlag !== 0 && cursorFlag !== 1) {
+      throw new Error("LIST_V2 response has an invalid cursor flag");
+    }
+    const continuation = cursorFlag === 1 ? reader.readString() : undefined;
+    if (hasMoreByte === 1 && continuation === undefined) {
+      throw new Error("LIST_V2 response is missing continuation");
+    }
+    const entries: ScheduleEntry[] = [];
+    while (true) {
+      const marker = reader.readU8();
+      if (marker === 0) break;
+      if (marker !== 1) throw new Error("LIST_V2 response has an invalid entry marker");
+      entries.push({
+        route: reader.readString(),
+        cron: reader.readString(),
+        deliveryMode: decodeDeliveryMode(reader.readU8()),
+        payload: reader.readBytes(reader.readU32BE()),
+      });
+    }
+    if (!reader.isEOF()) throw new Error("LIST_V2 response has trailing bytes");
+    return { entries, hasMore: hasMoreByte === 1, continuation };
+  },
+
   /**
    * Encode CREATE request
    * Payload: [route: string][cron: string][delivery_mode: u8][payload: bytes]

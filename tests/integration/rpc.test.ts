@@ -20,6 +20,26 @@ async function collectResponses(
 
 describe("RPC integration", () => {
   runWithBothTransports(({ transport, authMode }) => {
+    it("should return a typed terminal error when a worker handler throws", async () => {
+      const worker = new TestFixture(transport, authMode);
+      const caller = new TestFixture(transport, authMode);
+      await worker.connectOrFail();
+      await caller.connectOrFail();
+      const route = worker.uniqueRoute("rpc");
+      const sub = await worker.client().rpc.registerWorker(route, async () => {
+        throw new Error("worker failed");
+      });
+      try {
+        await expect(
+          collectResponses(
+            caller.client().rpc.call(route, { body: b("request"), timeoutMs: 5000 }),
+          ),
+        ).rejects.toMatchObject({ domainCode: 6010 });
+      } finally {
+        await sub.unsubscribe();
+      }
+    });
+
     it("should route request to a registered worker", async () => {
       const worker = new TestFixture(transport, authMode);
       const caller = new TestFixture(transport, authMode);

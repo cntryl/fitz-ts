@@ -204,6 +204,7 @@ describe("public surface", () => {
       "ErrKvOperationNotAllowed",
       "ErrCodeKvIsolationConflict",
       "ErrCodeKvBackendError",
+      "ErrCodeKvBusy",
       "ErrCodeKvInvalidSubscription",
       "ErrCodeKvSubscriptionLimit",
       "ErrQueueNotFound",
@@ -212,6 +213,9 @@ describe("public surface", () => {
       "ErrQueueFull",
       "ErrQueueInvalidDelay",
       "ErrCodeQueueFull",
+      "ErrCodeStreamBusy",
+      "ErrCodeNoticeBusy",
+      "ErrCodeLeaseQueueFull",
       "ErrCodeQueueInvalidSubscription",
       "ErrCodeQueueSubscriptionLimit",
       "ErrCodeRpcTimeout",
@@ -355,6 +359,7 @@ describe("public surface", () => {
       "ScheduleSubscription",
       "ScheduleStatus",
       "ScheduleListPage",
+      "ScheduleCursorPage",
     ]);
   });
 
