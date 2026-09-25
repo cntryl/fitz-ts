@@ -123,6 +123,9 @@ export function createNoticeClient(connection: NoticeConnectionPort): NoticeClie
   let initialized = false;
   let nextHandlerId = 1;
   const registerSingleFlight = createKeyedSingleFlight<string, bigint>();
+  let restoreInFlight: Promise<void> | undefined;
+  let pendingBulkUnsubscribes = 0;
+  let skippedRestore = false;
 
   let mutationTail: Promise<void> = Promise.resolve();
   const serialize = async <T>(operation: () => Promise<T>): Promise<T> => {
@@ -139,7 +142,19 @@ export function createNoticeClient(connection: NoticeConnectionPort): NoticeClie
     }
   };
 
-  connection.onReconnect(async () => {
+  connection.onReconnect(() => {
+    if (pendingBulkUnsubscribes > 0) {
+      skippedRestore = true;
+      return;
+    }
+    const restoring = restoreSubscriptions();
+    restoreInFlight = restoring;
+    return restoring.finally(() => {
+      if (restoreInFlight === restoring) restoreInFlight = undefined;
+    });
+  });
+
+  const restoreSubscriptions = async (): Promise<void> => {
     if (subscriptionsByPattern.size === 0) {
       return;
     }
@@ -167,7 +182,7 @@ export function createNoticeClient(connection: NoticeConnectionPort): NoticeClie
       patternsBySubId.set(state.subId, pattern);
       pendingNotifications.flush(state.subId);
     }
-  });
+  };
 
   const publish = async (
     route: string,
@@ -215,33 +230,56 @@ export function createNoticeClient(connection: NoticeConnectionPort): NoticeClie
       }
     });
 
-  const unsubscribeAll = async (options: { signal?: AbortSignal } = {}): Promise<void> =>
-    serialize(async () => {
-      const parsed = parseStandardResponse(
-        await requestFrame(
-          MSG_NOTICE_UNSUBSCRIBE_ALL,
-          NoticeCodec.encodeUnsubscribeAll(),
-          options.signal,
-        ),
-      );
-      if (!parsed.success) {
-        throw new NoticeError(
-          `UNSUBSCRIBE_ALL failed: ${parsed.error ?? "unknown error"}`,
-          "UNSUBSCRIBE_ALL_FAILED",
-          parsed.errorCode,
+  const unsubscribeAll = (options: { signal?: AbortSignal } = {}): Promise<void> => {
+    pendingBulkUnsubscribes += 1;
+    return serialize(async () => {
+      try {
+        await restoreInFlight?.catch(() => undefined);
+        const parsed = parseStandardResponse(
+          await requestFrame(
+            MSG_NOTICE_UNSUBSCRIBE_ALL,
+            NoticeCodec.encodeUnsubscribeAll(),
+            options.signal,
+          ),
         );
+        if (!parsed.success) {
+          throw new NoticeError(
+            `UNSUBSCRIBE_ALL failed: ${parsed.error ?? "unknown error"}`,
+            "UNSUBSCRIBE_ALL_FAILED",
+            parsed.errorCode,
+          );
+        }
+        if (parsed.data.length !== 0) {
+          throw new NoticeError("UNSUBSCRIBE_ALL response has trailing bytes", "INVALID_RESPONSE");
+        }
+        const completions = [...subscriptionsByPattern.values()].flatMap((state) =>
+          [...state.handlers.values()].map((registration) => () => registration.complete()),
+        );
+        for (const state of subscriptionsByPattern.values())
+          pendingNotifications.remove(state.subId);
+        subscriptionsByPattern.clear();
+        patternsBySubId.clear();
+        for (const complete of completions) complete();
+      } catch (error) {
+        if (skippedRestore) {
+          const failure = new NoticeError(
+            "UNSUBSCRIBE_ALL failed while reconnect restoration was deferred",
+            "UNSUBSCRIBE_ALL_RESTORE_FAILED",
+          );
+          for (const state of subscriptionsByPattern.values()) {
+            for (const registration of state.handlers.values()) registration.fail(failure);
+            pendingNotifications.remove(state.subId);
+          }
+          subscriptionsByPattern.clear();
+          patternsBySubId.clear();
+        }
+        throw error;
+      } finally {
+        skippedRestore = false;
+        pendingBulkUnsubscribes -= 1;
       }
-      if (parsed.data.length !== 0) {
-        throw new NoticeError("UNSUBSCRIBE_ALL response has trailing bytes", "INVALID_RESPONSE");
-      }
-      const completions = [...subscriptionsByPattern.values()].flatMap((state) =>
-        [...state.handlers.values()].map((registration) => () => registration.complete()),
-      );
-      for (const state of subscriptionsByPattern.values()) pendingNotifications.remove(state.subId);
-      subscriptionsByPattern.clear();
-      patternsBySubId.clear();
-      for (const complete of completions) complete();
     });
+  };
 
   const notifications = (
     pattern: string,

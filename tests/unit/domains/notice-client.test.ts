@@ -8,6 +8,7 @@ import {
   MSG_NOTICE_PUBLISH,
   MSG_NOTICE_SUBSCRIBE,
   MSG_NOTICE_UNSUBSCRIBE,
+  MSG_NOTICE_UNSUBSCRIBE_ALL,
 } from "../../../src/frame/types";
 
 function subscribeResponse(subId: bigint): Uint8Array {
@@ -273,6 +274,35 @@ describe("NoticeClient", () => {
 
     connection.respond(MSG_NOTICE_UNSUBSCRIBE, plainSuccessResponse());
     await subscription.unsubscribe();
+  });
+
+  it("does not restore a subscription after bulk unsubscribe wins a reconnect race", async () => {
+    // Arrange
+    const connection = new FakeNoticeConnection();
+    connection.respond(MSG_NOTICE_SUBSCRIBE, subscribeResponse(1n));
+    const client = createNoticeClient(connection as unknown as Connection);
+    const previous = await client.subscribe("notice://realm/area/**", async () => undefined);
+    connection.respond(MSG_NOTICE_SUBSCRIBE, subscribeResponse(2n));
+    const releaseRestore = connection.gate(MSG_NOTICE_SUBSCRIBE);
+    const restoring = connection.reconnect();
+    await Promise.resolve();
+    connection.respond(MSG_NOTICE_UNSUBSCRIBE_ALL, plainSuccessResponse());
+
+    // Act
+    const clearing = client.unsubscribeAll();
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    releaseRestore();
+    await Promise.all([restoring, clearing]);
+    connection.respond(MSG_NOTICE_SUBSCRIBE, subscribeResponse(3n));
+    const replacement = await client.subscribe("notice://realm/area/**", async () => undefined);
+
+    // Assert
+    expect(
+      connection.requests.filter((request) => request.messageType === MSG_NOTICE_SUBSCRIBE),
+    ).toHaveLength(3);
+    await previous.unsubscribe();
+    connection.respond(MSG_NOTICE_UNSUBSCRIBE, plainSuccessResponse());
+    await replacement.unsubscribe();
   });
 
   it("buffers a notification that arrives before the subscribing call resolves, and flushes it once it does", async () => {
