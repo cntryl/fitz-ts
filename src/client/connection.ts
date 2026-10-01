@@ -20,7 +20,13 @@ import {
 import { createScope, Scope } from "../core/lifecycle";
 import { utf8Encoder } from "../core/buffer";
 import { createFrameParser, FrameCodec } from "../frame/codec";
-import { MSG_CONNECT, MSG_CORRELATED, MSG_SERVER_HELLO } from "../frame/types";
+import {
+  CAP_SESSION_METADATA,
+  MSG_CONNECT,
+  MSG_CORRELATED,
+  MSG_SERVER_HELLO,
+  MSG_SESSION_METADATA,
+} from "../frame/types";
 import { decodeCorrelation, decodeServerHello } from "../frame/codec";
 import {
   AuthenticationError,
@@ -56,6 +62,7 @@ import { createReconnectScheduler } from "./internal/reconnect";
 import type { PushFrameClassifier, PushFrameClassifierRegistration } from "./multiplexer";
 
 export interface ConnectionOptions {
+  serviceName?: string;
   timeout?: number;
   maxInFlightRequests?: number;
   maxRequestQueueSize?: number;
@@ -80,6 +87,29 @@ type TransportFactory = () => Transport;
 type ReconnectListener = () => void | Promise<void>;
 type DisconnectListener = () => void;
 
+function encodeServiceName(serviceName: string): Uint8Array {
+  if (typeof serviceName !== "string" || serviceName.trim().length === 0) {
+    throw new TypeError("serviceName must not be empty");
+  }
+  const bytes = utf8Encoder.encode(serviceName);
+  if (bytes.length > 128) {
+    throw new RangeError("serviceName must be at most 128 UTF-8 bytes");
+  }
+  for (const character of serviceName) {
+    const codePoint = character.codePointAt(0)!;
+    if (codePoint >= 0xd800 && codePoint <= 0xdfff) {
+      throw new TypeError("serviceName must contain valid Unicode characters");
+    }
+    if (/\p{Cc}/u.test(character)) {
+      throw new TypeError("serviceName must not contain control characters");
+    }
+  }
+  const payload = new Uint8Array(4 + bytes.length);
+  new DataView(payload.buffer).setUint32(0, bytes.length, false);
+  payload.set(bytes, 4);
+  return payload;
+}
+
 export type Connection = ReturnType<typeof createConnection>;
 
 export function createConnection(
@@ -103,6 +133,9 @@ export function createConnection(
   const maxInFlightRequests = options.maxInFlightRequests ?? 256;
   const maxRequestQueueSize = options.maxRequestQueueSize ?? 1024;
   const observability = options.observability;
+  const sessionMetadata =
+    options.serviceName === undefined ? undefined : encodeServiceName(options.serviceName);
+  let serviceMetadataSent = false;
   const closeReceiveBudgetMs = 200;
 
   let transport: Transport | null = null;
@@ -709,6 +742,7 @@ export function createConnection(
     requestGate = createRequestGate(maxInFlightRequests, maxRequestQueueSize);
     const activeTransport = transportFactory();
     transport = activeTransport;
+    serviceMetadataSent = false;
     stopHeartbeat();
     setState(isReconnect ? ConnectionState.Reconnecting : ConnectionState.Connecting);
     emitLifecycleEvent(isReconnect ? "reconnect_start" : "connect_start");
@@ -847,6 +881,17 @@ export function createConnection(
             const hello = decodeServerHello(frame.payload);
             if (hello) {
               multiplexer.setCapabilities(hello.protocolVersion, hello.capabilities);
+              if (
+                sessionMetadata !== undefined &&
+                (hello.capabilities & CAP_SESSION_METADATA) !== 0 &&
+                !serviceMetadataSent
+              ) {
+                await sendSerialized(
+                  activeTransport,
+                  FrameCodec.encodeFrame(MSG_SESSION_METADATA, sessionMetadata),
+                );
+                serviceMetadataSent = true;
+              }
             }
             continue;
           }

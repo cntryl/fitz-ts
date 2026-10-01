@@ -17,7 +17,13 @@ import {
 } from "../../../src/core/errors";
 import { createNoticeClient } from "../../../src/domains/notice/client";
 import { FrameCodec } from "../../../src/frame/codec";
-import { MSG_CONNECT, MSG_NOTICE_NOTIFY, MSG_NOTICE_SUBSCRIBE } from "../../../src/frame/types";
+import {
+  MSG_CONNECT,
+  MSG_NOTICE_NOTIFY,
+  MSG_NOTICE_SUBSCRIBE,
+  MSG_SERVER_HELLO,
+  MSG_SESSION_METADATA,
+} from "../../../src/frame/types";
 import type { Transport } from "../../../src/transport/types";
 
 class FakeTransport implements Transport {
@@ -277,6 +283,87 @@ describe("Connection", () => {
 
     expect(connection.isConnected()).toBe(true);
     expect(transport.sent).toHaveLength(1);
+
+    await connection.close();
+  });
+
+  it("reports the configured service name after the broker advertises metadata support", async () => {
+    const hello = FrameCodec.encodeFrame(MSG_SERVER_HELLO, new Uint8Array([0, 1, 0, 0, 0, 2]));
+    const transport = new FakeTransport([hello]);
+    const connection = createConnection(
+      () => transport,
+      async () => "jwt-token",
+      {
+        authSettleDelayMs: 10,
+        serviceName: "orders-worker",
+      },
+    );
+
+    await connection.connect();
+
+    const metadata = FrameCodec.decodeFrame(transport.sent[1]!);
+    expect(metadata.messageType).toBe(MSG_SESSION_METADATA);
+    expect(metadata.payload).toEqual(
+      new Uint8Array([0, 0, 0, 13, ...new TextEncoder().encode("orders-worker")]),
+    );
+
+    await connection.close();
+  });
+
+  it("accepts the 128-byte UTF-8 service-name boundary", async () => {
+    const transport = new FakeTransport([
+      FrameCodec.encodeFrame(MSG_SERVER_HELLO, new Uint8Array([0, 1, 0, 0, 0, 2])),
+    ]);
+    const connection = createConnection(
+      () => transport,
+      async () => "",
+      {
+        authSettleDelayMs: 10,
+        serviceName: "é".repeat(64),
+      },
+    );
+    await connection.connect();
+    const metadata = FrameCodec.decodeFrame(transport.sent[1]!);
+    expect(metadata.payload).toHaveLength(132);
+    await connection.close();
+  });
+
+  it("rejects oversized and invalid Unicode service names", () => {
+    expect(() =>
+      createConnection(
+        () => new FakeTransport(),
+        async () => "",
+        {
+          serviceName: "é".repeat(65),
+        },
+      ),
+    ).toThrow(/128 UTF-8 bytes/);
+    expect(() =>
+      createConnection(
+        () => new FakeTransport(),
+        async () => "",
+        {
+          serviceName: "bad\ud800name",
+        },
+      ),
+    ).toThrow(/valid Unicode/);
+  });
+
+  it("does not report the service name to a legacy broker", async () => {
+    const transport = new FakeTransport();
+    const connection = createConnection(
+      () => transport,
+      async () => "jwt-token",
+      {
+        authSettleDelayMs: 0,
+        serviceName: "orders-worker",
+      },
+    );
+
+    await connection.connect();
+
+    expect(transport.sent).toHaveLength(1);
+    expect(FrameCodec.decodeFrame(transport.sent[0]!).messageType).toBe(MSG_CONNECT);
 
     await connection.close();
   });

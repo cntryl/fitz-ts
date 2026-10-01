@@ -21,14 +21,16 @@ export interface KvBeginOptions {
 
 /** Options for scanning keys inside a transaction. */
 export interface KvScanOptions {
-  /** Inclusive binary lower bound. Omit to start at the first key. */
+  /** Inclusive directional bound: lower in forward scans, upper in reverse scans. */
   startKey?: Uint8Array;
-  /** Exclusive binary upper bound; it must compare greater than `startKey`. */
+  /** Exclusive directional bound: upper in forward scans, lower in reverse scans. */
   endKey?: Uint8Array;
-  /** Maximum entries returned in this page. */
+  /** Maximum entries returned in this page; zero is accepted as the broker's default limit. */
   limit?: number;
   /** Reverses key order and range traversal when `true`. */
   reverse?: boolean;
+  /** Starts strictly after `startKey` in the selected direction; requires the broker capability. */
+  startExclusive?: boolean;
   /** Cancels this scan request without closing the transaction. */
   signal?: AbortSignal;
 }

@@ -72,11 +72,10 @@ const packMetadata = JSON.parse(
 if (packMetadata.entryCount > 20) {
   throw new Error(`tarball contains ${packMetadata.entryCount} files; maximum is 20`);
 }
-// Public JSDoc and the Lease LIST/observer contract are intentionally emitted
-// into all four ESM/CJS Node/browser declaration variants. Keep narrow
-// headroom for that public surface while still rejecting build debris.
-if (packMetadata.unpackedSize > 2_900_000) {
-  throw new Error(`tarball unpacks to ${packMetadata.unpackedSize} bytes; maximum is 2900000`);
+// Public declarations and source maps are emitted into all Node/browser
+// variants. Keep bounded headroom for API growth while rejecting build debris.
+if (packMetadata.unpackedSize > 2_950_000) {
+  throw new Error(`tarball unpacks to ${packMetadata.unpackedSize} bytes; maximum is 2950000`);
 }
 
 run("npm", ["init", "-y"], { cwd: smokeDir, stdio: "ignore" });

@@ -240,14 +240,17 @@ describe("KV integration", () => {
       ).rejects.toBeTruthy();
     });
 
-    it("should reject inverted bounds given an invalid range when scan is called", async () => {
+    it("should return an empty page given inverted bounds when scan is called", async () => {
       const f = new TestFixture(transport, authMode);
       await f.connectOrFail();
       const route = f.uniqueRoute("kv");
 
       const tx = await f.client().kv.begin(route, { durability: "Sync" });
 
-      await expect(tx.scan({ startKey: b("z"), endKey: b("a") })).rejects.toBeTruthy();
+      await expect(tx.scan({ startKey: b("z"), endKey: b("a") })).resolves.toMatchObject({
+        entries: [],
+        hasMore: false,
+      });
       await tx.rollback();
     });
 

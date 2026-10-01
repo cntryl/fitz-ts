@@ -262,6 +262,24 @@ describe("KvCodec", () => {
       // Assert
       expect(encoded.length).toBeGreaterThan(0);
     });
+
+    it("should_encode_explicit_zero_scan_limit", () => {
+      // Arrange/Act
+      const encoded = KvCodec.encodeScan(100n, "kv://test/app/items", { limit: 0 });
+
+      // Assert
+      expect(Array.from(encoded.slice(-6))).toEqual([1, 0, 0, 0, 0, 0]);
+    });
+
+    it("should_reject_scan_limit_outside_u32_range", () => {
+      // Arrange/Act/Assert
+      expect(() => KvCodec.encodeScan(100n, "kv://test/app/items", { limit: -1 })).toThrow(
+        "SCAN limit must be an integer",
+      );
+      expect(() =>
+        KvCodec.encodeScan(100n, "kv://test/app/items", { limit: 0x1_0000_0000 }),
+      ).toThrow("SCAN limit must be an integer");
+    });
   });
 
   describe("SCAN decoding", () => {
@@ -328,6 +346,41 @@ describe("KvCodec", () => {
       // Assert
       expect(decoded.entries).toHaveLength(1);
       expect(decoded.hasMore).toBe(true);
+    });
+
+    it("should_reject_scan_response_without_has_more", () => {
+      // Arrange
+      const writer = createBufferWriter(8);
+      writer.writeU8(0);
+      writer.writeU32BE(0);
+
+      // Act/Assert
+      expect(() => KvCodec.decodeScanResponse(writer.getBuffer())).toThrow(
+        "Buffer overflow: cannot read U8",
+      );
+    });
+
+    it("should_reject_scan_response_with_invalid_has_more", () => {
+      // Arrange
+      const writer = createBufferWriter(8);
+      writer.writeU8(0);
+      writer.writeU32BE(0);
+      writer.writeU8(2);
+
+      // Act/Assert
+      expect(() => KvCodec.decodeScanResponse(writer.getBuffer())).toThrow("invalid has_more");
+    });
+
+    it("should_reject_scan_response_with_trailing_bytes", () => {
+      // Arrange
+      const writer = createBufferWriter(8);
+      writer.writeU8(0);
+      writer.writeU32BE(0);
+      writer.writeU8(0);
+      writer.writeU8(0xff);
+
+      // Act/Assert
+      expect(() => KvCodec.decodeScanResponse(writer.getBuffer())).toThrow("trailing bytes");
     });
   });
 

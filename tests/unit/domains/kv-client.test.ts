@@ -10,6 +10,8 @@ import {
   MSG_KV_PUT,
   MSG_KV_ROLLBACK,
   MSG_KV_SCAN,
+  CAP_KV_SCAN_EXCLUSIVE,
+  CAP_SESSION_METADATA,
   MSG_KV_SUBSCRIBE,
   MSG_KV_UNSUBSCRIBE,
 } from "../../../src/frame/types";
@@ -17,11 +19,16 @@ import { createKvClient } from "../../../src/domains/kv/client";
 
 class FakeKvConnection {
   public lastRequest: { messageType: number; payload: Uint8Array } | null = null;
+  public capabilities = 0;
   public lastSignal: AbortSignal | undefined;
   public responses = new Map<number, Uint8Array[]>();
   private disconnectListeners = new Set<() => void>();
   private reconnectListeners = new Set<() => void | Promise<void>>();
   private notificationHandlers = new Map<number, (payload: Uint8Array) => void>();
+
+  getServerCapabilities() {
+    return { protocolVersion: 1, capabilities: this.capabilities };
+  }
 
   async request(
     messageType: number,
@@ -452,6 +459,93 @@ describe("KvClient", () => {
       entries: [{ key: new Uint8Array([2]), value: new Uint8Array() }],
       hasMore: true,
     });
+  });
+
+  it("accepts reverse scan bounds in descending order", async () => {
+    const connection = new FakeKvConnection();
+    const client = createKvClient(connection);
+    const tx = await client.begin("kv://realm/area/resource", { durability: "Sync" });
+    connection.respond(MSG_KV_SCAN, encodeScanResponse([], false));
+
+    await expect(
+      tx.scan({ startKey: new Uint8Array([0x7a]), endKey: new Uint8Array([0x61]), reverse: true }),
+    ).resolves.toEqual({ entries: [], hasMore: false });
+    expect(connection.lastRequest?.messageType).toBe(MSG_KV_SCAN);
+  });
+
+  it("preserves an inverted forward scan as an empty server result", async () => {
+    const connection = new FakeKvConnection();
+    const client = createKvClient(connection);
+    const tx = await client.begin("kv://realm/area/resource", { durability: "Sync" });
+    connection.respond(MSG_KV_SCAN, encodeScanResponse([], false));
+
+    await expect(
+      tx.scan({ startKey: new Uint8Array([0x7a]), endKey: new Uint8Array([0x61]) }),
+    ).resolves.toEqual({ entries: [], hasMore: false });
+  });
+
+  it("refuses exclusive scan resume unless the broker advertises support", async () => {
+    const connection = new FakeKvConnection();
+    connection.capabilities = CAP_SESSION_METADATA;
+    const client = createKvClient(connection);
+    const tx = await client.begin("kv://realm/area/resource", { durability: "Sync" });
+
+    await expect(
+      tx.scan({ startKey: new Uint8Array([0x10]), startExclusive: true }),
+    ).rejects.toMatchObject({
+      code: "KV_UNSUPPORTED_CAPABILITY",
+    });
+    expect(connection.lastRequest?.messageType).toBe(MSG_KV_BEGIN);
+  });
+
+  it("encodes exclusive scan resume only after the broker advertises support", async () => {
+    const connection = new FakeKvConnection();
+    connection.capabilities = CAP_KV_SCAN_EXCLUSIVE;
+    const client = createKvClient(connection);
+    const tx = await client.begin("kv://realm/area/resource", { durability: "Sync" });
+    connection.respond(MSG_KV_SCAN, encodeScanResponse([], false));
+
+    await tx.scan({ startKey: new Uint8Array([0x10]), startExclusive: true });
+
+    expect(connection.lastRequest?.messageType).toBe(MSG_KV_SCAN);
+    expect(connection.lastRequest?.payload.at(-1)).toBe(1);
+  });
+
+  it("paginates forward with the legacy immediate-successor fallback", async () => {
+    const connection = new FakeKvConnection();
+    const client = createKvClient(connection);
+    const tx = await client.begin("kv://realm/area/resource", { durability: "Sync" });
+    connection.respond(MSG_KV_SCAN, encodeScanResponse([new Uint8Array([0x10])], true));
+    connection.respond(MSG_KV_SCAN, encodeScanResponse([new Uint8Array([0x20])], false));
+
+    const entries = [];
+    for await (const entry of tx.scanAll()) entries.push(entry);
+
+    expect(entries.map(({ key }) => Array.from(key))).toEqual([[0x10], [0x20]]);
+    const reader = createBufferReader(connection.lastRequest!.payload);
+    reader.readU64BE();
+    reader.readRoute();
+    expect(reader.readU8()).toBe(1);
+    expect(reader.readBytes(reader.readU32BE())).toEqual(new Uint8Array([0x10, 0]));
+    expect(reader.readU8()).toBe(0); // end key
+    expect(reader.readU8()).toBe(0); // no limit
+    expect(reader.readU8()).toBe(0); // forward
+    expect(reader.isEOF()).toBe(true); // legacy shape, no exclusive byte
+  });
+
+  it("paginates reverse scans with the advertised exclusive-resume capability", async () => {
+    const connection = new FakeKvConnection();
+    connection.capabilities = CAP_KV_SCAN_EXCLUSIVE;
+    const client = createKvClient(connection);
+    const tx = await client.begin("kv://realm/area/resource", { durability: "Sync" });
+    connection.respond(MSG_KV_SCAN, encodeScanResponse([new Uint8Array([0x7a])], true));
+    connection.respond(MSG_KV_SCAN, encodeScanResponse([new Uint8Array([0x79])], false));
+
+    const entries = [];
+    for await (const entry of tx.scanAll({ reverse: true })) entries.push(entry);
+
+    expect(entries.map(({ key }) => Array.from(key))).toEqual([[0x7a], [0x79]]);
+    expect(connection.lastRequest?.payload.at(-1)).toBe(1);
   });
 
   it("closes a transaction after a failed commit without rolling back during disposal", async () => {

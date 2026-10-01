@@ -169,7 +169,10 @@ export const KvCodec = {
       writer.writeU8(0);
     }
 
-    if (typeof options.limit === "number" && options.limit > 0) {
+    if (options.limit !== undefined) {
+      if (!Number.isInteger(options.limit) || options.limit < 0 || options.limit > 0xffff_ffff) {
+        throw new CodecError("SCAN limit must be an integer between 0 and 4294967295");
+      }
       writer.writeU8(1);
       writer.writeU32BE(options.limit);
     } else {
@@ -177,6 +180,9 @@ export const KvCodec = {
     }
 
     writer.writeU8(options.reverse ? 1 : 0);
+    if (options.startExclusive) {
+      writer.writeU8(1);
+    }
     return writer.getBufferView();
   },
 
@@ -185,7 +191,6 @@ export const KvCodec = {
     const status = reader.readU8();
     if (status !== 0)
       return { status, entries: [], hasMore: false, errorMessage: reader.readString() };
-    if (reader.isEOF()) return { status, entries: [], hasMore: false };
 
     const count = reader.readU32BE();
     const entries: Array<{ key: Uint8Array; value: Uint8Array }> = [];
@@ -197,9 +202,15 @@ export const KvCodec = {
       entries.push({ key, value });
     }
 
-    const hasMore = !reader.isEOF() && reader.readU8() === 1;
+    const hasMoreFlag = reader.readU8();
+    if (hasMoreFlag !== 0 && hasMoreFlag !== 1) {
+      throw new CodecError(`SCAN has invalid has_more flag: ${hasMoreFlag}`);
+    }
+    if (!reader.isEOF()) {
+      throw new CodecError("SCAN response contains trailing bytes");
+    }
 
-    return { status, entries, hasMore };
+    return { status, entries, hasMore: hasMoreFlag === 1 };
   },
 
   encodeSubscribe(pattern: string): Uint8Array {

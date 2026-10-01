@@ -12,6 +12,7 @@ import type {
   ReconnectRestoreRequestPort,
   RequestPort,
   RetryExecutionPort,
+  ServerCapabilitiesPort,
 } from "../base";
 import { KvCodec } from "./codec";
 import { createKvTransaction, KvTransaction } from "./transaction";
@@ -44,6 +45,7 @@ import {
 } from "../internal/subscription-dispatch";
 
 type KvConnectionPort = RequestPort &
+  ServerCapabilitiesPort &
   DisconnectListenerPort &
   RetryExecutionPort &
   ReconnectListenerPort &

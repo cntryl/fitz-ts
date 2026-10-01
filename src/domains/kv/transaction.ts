@@ -5,7 +5,12 @@
 import "../../core/async-dispose";
 
 import { createDomainClient } from "../base";
-import type { DisconnectListenerPort, RequestPort, RetryExecutionPort } from "../base";
+import type {
+  DisconnectListenerPort,
+  RequestPort,
+  RetryExecutionPort,
+  ServerCapabilitiesPort,
+} from "../base";
 import { KvCodec } from "./codec";
 import {
   KvGetResult,
@@ -16,6 +21,7 @@ import {
   KvStatusResponse,
 } from "./types";
 import {
+  CAP_KV_SCAN_EXCLUSIVE,
   MSG_KV_PUT,
   MSG_KV_INSERT,
   MSG_KV_GET,
@@ -76,6 +82,12 @@ export interface KvTransaction extends AsyncDisposable {
   }): Promise<void>;
   /** Reads one page of keys and values from this transaction's consistent view. */
   scan(options?: KvScanOptions): Promise<KvScanPage>;
+  /**
+   * Yields matching pairs, resuming pages in either direction when supported.
+   * Earlier pages may have been yielded before a later page fails; without exclusive-scan
+   * capability, reverse scans throw after yielding the first truncated page.
+   */
+  scanAll(options?: KvScanOptions): AsyncIterable<KvScanPage["entries"][number]>;
   /** Finalizes mutations using the durability selected by {@link KvBeginOptions}. */
   commit(options?: {
     /** Cancels waiting; post-send commit outcome can be ambiguous. */
@@ -88,9 +100,14 @@ export interface KvTransaction extends AsyncDisposable {
   }): Promise<void>;
   /** Returns whether the local transaction handle can still issue operations. */
   isOpen(): boolean;
+  /** Rolls back when used with `await using` or explicit async disposal. */
+  [Symbol.asyncDispose](): Promise<void>;
 }
 
-type KvTransactionConnectionPort = RequestPort & DisconnectListenerPort & RetryExecutionPort;
+type KvTransactionConnectionPort = RequestPort &
+  DisconnectListenerPort &
+  RetryExecutionPort &
+  ServerCapabilitiesPort;
 
 function compareKeys(left: Uint8Array, right: Uint8Array): number {
   const sharedLength = Math.min(left.length, right.length);
@@ -201,8 +218,14 @@ export function createKvTransaction(
 
   const scan = async (options: KvScanOptions = {}): Promise<KvScanPage> => {
     ensureOpen();
-    if (options.startKey !== undefined && options.endKey !== undefined) {
-      assertValidRange(options.startKey, options.endKey);
+    if (
+      options.startExclusive &&
+      ((connection.getServerCapabilities?.().capabilities ?? 0) & CAP_KV_SCAN_EXCLUSIVE) === 0
+    ) {
+      throw new KvError(
+        "Broker did not advertise exclusive KV SCAN resume support",
+        "UNSUPPORTED_CAPABILITY",
+      );
     }
     return runWithRetry(
       {
@@ -219,6 +242,42 @@ export function createKvTransaction(
         return { entries: decoded.entries, hasMore: decoded.hasMore };
       },
     );
+  };
+
+  const scanAll = async function* (
+    options: KvScanOptions = {},
+  ): AsyncGenerator<KvScanPage["entries"][number]> {
+    let nextOptions = { ...options };
+    while (true) {
+      const page = await scan(nextOptions);
+      if (page.hasMore && page.entries.length === 0) {
+        throw new KvError(
+          "SCAN returned an empty page with more entries available",
+          "SCAN_TRUNCATED",
+        );
+      }
+      for (const entry of page.entries) {
+        yield entry;
+      }
+      if (!page.hasMore) {
+        return;
+      }
+
+      const lastKey = page.entries[page.entries.length - 1]!.key;
+      const capabilities = connection.getServerCapabilities?.().capabilities ?? 0;
+      if ((capabilities & CAP_KV_SCAN_EXCLUSIVE) !== 0) {
+        nextOptions = { ...options, startKey: lastKey, startExclusive: true };
+      } else if (options.reverse) {
+        throw new KvError(
+          "Broker did not advertise exclusive KV SCAN resume support for reverse pagination",
+          "UNSUPPORTED_CAPABILITY",
+        );
+      } else {
+        const after = new Uint8Array(lastKey.length + 1);
+        after.set(lastKey);
+        nextOptions = { ...options, startKey: after, startExclusive: false };
+      }
+    }
   };
 
   const commit = async (options: { signal?: AbortSignal } = {}): Promise<void> => {
@@ -259,6 +318,7 @@ export function createKvTransaction(
     delete: deleteItem,
     deleteRange,
     scan,
+    scanAll,
     commit,
     rollback,
     isOpen,
