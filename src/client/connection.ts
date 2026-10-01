@@ -88,14 +88,18 @@ type ReconnectListener = () => void | Promise<void>;
 type DisconnectListener = () => void;
 
 function encodeServiceName(serviceName: string): Uint8Array {
-  if (typeof serviceName !== "string" || serviceName.trim().length === 0) {
+  if (typeof serviceName !== "string") {
+    throw new TypeError("serviceName must be a string");
+  }
+  const normalizedServiceName = serviceName.trim();
+  if (normalizedServiceName.length === 0) {
     throw new TypeError("serviceName must not be empty");
   }
-  const bytes = utf8Encoder.encode(serviceName);
+  const bytes = utf8Encoder.encode(normalizedServiceName);
   if (bytes.length > 128) {
     throw new RangeError("serviceName must be at most 128 UTF-8 bytes");
   }
-  for (const character of serviceName) {
+  for (const character of normalizedServiceName) {
     const codePoint = character.codePointAt(0)!;
     if (codePoint >= 0xd800 && codePoint <= 0xdfff) {
       throw new TypeError("serviceName must contain valid Unicode characters");

@@ -328,6 +328,26 @@ describe("Connection", () => {
     await connection.close();
   });
 
+  it("trims the service name before checking the UTF-8 limit and encoding it", async () => {
+    const serviceName = "é".repeat(64);
+    const transport = new FakeTransport([
+      FrameCodec.encodeFrame(MSG_SERVER_HELLO, new Uint8Array([0, 1, 0, 0, 0, 2])),
+    ]);
+    const connection = createConnection(
+      () => transport,
+      async () => "",
+      { authSettleDelayMs: 10, serviceName: ` ${serviceName} ` },
+    );
+
+    await connection.connect();
+
+    const metadata = FrameCodec.decodeFrame(transport.sent[1]!);
+    expect(metadata.payload).toEqual(
+      new Uint8Array([0, 0, 0, 128, ...new TextEncoder().encode(serviceName)]),
+    );
+    await connection.close();
+  });
+
   it("rejects oversized and invalid Unicode service names", () => {
     expect(() =>
       createConnection(

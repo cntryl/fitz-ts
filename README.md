@@ -36,7 +36,8 @@ await client.close();
 ```
 
 `serviceName` is optional. New brokers record it on the active session after
-advertising the `SESSION_METADATA` capability; older brokers receive no metadata frame.
+advertising the `SESSION_METADATA` capability; surrounding whitespace is trimmed before it is
+reported, and older brokers receive no metadata frame.
 
 ## Startup Orchestration
 
