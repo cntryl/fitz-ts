@@ -11,6 +11,7 @@ import {
   MSG_KV_ROLLBACK,
   MSG_KV_SCAN,
   CAP_KV_SCAN_EXCLUSIVE,
+  CAP_SESSION_METADATA,
   MSG_KV_SUBSCRIBE,
   MSG_KV_UNSUBSCRIBE,
 } from "../../../src/frame/types";
@@ -485,6 +486,7 @@ describe("KvClient", () => {
 
   it("refuses exclusive scan resume unless the broker advertises support", async () => {
     const connection = new FakeKvConnection();
+    connection.capabilities = CAP_SESSION_METADATA;
     const client = createKvClient(connection);
     const tx = await client.begin("kv://realm/area/resource", { durability: "Sync" });
 

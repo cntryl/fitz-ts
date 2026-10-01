@@ -20,11 +20,15 @@ export const MSG_CORRELATE = 2;
 export const MSG_CORRELATED = 3;
 /** Unsolicited capability advertisement, sent once per session on CONNECT success. */
 export const MSG_SERVER_HELLO = 4;
+/** Reports the friendly name for the client session after capability negotiation. */
+export const MSG_SESSION_METADATA = 5;
 
 /** Broker accepts CORRELATE and echoes CORRELATED. */
 export const CAP_CORRELATION = 1 << 0;
+/** Broker accepts a client-reported service name in SESSION_METADATA. */
+export const CAP_SESSION_METADATA = 1 << 1;
 /** Broker accepts the trailing start_exclusive byte on KV SCAN requests. */
-export const CAP_KV_SCAN_EXCLUSIVE = 1 << 1;
+export const CAP_KV_SCAN_EXCLUSIVE = 1 << 2;
 
 // KV Domain (100-199)
 export const MSG_KV_BEGIN = 100;

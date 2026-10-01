@@ -18,6 +18,7 @@ import { createClient } from "@cntryl/fitz";
 const client = createClient({
   url: "ws://localhost:4090/ws",
   tokenProvider: async () => "your-jwt-token",
+  serviceName: "orders-worker",
   asyncHandlers: {
     maxConcurrency: 32,
     queueCapacity: 1024,
@@ -33,6 +34,9 @@ await tx.commit();
 
 await client.close();
 ```
+
+`serviceName` is optional. New brokers record it on the active session after
+advertising the `SESSION_METADATA` capability; older brokers receive no metadata frame.
 
 ## Startup Orchestration
 

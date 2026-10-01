@@ -338,6 +338,7 @@ export function createClientWithTransport<TConfig extends ClientConfig>(
         authSettleDelayMs: resolvedConfig.authSettleDelayMs,
         maxInFlightRequests: resolvedConfig.maxInFlightRequests,
         maxRequestQueueSize: resolvedConfig.maxRequestQueueSize,
+        serviceName: resolvedConfig.serviceName,
         reconnect: resolvedConfig.reconnect,
         retry: resolvedConfig.retry,
         heartbeat: resolvedConfig.heartbeat,
