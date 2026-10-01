@@ -202,6 +202,9 @@ describe("core errors", () => {
     expect(
       isRetryable(new RpcError("worker missing", "WORKER_NOT_FOUND", ErrCodeRpcWorkerNotFound)),
     ).toBe(true);
+    expect(
+      isRetryable(new RpcError("outcome unknown", "BACKEND_ERROR", ErrCodeRpcBackendError)),
+    ).toBe(false);
   });
 
   it("should not retry fatal failures given an unauthorized error when a call is classified", () => {
