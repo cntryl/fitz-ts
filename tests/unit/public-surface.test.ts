@@ -50,23 +50,31 @@ function readSource(relativePath: string): string {
 function publicDocumentationGaps(source: string, fileName: string): string[] {
   const gaps: string[] = [];
   const lines = source.split("\n");
-  const exportBlock = [...source.matchAll(/^export\s*\{([^}]*)\}\s*;?$/gm)].at(-1)?.[1] ?? "";
-  if (!exportBlock.trim()) {
-    return [`${fileName}: public export block not found`];
-  }
-  const rootNames = new Set(
-    exportBlock
+  const exportBlocks = [...source.matchAll(/^export\s+(?:type\s*)?\{([^}]*)\}\s*;?$/gm)].map(
+    (match) => match[1]!,
+  );
+  const inlineExports = [
+    ...source.matchAll(
+      /^export\s+declare\s+(?:type|interface|class|enum|function|const)\s+([A-Za-z_$][\w$]*)/gm,
+    ),
+  ].map((match) => match[1]!);
+  const listedNames = exportBlocks.flatMap((block) =>
+    block
       .split(",")
       .map((entry) => entry.trim().replace(/^type\s+/, ""))
       .filter(Boolean)
       .map((entry) => entry.split(/\s+as\s+/)[0]!),
   );
+  if (listedNames.length === 0 && inlineExports.length === 0) {
+    return [`${fileName}: public export block not found`];
+  }
+  const rootNames = new Set([...listedNames, ...inlineExports]);
   const reachableNames = new Set(rootNames);
 
   const declarationBodies = new Map<string, string>();
   for (let index = 0; index < lines.length; index += 1) {
     const declaration = lines[index]!.match(
-      /^(?:declare )?(?:type|interface|class|enum|function|const)\s+([A-Za-z_$][\w$]*)/,
+      /^(?:export )?(?:declare )?(?:type|interface|class|enum|function|const)\s+([A-Za-z_$][\w$]*)/,
     );
     if (!declaration) continue;
 
@@ -125,7 +133,7 @@ function publicDocumentationGaps(source: string, fileName: string): string[] {
     }
 
     const declaration = trimmed.match(
-      /^(?:declare )?(?:type|interface|class|enum|function|const)\s+([A-Za-z_$][\w$]*)/,
+      /^(?:export )?(?:declare )?(?:type|interface|class|enum|function|const)\s+([A-Za-z_$][\w$]*)/,
     );
     const topLevelDeclaration = declaration ? reachableNames.has(declaration[1]!) : false;
     const indent = line.length - line.trimStart().length;
@@ -143,7 +151,7 @@ function publicDocumentationGaps(source: string, fileName: string): string[] {
     if (topLevelDeclaration && /\{\s*$/.test(trimmed)) {
       publicBlockDepth = 1;
       publicBlockIndent = indent;
-      publicBlockKind = /^enum\s|^declare enum\s/.test(trimmed) ? "enum" : "other";
+      publicBlockKind = /^(?:export )?(?:declare )?enum\s/.test(trimmed) ? "enum" : "other";
     } else if (publicBlockDepth > 0) {
       publicBlockDepth += (line.match(/\{/g) ?? []).length;
       publicBlockDepth -= (line.match(/\}/g) ?? []).length;

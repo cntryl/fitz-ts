@@ -86,64 +86,59 @@ function relativeFilePath(filePath, root) {
   return normalizePath(path.relative(root, filePath));
 }
 
-function groupNameFromFullName(fullName, filePath) {
-  if (typeof fullName !== "string" || fullName.length === 0) return "default";
-  const parts = fullName.split(" > ");
-  if (parts.length <= 1) return fullName;
-  const normalizedFile = normalizePath(filePath);
-  if (
-    normalizePath(parts[0]) === normalizedFile ||
-    normalizedFile.endsWith(normalizePath(parts[0]))
-  ) {
-    return parts.slice(1).join(" > ");
-  }
-  return parts.slice(1).join(" > ") || fullName;
+function groupNameFromAncestors(ancestorTitles) {
+  if (!Array.isArray(ancestorTitles) || ancestorTitles.length === 0) return "default";
+  return ancestorTitles.join(" > ");
 }
 
 export function flattenVitestBenchJson(json, options = {}) {
   const root = options.repoRoot ?? process.cwd();
   const runFilePath = options.runFilePath;
   const entries = [];
-  const files = Array.isArray(json?.files) ? json.files : [];
+  const files = Array.isArray(json?.testResults) ? json.testResults : [];
 
   for (const file of files) {
-    const rawFilePath = typeof file?.filepath === "string" ? file.filepath : "unknown";
+    const rawFilePath = typeof file?.name === "string" ? file.name : "unknown";
     const filePath = relativeFilePath(rawFilePath, root);
     const tier = options.tier ?? inferTier(filePath);
-    const groups = Array.isArray(file?.groups) ? file.groups : [];
+    const tests = Array.isArray(file?.assertionResults) ? file.assertionResults : [];
 
-    for (const group of groups) {
-      const groupName = groupNameFromFullName(group?.fullName, filePath);
-      const benchmarks = Array.isArray(group?.benchmarks) ? group.benchmarks : [];
+    for (const test of tests) {
+      const groupName = groupNameFromAncestors(test?.ancestorTitles);
+      const benchmarks = Array.isArray(test?.benchmarks) ? test.benchmarks : [];
 
       for (const benchmark of benchmarks) {
-        const name = String(benchmark?.name ?? "unknown");
-        const hz = toFiniteNumber(benchmark?.hz);
-        const period = toFiniteNumber(benchmark?.period);
-        const rme = toFiniteNumber(benchmark?.rme);
-        const sampleCount = toFiniteNumber(benchmark?.sampleCount);
-        const id = `${tier} / ${filePath} / ${groupName} / ${name}`;
+        const tasks = Array.isArray(benchmark?.tasks) ? benchmark.tasks : [];
 
-        entries.push({
-          id,
-          tier,
-          filepath: filePath,
-          group: groupName,
-          name,
-          hz,
-          period,
-          rme,
-          sampleCount,
-          runFilePath,
-          valid:
-            hz !== undefined &&
-            hz > 0 &&
-            period !== undefined &&
-            period > 0 &&
-            rme !== undefined &&
-            sampleCount !== undefined &&
-            sampleCount > 0,
-        });
+        for (const task of tasks) {
+          const name = String(task?.name ?? "unknown");
+          const hz = toFiniteNumber(task?.throughput?.mean);
+          const period = toFiniteNumber(task?.latency?.mean);
+          const rme = toFiniteNumber(task?.latency?.rme);
+          const sampleCount = toFiniteNumber(task?.latency?.samplesCount);
+          const id = `${tier} / ${filePath} / ${groupName} / ${name}`;
+
+          entries.push({
+            id,
+            tier,
+            filepath: filePath,
+            group: groupName,
+            name,
+            hz,
+            period,
+            rme,
+            sampleCount,
+            runFilePath,
+            valid:
+              hz !== undefined &&
+              hz > 0 &&
+              period !== undefined &&
+              period > 0 &&
+              rme !== undefined &&
+              sampleCount !== undefined &&
+              sampleCount > 0,
+          });
+        }
       }
     }
   }
@@ -729,10 +724,10 @@ async function runVitestBench(tier, outputJson) {
     "bench",
     "--run",
     "--project",
-    tier,
+    `${tier} (bench)`,
     "--reporter=default",
-    "--outputJson",
-    outputJson,
+    "--reporter=json",
+    `--outputFile.json=${outputJson}`,
     "--no-file-parallelism",
     "--maxWorkers=1",
     ...benchFiles,

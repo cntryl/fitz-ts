@@ -1,6 +1,6 @@
-import { bench } from "vitest";
+import { test, type BenchRunOptions } from "vitest";
 
-type BenchOptions = NonNullable<Parameters<typeof bench>[2]>;
+type BenchOptions = BenchRunOptions;
 type BenchFn = () => void | Promise<void>;
 type BatchedBenchFn = (index: number) => unknown;
 
@@ -38,16 +38,22 @@ export function consume(value: unknown): void {
   _consumeSink = value;
 }
 
+function registerBench(name: string, fn: BenchFn, options: BenchOptions): void {
+  test(name, async ({ bench }) => {
+    await bench(name, fn).run(options);
+  });
+}
+
 export function benchMicro(name: string, fn: BenchFn, options: BenchOptions = {}): void {
-  bench(name, fn, { ...microOptions, ...options });
+  registerBench(name, fn, { ...microOptions, ...options });
 }
 
 export function benchMacro(name: string, fn: BenchFn, options: BenchOptions = {}): void {
-  bench(name, fn, { ...macroOptions, ...options });
+  registerBench(name, fn, { ...macroOptions, ...options });
 }
 
 export function benchAsync(name: string, fn: BenchFn, options: BenchOptions = {}): void {
-  bench(name, fn, { ...asyncOptions, ...options });
+  registerBench(name, fn, { ...asyncOptions, ...options });
 }
 
 export function benchBatch(
