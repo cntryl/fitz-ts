@@ -80,32 +80,32 @@ export default defineConfig({
         extends: true,
         test: {
           name: "tier1",
-          include: ["benches/tier1/*.bench.ts"],
-          exclude: ["node_modules", "dist"],
+          include: [],
+          benchmark: { include: ["benches/tier1/*.bench.ts"] },
         },
       },
       {
         extends: true,
         test: {
           name: "tier2",
-          include: ["benches/tier2/*.bench.ts"],
-          exclude: ["node_modules", "dist"],
+          include: [],
+          benchmark: { include: ["benches/tier2/*.bench.ts"] },
         },
       },
       {
         extends: true,
         test: {
           name: "tier3",
-          include: ["benches/tier3/*.bench.ts"],
-          exclude: ["node_modules", "dist"],
+          include: [],
+          benchmark: { include: ["benches/tier3/*.bench.ts"] },
         },
       },
       {
         extends: true,
         test: {
           name: "tier4",
-          include: ["benches/tier4/*.bench.ts"],
-          exclude: ["node_modules", "dist"],
+          include: [],
+          benchmark: { include: ["benches/tier4/*.bench.ts"] },
         },
       },
     ],

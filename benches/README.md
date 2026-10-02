@@ -30,9 +30,11 @@ npm run bench
 
 All one-pass tier commands run serialized with `--no-file-parallelism --maxWorkers=1`.
 
+Benchmarks use the Vitest 5 API: each `bench*` helper in `_bench.ts` registers a `test()` that runs `bench(name, fn).run(options)`, and each tier is a `tierN (bench)` project selected by `test.benchmark.include` in `vite.config.ts`. Vitest may print a "Benchmark Warning" that module export getters were accessed too many times. The getters add overhead to absolute numbers, so compare runs from the same stack rather than against numbers recorded before the Vitest 5 upgrade.
+
 ## Stable Optimization Signal
 
-Use `bench:stable` for optimization decisions. It runs the selected tier set five times, writes Vitest JSON output under `artifacts/bench/<timestamp>/`, and generates:
+Use `bench:stable` for optimization decisions. It runs the selected tier set five times, writes Vitest JSON reporter output under `artifacts/bench/<timestamp>/`, and generates:
 
 - `summary.json`: machine-readable aggregate data.
 - `summary.md`: human-readable benchmark table and noise-gate failures.

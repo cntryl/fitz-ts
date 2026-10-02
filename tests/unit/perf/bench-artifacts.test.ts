@@ -88,19 +88,22 @@ describe("bench artifact utilities", () => {
   it("flattens Vitest benchmark JSON with a stable benchmark identity", () => {
     const flattened = flattenVitestBenchJson(
       {
-        files: [
+        testResults: [
           {
-            filepath: "/repo/benches/tier1/hotpath.bench.ts",
-            groups: [
+            name: "/repo/benches/tier1/hotpath.bench.ts",
+            assertionResults: [
               {
-                fullName: "benches/tier1/hotpath.bench.ts > fitz-ts hotpath benchmarks",
+                ancestorTitles: ["fitz-ts hotpath benchmarks"],
                 benchmarks: [
                   {
                     name: "frame encode",
-                    hz: 1_000,
-                    period: 0.001,
-                    rme: 1.2,
-                    sampleCount: 500,
+                    tasks: [
+                      {
+                        name: "frame encode",
+                        throughput: { mean: 1_000 },
+                        latency: { mean: 0.001, rme: 1.2, samplesCount: 500 },
+                      },
+                    ],
                   },
                 ],
               },
