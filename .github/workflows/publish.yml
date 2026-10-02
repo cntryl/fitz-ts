@@ -30,22 +30,26 @@ jobs:
           node-version: "24"
           registry-url: https://registry.npmjs.org
 
-      - name: Verify exact main SHA and successful CI
+      - name: Verify exact main SHA and successful checks
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_SHA: ${{ inputs.sha }}
         run: |
           test "$(git rev-parse HEAD)" = "$RELEASE_SHA"
           git merge-base --is-ancestor "$RELEASE_SHA" origin/main
-          run_id=$(gh run list --workflow CI --commit "$RELEASE_SHA" --status success --json databaseId --jq '.[0].databaseId')
-          test -n "$run_id"
-          echo "RUN_ID=$run_id" >> "$GITHUB_ENV"
+          ci_run_id=$(gh run list --workflow CI --commit "$RELEASE_SHA" --status success --json databaseId --jq '.[0].databaseId')
+          spec_run_id=$(gh run list --workflow Spec --commit "$RELEASE_SHA" --status success --json databaseId --jq '.[0].databaseId')
+          package_run_id=$(gh run list --workflow Package --commit "$RELEASE_SHA" --status success --json databaseId --jq '.[0].databaseId')
+          test -n "$ci_run_id"
+          test -n "$spec_run_id"
+          test -n "$package_run_id"
+          echo "PACKAGE_RUN_ID=$package_run_id" >> "$GITHUB_ENV"
 
       - name: Download attested tarball
         uses: actions/download-artifact@v8
         with:
           name: npm-tarball-${{ inputs.sha }}
-          run-id: ${{ env.RUN_ID }}
+          run-id: ${{ env.PACKAGE_RUN_ID }}
           github-token: ${{ github.token }}
           path: release
 

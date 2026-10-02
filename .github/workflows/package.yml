@@ -1,0 +1,49 @@
+name: Package
+
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  id-token: write
+  attestations: write
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Node 24
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Install dependencies and build
+        run: npm ci && npm run build
+
+      - name: Pack npm tarball
+        id: pack
+        run: |
+          mkdir release
+          npm pack --pack-destination release
+          echo "path=$(find release -name '*.tgz')" >> "$GITHUB_OUTPUT"
+
+      - name: Attest npm tarball
+        uses: actions/attest-build-provenance@v3
+        with:
+          subject-path: ${{ steps.pack.outputs.path }}
+
+      - name: Upload npm tarball
+        uses: actions/upload-artifact@v7
+        with:
+          name: npm-tarball-${{ github.sha }}
+          path: release/*.tgz
+          if-no-files-found: error

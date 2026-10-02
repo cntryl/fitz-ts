@@ -130,7 +130,7 @@ export interface WebSocketOptions {
 export interface ClientConfig {
   /** Fitz endpoint URL. Use `tcp://` in Node or `ws://`/`wss://` in either runtime. */
   url: string;
-  /** Optional friendly service name reported to brokers that advertise session metadata. */
+  /** Optional friendly service name reported after trimming to brokers that advertise session metadata. */
   serviceName?: string;
   /** Bearer-token supplier. Omit only when the server permits anonymous clients. */
   tokenProvider?: TokenProvider;

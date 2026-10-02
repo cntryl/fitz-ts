@@ -6,6 +6,11 @@ The format is based on Keep a Changelog and the project follows Semantic Version
 
 ## [Unreleased]
 
+### Added
+
+- Configure an optional friendly service name, trimmed and sent only after the broker advertises session metadata.
+- Negotiate the exclusive KV SCAN continuation capability independently from session metadata.
+
 ## [0.0.23] - 2026-09-06
 
 ### Fixed

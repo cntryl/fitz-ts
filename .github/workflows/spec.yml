@@ -1,0 +1,85 @@
+name: Spec
+
+on:
+  workflow_dispatch:
+    inputs:
+      broker_tag:
+        description: Fitz broker image tag
+        type: choice
+        options: [main, develop]
+        default: main
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "0 6 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  FORCE_COLOR: "1"
+  FITZ_BROKER_IMAGE: ghcr.io/cntryl/fitz:${{ inputs.broker_tag || 'main' }}
+
+jobs:
+  broker:
+    strategy:
+      fail-fast: false
+      matrix:
+        leg: [integration, tcp-anonymous, tcp-valid_jwt, ws-anonymous, ws-valid_jwt]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      FITZ_PATTERNED_LEASE_INVENTORY: "1"
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Node 24
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Start broker stack
+        run: docker compose up -d
+
+      - name: Wait for broker
+        run: |
+          for attempt in {1..60}; do
+            curl --fail --silent http://127.0.0.1:4290/health && exit 0
+            sleep 1
+          done
+          docker compose logs
+          exit 1
+
+      - name: Run integration tests
+        if: matrix.leg == 'integration'
+        run: time npm run test:integration -- --reporter=verbose
+
+      - name: Run conformance tests
+        if: matrix.leg != 'integration'
+        env:
+          CONFORMANCE_TRANSPORT: ${{ startsWith(matrix.leg, 'tcp-') && 'tcp' || 'ws' }}
+          CONFORMANCE_AUTH_MODE: ${{ endsWith(matrix.leg, 'valid_jwt') && 'valid_jwt' || 'anonymous' }}
+          CONFORMANCE_OUTPUT: artifacts/conformance-${{ matrix.leg }}.json
+        run: time npm run test:conformance
+
+      - name: Upload conformance results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: broker-${{ matrix.leg }}
+          path: artifacts/conformance-*.json
+          if-no-files-found: ignore
+
+      - name: Save logs and stop broker stack
+        if: always()
+        run: mkdir -p artifacts && docker compose logs > artifacts/broker-${{ matrix.leg }}.log && docker compose down --volumes
