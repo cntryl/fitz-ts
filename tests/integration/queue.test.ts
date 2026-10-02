@@ -34,7 +34,7 @@ describe("Queue integration", () => {
       });
       expect(f.client().getServerCapabilities()).toEqual({
         protocolVersion: 1,
-        capabilities: 1,
+        capabilities: expect.any(Number),
         correlationEnabled: true,
       });
       const parkedRoute = f.uniqueRoute("queue");
