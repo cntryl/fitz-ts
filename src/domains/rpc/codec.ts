@@ -14,6 +14,10 @@ import { ProtocolError } from "../../core/errors";
 import { SubscribeResponse, UnsubscribeResponse } from "./types";
 
 const CORRELATION_ID_LENGTH = 16;
+const RPC_LIFECYCLE_EXTENSION_VERSION = 1;
+const RPC_WORKER_CANCELLATION_SUPPORTED = 0x01;
+const RPC_REMAINING_BUDGET_PRESENT = 0x01;
+export const MAX_RPC_BUDGET_MS = 86_400_000;
 const RPC_RESPONSE_FLAG_STREAM_END = 0x01;
 const RPC_RESPONSE_FLAGS_SUPPORTED = RPC_RESPONSE_FLAG_STREAM_END;
 const RPC_ERROR_CODE_MIN = 6001;
@@ -73,6 +77,29 @@ const readLengthPrefixedEnd = (payload: Uint8Array, offset: number): number | un
   return end > payload.length ? undefined : end;
 };
 
+const readRemainingBudgetExtension = (
+  payload: Uint8Array,
+  offset: number,
+): { remainingBudgetMs?: number; nextOffset: number } | undefined => {
+  if (offset === payload.length) {
+    return { nextOffset: offset };
+  }
+  if (offset + 6 !== payload.length) {
+    return undefined;
+  }
+  if (
+    payload[offset] !== RPC_LIFECYCLE_EXTENSION_VERSION ||
+    payload[offset + 1] !== RPC_REMAINING_BUDGET_PRESENT
+  ) {
+    return undefined;
+  }
+  const remainingBudgetMs = readU32BE(payload, offset + 2);
+  if (remainingBudgetMs === undefined || remainingBudgetMs > MAX_RPC_BUDGET_MS) {
+    return undefined;
+  }
+  return { remainingBudgetMs, nextOffset: payload.length };
+};
+
 const looksLikeInboundRequestPayload = (payload: Uint8Array): boolean => {
   let offset = CORRELATION_ID_LENGTH;
   if (payload.length < offset) {
@@ -86,7 +113,7 @@ const looksLikeInboundRequestPayload = (payload: Uint8Array): boolean => {
   offset = routeEnd;
 
   const bodyEnd = readLengthPrefixedEnd(payload, offset);
-  return bodyEnd === payload.length;
+  return bodyEnd !== undefined && readRemainingBudgetExtension(payload, bodyEnd) !== undefined;
 };
 
 const looksLikeStreamResponsePayload = (payload: Uint8Array): boolean => {
@@ -168,10 +195,21 @@ export const RpcCodec = {
    * Encode RPC_REQUEST (302)
    * Payload: [uuid16 correlation_id][string route][bytes body]
    */
-  encodeRequest(correlationId: Uint8Array, route: string, body: Uint8Array): Uint8Array {
+  encodeRequest(
+    correlationId: Uint8Array,
+    route: string,
+    body: Uint8Array,
+    remainingBudgetMs?: number,
+  ): Uint8Array {
     assertCorrelationIdLength(correlationId);
+    validateRemainingBudget(remainingBudgetMs);
     const routeBytes = getRouteEncoding(route);
-    const payloadLength = CORRELATION_ID_LENGTH + routeBytes.length + 4 + body.length;
+    const payloadLength =
+      CORRELATION_ID_LENGTH +
+      routeBytes.length +
+      4 +
+      body.length +
+      (remainingBudgetMs === undefined ? 0 : 6);
 
     const buffer = new Uint8Array(payloadLength);
     let offset = 0;
@@ -185,12 +223,26 @@ export const RpcCodec = {
     buffer[offset++] = (body.length >> 8) & 0xff;
     buffer[offset++] = body.length & 0xff;
     buffer.set(body, offset);
+    offset += body.length;
+    if (remainingBudgetMs !== undefined) {
+      buffer[offset++] = RPC_LIFECYCLE_EXTENSION_VERSION;
+      buffer[offset++] = RPC_REMAINING_BUDGET_PRESENT;
+      buffer[offset++] = (remainingBudgetMs >>> 24) & 0xff;
+      buffer[offset++] = (remainingBudgetMs >>> 16) & 0xff;
+      buffer[offset++] = (remainingBudgetMs >>> 8) & 0xff;
+      buffer[offset] = remainingBudgetMs & 0xff;
+    }
 
     return buffer;
   },
 
-  encodeCallRequest(correlationId: Uint8Array, route: string, body: Uint8Array): Uint8Array {
-    return this.encodeRequest(correlationId, route, body);
+  encodeCallRequest(
+    correlationId: Uint8Array,
+    route: string,
+    body: Uint8Array,
+    remainingBudgetMs?: number,
+  ): Uint8Array {
+    return this.encodeRequest(correlationId, route, body, remainingBudgetMs);
   },
 
   /**
@@ -356,15 +408,23 @@ export const RpcCodec = {
    * Encode RPC_SUBSCRIBE_WORKER (300)
    * Payload: [string worker_route][u32 max_concurrent]
    */
-  encodeSubscribeWorker(route: string, maxConcurrent: number): Uint8Array {
+  encodeSubscribeWorker(
+    route: string,
+    maxConcurrent: number,
+    supportsCancellation = false,
+  ): Uint8Array {
     const routeBytes = getRouteEncoding(route);
-    const buffer = new Uint8Array(routeBytes.length + 4);
+    const buffer = new Uint8Array(routeBytes.length + 4 + (supportsCancellation ? 2 : 0));
     buffer.set(routeBytes, 0);
     let offset = routeBytes.length;
     buffer[offset++] = (maxConcurrent >> 24) & 0xff;
     buffer[offset++] = (maxConcurrent >> 16) & 0xff;
     buffer[offset++] = (maxConcurrent >> 8) & 0xff;
     buffer[offset] = maxConcurrent & 0xff;
+    if (supportsCancellation) {
+      buffer[offset + 1] = RPC_LIFECYCLE_EXTENSION_VERSION;
+      buffer[offset + 2] = RPC_WORKER_CANCELLATION_SUPPORTED;
+    }
     return buffer;
   },
 
@@ -447,6 +507,7 @@ export const RpcCodec = {
     correlationId: Uint8Array;
     route: string;
     body: Uint8Array;
+    remainingBudgetMs?: number;
   } {
     let offset = 0;
     if (offset + CORRELATION_ID_LENGTH > payload.length) {
@@ -478,12 +539,86 @@ export const RpcCodec = {
     const body = payload.subarray(offset, offset + bodyLen);
     offset += bodyLen;
 
-    if (offset !== payload.length) {
+    const extension = readRemainingBudgetExtension(payload, offset);
+    if (!extension || extension.nextOffset !== payload.length) {
       throw new ProtocolError("Invalid RPC request payload structure", undefined, {
         operation: "RPC_DECODE_INBOUND_REQUEST",
       });
     }
 
-    return { correlationId, route, body };
+    return { correlationId, route, body, remainingBudgetMs: extension.remainingBudgetMs };
+  },
+
+  encodeCallerCancellation(correlationId: Uint8Array, reason: 1 | 2): Uint8Array {
+    assertCorrelationIdLength(correlationId);
+    const payload = new Uint8Array(1 + CORRELATION_ID_LENGTH + 1);
+    payload[0] = 1;
+    payload.set(correlationId, 1);
+    payload[payload.length - 1] = reason;
+    return payload;
+  },
+
+  encodeWorkerCleanupAck(correlationId: Uint8Array): Uint8Array {
+    assertCorrelationIdLength(correlationId);
+    const payload = new Uint8Array(1 + CORRELATION_ID_LENGTH);
+    payload[0] = 3;
+    payload.set(correlationId, 1);
+    return payload;
+  },
+
+  isLifecycleControlPayload(payload: Uint8Array): boolean {
+    if (payload.length !== 18 || (payload[0] !== 2 && payload[0] !== 4)) {
+      return false;
+    }
+    if (payload[0] === 2) {
+      return payload[17]! >= 1 && payload[17]! <= 4;
+    }
+    return payload[17]! >= 1 && payload[17]! <= 6;
+  },
+
+  decodeLifecycleControl(payload: Uint8Array):
+    | { kind: "worker_cancellation"; correlationId: Uint8Array; reason: 1 | 2 | 3 | 4 }
+    | {
+        kind: "cancellation_result";
+        correlationId: Uint8Array;
+        status: 1 | 2 | 3 | 4 | 5 | 6;
+      } {
+    if (!this.isLifecycleControlPayload(payload)) {
+      throw new ProtocolError("Invalid RPC lifecycle control", undefined, {
+        operation: "RPC_DECODE_LIFECYCLE_CONTROL",
+      });
+    }
+    const correlationId = payload.subarray(1, 1 + CORRELATION_ID_LENGTH);
+    const value = payload[payload.length - 1]!;
+    if (payload[0] === 2) {
+      return {
+        kind: "worker_cancellation",
+        correlationId,
+        reason: value as 1 | 2 | 3 | 4,
+      };
+    }
+    return {
+      kind: "cancellation_result",
+      correlationId,
+      status: value as 1 | 2 | 3 | 4 | 5 | 6,
+    };
   },
 };
+
+function validateRemainingBudget(remainingBudgetMs: number | undefined): void {
+  if (
+    remainingBudgetMs !== undefined &&
+    (!Number.isInteger(remainingBudgetMs) ||
+      remainingBudgetMs < 0 ||
+      remainingBudgetMs > MAX_RPC_BUDGET_MS)
+  ) {
+    throw new ProtocolError(
+      `RPC remaining budget must be an integer in 0..=${MAX_RPC_BUDGET_MS}`,
+      undefined,
+      {
+        operation: "RPC_ENCODE_REQUEST",
+        remainingBudgetMs,
+      },
+    );
+  }
+}

@@ -16,6 +16,9 @@ import {
   utf8Encoder,
 } from "../../../src/core/buffer";
 import {
+  CAP_RPC_CANCELLATION,
+  MSG_RPC_CANCELLATION,
+  MSG_RPC_LIFECYCLE,
   MSG_RPC_REQUEST,
   MSG_RPC_RESPONSE,
   MSG_RPC_SUBSCRIBE_WORKER,
@@ -31,8 +34,10 @@ class FakeRpcConnection {
   public sendCalls: Array<{ messageType: number; payload: Uint8Array }> = [];
   public lastSignal: AbortSignal | undefined;
   public asyncDispatchAccepted = true;
+  public pausedTasks: Array<() => void | Promise<void>> | undefined;
   public rpcResponse: Uint8Array = new Uint8Array([0]);
   public requestError: Error | undefined;
+  private capabilities = 0;
   private readonly requestGates = new Map<number, Promise<void>>();
   private state = ConnectionState.Authenticated;
   private readonly disconnectListeners = new Set<() => void>();
@@ -104,7 +109,8 @@ class FakeRpcConnection {
     if (!this.asyncDispatchAccepted) {
       return false;
     }
-    void Promise.resolve().then(task);
+    if (this.pausedTasks) this.pausedTasks.push(task);
+    else void Promise.resolve().then(task);
     return true;
   }
 
@@ -114,6 +120,14 @@ class FakeRpcConnection {
 
   getState(): ConnectionState {
     return this.state;
+  }
+
+  getServerCapabilities(): { protocolVersion: number; capabilities: number } {
+    return { protocolVersion: 1, capabilities: this.capabilities };
+  }
+
+  setCapabilities(capabilities: number): void {
+    this.capabilities = capabilities;
   }
 
   setState(state: ConnectionState): void {
@@ -149,6 +163,185 @@ class FakeRpcConnection {
 }
 
 describe("RpcClient", () => {
+  it("sends a negotiated remaining budget and resolves remote cancellation results", async () => {
+    const connection = new FakeRpcConnection();
+    connection.setCapabilities(CAP_RPC_CANCELLATION);
+    const client = createRpcClient(connection);
+    const iterator = client.call("rpc://realm/area/method", {
+      body: new Uint8Array([7]),
+      timeoutMs: 5000,
+    });
+
+    await vi.waitFor(() => expect(connection.sendCalls).toHaveLength(1));
+    const request = RpcCodec.decodeInboundRequest(connection.sendCalls[0]!.payload);
+    expect(request.remainingBudgetMs).toBeGreaterThan(0);
+
+    await iterator.return?.();
+    await vi.waitFor(() => {
+      expect(connection.sendCalls.some((call) => call.messageType === MSG_RPC_CANCELLATION)).toBe(
+        true,
+      );
+    });
+    const cancellation = connection.sendCalls.find(
+      (call) => call.messageType === MSG_RPC_CANCELLATION,
+    );
+    expect(cancellation?.payload[0]).toBe(1);
+    expect(cancellation?.payload[17]).toBe(1);
+
+    const lifecycleHandler = connection.notificationHandlers.get(MSG_RPC_LIFECYCLE);
+    expect(lifecycleHandler).toBeTypeOf("function");
+    lifecycleHandler?.(encodeLifecycleControl(4, request.correlationId, 2));
+    await expect(iterator.cancellation).resolves.toBe("forwarded");
+  });
+
+  it("keeps legacy request encoding and reports cancellation as unsupported", async () => {
+    const connection = new FakeRpcConnection();
+    const client = createRpcClient(connection);
+    const iterator = client.call("rpc://realm/area/method", {
+      body: new Uint8Array([7]),
+      timeoutMs: 5000,
+    });
+
+    await vi.waitFor(() => expect(connection.sendCalls).toHaveLength(1));
+    const request = RpcCodec.decodeInboundRequest(connection.sendCalls[0]!.payload);
+    expect(request.remainingBudgetMs).toBeUndefined();
+    await iterator.return?.();
+
+    await expect(iterator.cancellation).resolves.toBe("unsupported");
+    expect(connection.sendCalls.some((call) => call.messageType === MSG_RPC_CANCELLATION)).toBe(
+      false,
+    );
+  });
+
+  it("passes worker cancellation and inherited time to the handler, then acknowledges cleanup", async () => {
+    const connection = new FakeRpcConnection();
+    connection.setCapabilities(CAP_RPC_CANCELLATION);
+    const client = createRpcClient(connection);
+    const route = "rpc://realm/area/method";
+    let signal: AbortSignal | undefined;
+    let remainingTimeMs: (() => number | undefined) | undefined;
+    let started = false;
+    await client.registerWorker(route, async (_req, writer, context) => {
+      signal = context.signal;
+      remainingTimeMs = () => context.remainingTimeMs();
+      started = true;
+      await new Promise<void>((resolve) => {
+        context.signal.addEventListener("abort", () => resolve(), { once: true });
+      });
+      await writer.end({ body: new Uint8Array([1]) });
+    });
+    expect(connection.requestCalls[0]?.payload.slice(-2)).toEqual(new Uint8Array([1, 1]));
+
+    const correlationId = new Uint8Array(16).fill(9);
+    const requestHandler = connection.notificationHandlers.get(MSG_RPC_REQUEST);
+    requestHandler?.(RpcCodec.encodeRequest(correlationId, route, new Uint8Array(), 2000));
+    await vi.waitFor(() => expect(started).toBe(true));
+    expect(remainingTimeMs?.()).toBeGreaterThan(0);
+
+    connection.notificationHandlers.get(MSG_RPC_LIFECYCLE)?.(
+      encodeLifecycleControl(2, correlationId, 1),
+    );
+    await vi.waitFor(() => {
+      expect(signal?.aborted).toBe(true);
+      expect(
+        connection.sendCalls.some(
+          (call) =>
+            call.messageType === MSG_RPC_CANCELLATION &&
+            call.payload[0] === 3 &&
+            call.payload.subarray(1, 17).every((byte, index) => byte === correlationId[index]),
+        ),
+      ).toBe(true);
+    });
+  });
+
+  it("acknowledges cleanup after terminal response even before delayed cancellation arrives", async () => {
+    const connection = new FakeRpcConnection();
+    connection.setCapabilities(CAP_RPC_CANCELLATION);
+    const client = createRpcClient(connection);
+    const route = "rpc://realm/area/method";
+    let releaseCleanup!: () => void;
+    const cleanup = new Promise<void>((resolve) => {
+      releaseCleanup = resolve;
+    });
+    await client.registerWorker(route, async (_req, writer) => {
+      await writer.end();
+      await cleanup;
+    });
+    const id = new Uint8Array(16).fill(8);
+    connection.notificationHandlers.get(MSG_RPC_REQUEST)?.(
+      RpcCodec.encodeRequest(id, route, new Uint8Array(), 2000),
+    );
+    await vi.waitFor(() => expect(connection.sendCalls).toHaveLength(1));
+    expect(connection.sendCalls[0]?.messageType).toBe(MSG_RPC_RESPONSE);
+    releaseCleanup();
+    await vi.waitFor(() => expect(connection.sendCalls).toHaveLength(2));
+    expect(connection.sendCalls[1]).toEqual({
+      messageType: MSG_RPC_CANCELLATION,
+      payload: RpcCodec.encodeWorkerCleanupAck(id),
+    });
+  });
+
+  it("counts time buffered before dispatch against the inherited deadline", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+    try {
+      const connection = new FakeRpcConnection();
+      connection.setCapabilities(CAP_RPC_CANCELLATION);
+      connection.pausedTasks = [];
+      const client = createRpcClient(connection);
+      let remaining: number | undefined;
+      let cancelled = false;
+      const route = "rpc://realm/area/method";
+      await client.registerWorker(route, async (_req, writer, context) => {
+        remaining = context.remainingTimeMs();
+        cancelled = context.signal.aborted;
+        await writer.end();
+      });
+      connection.notificationHandlers.get(MSG_RPC_REQUEST)?.(
+        RpcCodec.encodeRequest(new Uint8Array(16), route, new Uint8Array(), 100),
+      );
+      await vi.advanceTimersByTimeAsync(150);
+      await connection.pausedTasks[0]?.();
+      expect(remaining).toBe(0);
+      expect(cancelled).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("acknowledges cancelled buffered work without invoking its handler", async () => {
+    const connection = new FakeRpcConnection();
+    connection.setCapabilities(CAP_RPC_CANCELLATION);
+    connection.pausedTasks = [];
+    const client = createRpcClient(connection);
+    const handler = vi.fn(async () => undefined);
+    const route = "rpc://realm/area/method";
+    await client.registerWorker(route, handler);
+    const id = new Uint8Array(16).fill(6);
+    connection.notificationHandlers.get(MSG_RPC_REQUEST)?.(
+      RpcCodec.encodeRequest(id, route, new Uint8Array(), 2000),
+    );
+    connection.notificationHandlers.get(MSG_RPC_LIFECYCLE)?.(encodeLifecycleControl(2, id, 1));
+    await vi.waitFor(() => expect(connection.sendCalls).toHaveLength(1));
+    expect(connection.sendCalls[0]?.messageType).toBe(MSG_RPC_CANCELLATION);
+    await connection.pausedTasks[0]?.();
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("acknowledges negotiated overload cleanup after its terminal error", async () => {
+    const connection = new FakeRpcConnection();
+    connection.setCapabilities(CAP_RPC_CANCELLATION);
+    const client = createRpcClient(connection);
+    const route = "rpc://realm/area/method";
+    await client.registerWorker(route, async () => undefined);
+    connection.asyncDispatchAccepted = false;
+    connection.notificationHandlers.get(MSG_RPC_REQUEST)?.(
+      RpcCodec.encodeRequest(new Uint8Array(16), route, new Uint8Array(), 2000),
+    );
+    await vi.waitFor(() => expect(connection.sendCalls).toHaveLength(2));
+    expect(connection.sendCalls[0]?.messageType).toBe(MSG_RPC_RESPONSE);
+    expect(connection.sendCalls[1]?.messageType).toBe(MSG_RPC_CANCELLATION);
+  });
+
   it("swallows worker response sends after the connection closes", async () => {
     const connection = new FakeRpcConnection();
     const client = createRpcClient(connection);
@@ -851,6 +1044,14 @@ describe("RpcClient", () => {
 
 function encodeWorkerNotFoundBody(): Uint8Array {
   return encodeRpcErrorBody(ErrCodeRpcWorkerNotFound, "worker missing");
+}
+
+function encodeLifecycleControl(kind: 2 | 4, correlationId: Uint8Array, value: number): Uint8Array {
+  const payload = new Uint8Array(18);
+  payload[0] = kind;
+  payload.set(correlationId, 1);
+  payload[17] = value;
+  return payload;
 }
 
 function encodeRpcErrorBody(code: number, message: string): Uint8Array {

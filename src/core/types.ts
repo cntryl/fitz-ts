@@ -148,7 +148,7 @@ export interface ClientConfig {
   heartbeat?: HeartbeatOptions;
   /** Largest accepted complete wire frame in bytes. Defaults to 65,540. */
   maxFrameSize?: number;
-  /** Delay in milliseconds allowed for authentication settlement. Defaults to 1,000. */
+  /** @deprecated Connect now waits for SERVER_HELLO within the request timeout. */
   authSettleDelayMs?: number;
   /** Maximum requests concurrently awaiting responses. Defaults to 256. */
   maxInFlightRequests?: number;

@@ -1,9 +1,8 @@
 /**
  * Connection manager for Fitz protocol.
  *
- * CONNECT is a silent-success handshake. A newly opened transport becomes
- * usable after the settle window, but reconnect eligibility is not confirmed
- * until the server sends a frame on that authenticated session.
+ * CONNECT has no success ACK. SERVER_HELLO confirms negotiation before the
+ * first domain command; an explicit zero capability advertisement is legacy.
  */
 
 import { Transport } from "../transport/types";
@@ -47,7 +46,6 @@ import {
   abortError,
   connectionClosedError,
   isAbortError,
-  sleep,
   sleepWithAbort,
   throwIfAborted,
   waitForSharedPromise,
@@ -59,6 +57,7 @@ import { createReadinessWaiter } from "./internal/readiness";
 import { createHeartbeatLoop } from "./internal/heartbeat";
 import { createConnectionTelemetry } from "./internal/telemetry";
 import { createReconnectScheduler } from "./internal/reconnect";
+import { waitForServerHello } from "./internal/negotiation";
 import type { PushFrameClassifier, PushFrameClassifierRegistration } from "./multiplexer";
 
 export interface ConnectionOptions {
@@ -122,7 +121,6 @@ export function createConnection(
   options: ConnectionOptions = {},
 ) {
   const timeout = options.timeout ?? 30000;
-  const authSettleDelayMs = options.authSettleDelayMs ?? 1000;
   const reconnectEnabled = options.reconnect?.enabled ?? false;
   const reconnectMaxAttempts = options.reconnect?.maxAttempts ?? Infinity;
   const reconnectBackoffMs = options.reconnect?.backoffMs ?? 250;
@@ -770,12 +768,15 @@ export function createConnection(
 
       const sendConnectPromise = sendConnect(activeTransport);
       void sendConnectPromise.catch(() => undefined);
-      await Promise.race([sendConnectPromise, authOutcome.promise]);
+      await waitForServerHello(
+        Promise.all([sendConnectPromise, authOutcome.promise]).then(() => undefined),
+        timeout,
+        signal,
+      );
       if (closeRequested) {
         throw connectionClosedError();
       }
       throwIfAborted(signal);
-      await Promise.race([authOutcome.promise, sleep(authSettleDelayMs)]);
       if (closeRequested) {
         throw connectionClosedError();
       }
@@ -883,8 +884,12 @@ export function createConnection(
               throw new ProtocolError("A CORRELATED record cannot label SERVER_HELLO");
             }
             const hello = decodeServerHello(frame.payload);
+            if (!hello) {
+              throw new ProtocolError("Malformed SERVER_HELLO");
+            }
             if (hello) {
               multiplexer.setCapabilities(hello.protocolVersion, hello.capabilities);
+              authOutcome?.resolve();
               if (
                 sessionMetadata !== undefined &&
                 (hello.capabilities & CAP_SESSION_METADATA) !== 0 &&

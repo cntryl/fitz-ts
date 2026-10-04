@@ -159,6 +159,9 @@ export type {
   RpcHandler,
   RegisterWorkerOptions,
   RpcSubscription,
+  RpcCallIterator,
+  RpcCancellationOutcome,
+  RpcHandlerContext,
   RpcStatus,
 } from "./domains/rpc/types";
 export type { LeaseClient } from "./domains/lease/client";

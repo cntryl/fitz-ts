@@ -4,7 +4,7 @@ import { createConnection } from "../../../src/client/connection";
 import { shouldRetryOperation } from "../../../src/client/resilience";
 import { ConnectionError, RequestQueueFullError } from "../../../src/core/errors";
 import { Frame, FrameCodec } from "../../../src/frame/codec";
-import { MSG_LEASE_QUERY, MSG_QUEUE_ENQUEUE } from "../../../src/frame/types";
+import { MSG_LEASE_QUERY, MSG_QUEUE_ENQUEUE, MSG_SERVER_HELLO } from "../../../src/frame/types";
 import { createLeaseClient } from "../../../src/domains/lease/client";
 import { createQueueClient } from "../../../src/domains/queue/client";
 import type { Transport } from "../../../src/transport/types";
@@ -28,6 +28,7 @@ class ScriptedTransport implements Transport {
       await this.connectGate;
     }
     this.connected = true;
+    this.pushRead(FrameCodec.encodeFrame(MSG_SERVER_HELLO, new Uint8Array([0, 1, 0, 0, 0, 0])));
   }
 
   async send(data: Uint8Array): Promise<void> {
