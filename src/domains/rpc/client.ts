@@ -648,9 +648,23 @@ export function createRpcClient(connection: RpcConnectionPort): RpcClient {
     activeInvocations.set(correlationKey, invocation);
 
     const accepted = tryDispatchRpcHandler(async () => {
+      if (activeInvocations.get(correlationKey) !== invocation) {
+        writer.dispose();
+        return;
+      }
       try {
-        invocation.started = true;
         if (invocation.cancellationRequested) return;
+        if (deadlineAt !== undefined && deadlineAt <= performance.now()) {
+          invocation.controller.abort(
+            new RpcError("RPC request deadline elapsed", "TIMEOUT", ErrCodeRpcTimeout),
+          );
+          await writer.end({
+            body: encodeRpcErrorBody(ErrCodeRpcTimeout, "RPC request deadline elapsed"),
+          });
+          return;
+        }
+        if (invocation.controller.signal.aborted) return;
+        invocation.started = true;
         await registration.handler(
           {
             route: req.route,
@@ -674,7 +688,9 @@ export function createRpcClient(connection: RpcConnectionPort): RpcClient {
         }
       } finally {
         clearTimeout(invocation.timer);
-        activeInvocations.delete(correlationKey);
+        if (activeInvocations.get(correlationKey) === invocation) {
+          activeInvocations.delete(correlationKey);
+        }
         // A handler that settles without ever sending a terminal frame
         // leaves the caller's iterator waiting until it hits the generic
         // call timeout, with nothing pointing at the actual cause — warn

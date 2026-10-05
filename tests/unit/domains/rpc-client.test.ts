@@ -26,6 +26,7 @@ import {
 } from "../../../src/frame/types";
 import { createRpcClient } from "../../../src/domains/rpc/client";
 import { RpcCodec } from "../../../src/domains/rpc/codec";
+import type { RpcHandler } from "../../../src/domains/rpc/types";
 
 class FakeRpcConnection {
   public readonly notificationHandlers = new Map<number, (payload: Uint8Array) => void>();
@@ -288,24 +289,68 @@ describe("RpcClient", () => {
       connection.setCapabilities(CAP_RPC_CANCELLATION);
       connection.pausedTasks = [];
       const client = createRpcClient(connection);
-      let remaining: number | undefined;
-      let cancelled = false;
-      const route = "rpc://realm/area/method";
-      await client.registerWorker(route, async (_req, writer, context) => {
-        remaining = context.remainingTimeMs();
-        cancelled = context.signal.aborted;
+      const handler = vi.fn<RpcHandler>(async (_req, writer) => {
         await writer.end();
       });
+      const route = "rpc://realm/area/method";
+      await client.registerWorker(route, handler);
       connection.notificationHandlers.get(MSG_RPC_REQUEST)?.(
         RpcCodec.encodeRequest(new Uint8Array(16), route, new Uint8Array(), 100),
       );
       await vi.advanceTimersByTimeAsync(150);
       await connection.pausedTasks[0]?.();
-      expect(remaining).toBe(0);
-      expect(cancelled).toBe(true);
+      expect(handler).not.toHaveBeenCalled();
+      expect(connection.sendCalls.some((call) => call.messageType === MSG_RPC_CANCELLATION)).toBe(
+        true,
+      );
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("ignores a completed call's later abort after its pooled ID is reused", async () => {
+    const connection = new FakeRpcConnection();
+    connection.setCapabilities(CAP_RPC_CANCELLATION);
+    const client = createRpcClient(connection);
+    const controller = new AbortController();
+    const old = client.call("rpc://realm/area/first", {
+      body: new Uint8Array(),
+      signal: controller.signal,
+    });
+    await vi.waitFor(() => expect(connection.sendCalls).toHaveLength(1));
+    const oldId = RpcCodec.decodeInboundRequest(connection.sendCalls[0]!.payload).correlationId;
+    connection.notificationHandlers.get(MSG_RPC_RESPONSE)?.(
+      RpcCodec.encodeResponse(oldId, 0n, new Uint8Array(), true),
+    );
+    const current = client.call("rpc://realm/area/second", { body: new Uint8Array() });
+    await vi.waitFor(() => expect(connection.sendCalls).toHaveLength(2));
+    controller.abort();
+    await expect(old.next()).resolves.toEqual({ value: undefined, done: true });
+    expect(
+      connection.sendCalls.filter((call) => call.messageType === MSG_RPC_CANCELLATION),
+    ).toHaveLength(0);
+    const currentId = RpcCodec.decodeInboundRequest(connection.sendCalls[1]!.payload).correlationId;
+    connection.notificationHandlers.get(MSG_RPC_RESPONSE)?.(
+      RpcCodec.encodeResponse(currentId, 0n, new Uint8Array(), true),
+    );
+    await expect(current.next()).resolves.toEqual({ value: undefined, done: true });
+  });
+
+  it("does not send an expired buffered response after disconnect", async () => {
+    const connection = new FakeRpcConnection();
+    connection.setCapabilities(CAP_RPC_CANCELLATION);
+    connection.pausedTasks = [];
+    const client = createRpcClient(connection);
+    const handler = vi.fn(async () => undefined);
+    const route = "rpc://realm/area/method";
+    await client.registerWorker(route, handler);
+    connection.notificationHandlers.get(MSG_RPC_REQUEST)?.(
+      RpcCodec.encodeRequest(new Uint8Array(16), route, new Uint8Array(), 0),
+    );
+    connection.emitDisconnect();
+    await connection.pausedTasks[0]?.();
+    expect(handler).not.toHaveBeenCalled();
+    expect(connection.sendCalls).toHaveLength(0);
   });
 
   it("acknowledges cancelled buffered work without invoking its handler", async () => {

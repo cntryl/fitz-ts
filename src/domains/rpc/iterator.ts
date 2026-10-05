@@ -51,7 +51,7 @@ export function createRpcIterator(
   };
 
   const cancel = (reason: 1 | 2, error: unknown): void => {
-    if (cancellationRequested) {
+    if (done || cancellationRequested) {
       return;
     }
     cancellationRequested = true;
@@ -125,7 +125,7 @@ export function createRpcIterator(
   };
 
   const next = async (): Promise<IteratorResult<ResponseFrame>> => {
-    if (signal?.aborted) {
+    if (!done && signal?.aborted) {
       cancel(1, abortError());
       throw failureReason;
     }
