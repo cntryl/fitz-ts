@@ -1,3 +1,4 @@
+import { createRpcIterator, type RpcIterator } from "./iterator";
 /**
  * RPC domain client.
  */
@@ -11,22 +12,33 @@ import type {
   ReconnectListenerPort,
   ReconnectRestoreRequestPort,
   RequestPort,
+  ServerCapabilitiesPort,
   SendPort,
   StateReadPort,
 } from "../base";
-import { RpcCodec, acquirePooledCorrelationId, releasePooledCorrelationId } from "./codec";
+import {
+  MAX_RPC_BUDGET_MS,
+  RpcCodec,
+  acquirePooledCorrelationId,
+  releasePooledCorrelationId,
+} from "./codec";
 import {
   RequestOptions,
   RegisterWorkerOptions,
-  ResponseFrame,
+  RpcCallIterator,
+  RpcCancellationOutcome,
+  RpcHandlerContext,
   RpcHandler,
   RpcSubscription,
   ResponseWriter,
   createRpcSubscription,
 } from "./types";
 import {
+  CAP_RPC_CANCELLATION,
   MSG_RPC_REQUEST,
   MSG_RPC_RESPONSE,
+  MSG_RPC_CANCELLATION,
+  MSG_RPC_LIFECYCLE,
   MSG_RPC_SUBSCRIBE_WORKER,
   MSG_RPC_UNSUBSCRIBE_WORKER,
 } from "../../frame/types";
@@ -58,6 +70,7 @@ type RpcConnectionPort = RequestPort &
   DisconnectListenerPort &
   AsyncDispatchPort &
   StateReadPort &
+  ServerCapabilitiesPort &
   PushClassifierPort &
   Partial<ReconnectRestoreRequestPort>;
 
@@ -65,6 +78,21 @@ type DecodedInboundRequest = {
   correlationId: Uint8Array;
   route: string;
   body: Uint8Array;
+  remainingBudgetMs?: number;
+};
+
+type ActiveRpcInvocation = {
+  controller: AbortController;
+  deadlineAt?: number;
+  timer?: ReturnType<typeof setTimeout>;
+  cancellationRequested: boolean;
+  started: boolean;
+};
+
+type PendingCancellation = {
+  correlationId: Uint8Array;
+  resolve: (outcome: RpcCancellationOutcome) => void;
+  timeout: ReturnType<typeof setTimeout>;
 };
 
 type RegisteredWorker = {
@@ -81,6 +109,8 @@ type RpcPatternSpecificity = readonly [
 
 const DEFAULT_WORKER_MAX_CONCURRENCY = 1;
 const MAX_WORKER_MAX_CONCURRENCY = 1024;
+const DEFAULT_RPC_TIMEOUT_MS = 30000;
+const CANCELLATION_RESULT_TIMEOUT_MS = 5000;
 
 function rpcPatternSpecificity(pattern: string): RpcPatternSpecificity {
   const segments = pattern.slice(pattern.indexOf("://") + 3).split("/");
@@ -189,178 +219,6 @@ function isBenignShutdownError(error: unknown, connection: StateReadPort): boole
   return /closed|not connected|reset/i.test(error.message);
 }
 
-type RpcIterator = AsyncIterableIterator<ResponseFrame> & {
-  push(frame: ResponseFrame): void;
-  end(): void;
-  fail(reason: unknown): void;
-};
-
-function createRpcIterator(
-  cleanupPendingRpc: () => void,
-  timeoutMs: number,
-  signal?: AbortSignal,
-): RpcIterator {
-  const buffer: ResponseFrame[] = [];
-  let done = false;
-  let failureReason: unknown;
-  let resolveNext: ((frame: ResponseFrame | null) => void) | null = null;
-  let rejectNext: ((reason?: unknown) => void) | null = null;
-  let abortListener: (() => void) | null = null;
-  let clearPendingNext: (() => void) | null = null;
-
-  const clearPendingWait = (): void => {
-    clearPendingNext?.();
-    clearPendingNext = null;
-    detachAbortListener();
-    resolveNext = null;
-    rejectNext = null;
-  };
-
-  const push = (frame: ResponseFrame): void => {
-    if (done) {
-      return;
-    }
-
-    if (resolveNext) {
-      const resolve = resolveNext;
-      resolveNext = null;
-      rejectNext = null;
-      resolve(frame);
-    } else {
-      buffer.push(frame);
-    }
-  };
-
-  const end = (): void => {
-    done = true;
-    if (resolveNext) {
-      const resolve = resolveNext;
-      clearPendingWait();
-      resolve(null);
-    }
-  };
-
-  const fail = (reason: unknown): void => {
-    done = true;
-    failureReason = reason;
-    cleanupPendingRpc();
-    if (rejectNext) {
-      const reject = rejectNext;
-      clearPendingWait();
-      const rejectWithCurrentSignalState = () => {
-        reject(signal?.aborted ? abortError() : reason);
-      };
-      if (signal) {
-        setTimeout(rejectWithCurrentSignalState, 0);
-      } else {
-        void Promise.resolve().then(rejectWithCurrentSignalState);
-      }
-      return;
-    }
-  };
-
-  const next = async (): Promise<IteratorResult<ResponseFrame>> => {
-    if (signal?.aborted) {
-      done = true;
-      cleanupPendingRpc();
-      throw abortError();
-    }
-
-    // Frames pushed before a later failure are still deliverable and must
-    // drain first — only surface the failure once the buffer is empty, or a
-    // successfully received frame gets discarded in favor of the error that
-    // arrived after it.
-    if (buffer.length > 0) {
-      const value = buffer.shift();
-      if (!value) {
-        return { value: undefined, done: true };
-      }
-      return { value, done: false };
-    }
-
-    if (failureReason !== undefined) {
-      throw failureReason;
-    }
-
-    if (done) {
-      return { value: undefined, done: true };
-    }
-
-    const frame = await new Promise<ResponseFrame | null>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        clearPendingWait();
-        done = true;
-        cleanupPendingRpc();
-        // Use the domain error-code namespace (matches what a broker-side
-        // timeout reports via rpcErrorCodeName/ErrCodeRpcTimeout below), not
-        // the wire status enum — RpcStatus.Timeout is a different numbering
-        // space, and mixing them made isRetryable() treat a client-local
-        // timeout inconsistently from a broker-reported one despite both
-        // sharing the same `.code` string.
-        reject(new RpcError("RPC call timeout", "TIMEOUT", ErrCodeRpcTimeout));
-      }, timeoutMs);
-      clearPendingNext = () => {
-        clearTimeout(timer);
-      };
-
-      const onAbort = () => {
-        clearPendingWait();
-        done = true;
-        cleanupPendingRpc();
-        reject(abortError());
-      };
-
-      if (signal) {
-        signal.addEventListener("abort", onAbort, { once: true });
-        abortListener = () => {
-          signal.removeEventListener("abort", onAbort);
-        };
-      }
-
-      resolveNext = (f) => {
-        clearPendingWait();
-        resolve(f);
-      };
-      rejectNext = reject;
-    });
-
-    if (frame === null) {
-      return { value: undefined, done: true };
-    }
-
-    return { value: frame, done: false };
-  };
-
-  const returnMethod = async (): Promise<IteratorResult<ResponseFrame>> => {
-    done = true;
-    clearPendingWait();
-    cleanupPendingRpc();
-    return { value: undefined, done: true };
-  };
-
-  const detachAbortListener = (): void => {
-    abortListener?.();
-    abortListener = null;
-  };
-
-  const abortError = (): Error => {
-    const error = new Error("The operation was aborted");
-    error.name = "AbortError";
-    return error;
-  };
-
-  return {
-    push,
-    end,
-    fail,
-    next,
-    return: returnMethod,
-    [Symbol.asyncIterator]() {
-      return this;
-    },
-  };
-}
-
 /**
  * Streaming RPC facade for callers and workers. Routes start with `rpc://`
  * followed by one or more non-empty segments. Calls require a concrete route;
@@ -372,7 +230,7 @@ export interface RpcClient {
    * completion or call `return()`/break iteration to release local state.
    * Do not automatically replay after a request may have reached a worker.
    */
-  call(route: string, options: RequestOptions): AsyncIterableIterator<ResponseFrame>;
+  call(route: string, options: RequestOptions): RpcCallIterator;
   /**
    * Registers one handler for a route pattern. Use a concrete route for one
    * endpoint, or whole-segment `*` and `**` wildcards to match multiple routes.
@@ -390,6 +248,9 @@ export function createRpcClient(connection: RpcConnectionPort): RpcClient {
   const { requestFrame, requestReconnectFrame } = createDomainClient(connection);
   type PendingRpcEntry = { iterator: RpcIterator; correlationId: Uint8Array };
   const pendingRpcs = new Map<bigint, PendingRpcEntry>();
+  const pendingCancellations = new Map<bigint, PendingCancellation>();
+  const abandonedCorrelationIds = new Set<bigint>();
+  const activeInvocations = new Map<bigint, ActiveRpcInvocation>();
   const workers = new Map<string, RegisteredWorker>();
   const workerMutationTails = new Map<string, Promise<void>>();
   let initialized = false;
@@ -418,6 +279,9 @@ export function createRpcClient(connection: RpcConnectionPort): RpcClient {
       return;
     }
     pendingRpcs.delete(correlationKey);
+    if (abandonedCorrelationIds.delete(correlationKey)) {
+      return;
+    }
     releasePooledCorrelationId(correlationId);
   };
 
@@ -427,6 +291,17 @@ export function createRpcClient(connection: RpcConnectionPort): RpcClient {
       entry.iterator.fail(new ConnectionError("Connection closed while RPC response was pending"));
     }
     pendingRpcs.clear();
+    abandonedCorrelationIds.clear();
+    for (const [key, pending] of pendingCancellations) {
+      clearTimeout(pending.timeout);
+      pending.resolve("connection_closed");
+      pendingCancellations.delete(key);
+    }
+    for (const invocation of activeInvocations.values()) {
+      clearTimeout(invocation.timer);
+      invocation.controller.abort(new ConnectionError("Connection closed during RPC handler"));
+    }
+    activeInvocations.clear();
   });
 
   connection.onReconnect(async () => {
@@ -456,32 +331,109 @@ export function createRpcClient(connection: RpcConnectionPort): RpcClient {
     );
   });
 
-  const call = (route: string, options: RequestOptions): AsyncIterableIterator<ResponseFrame> => {
+  const call = (route: string, options: RequestOptions): RpcCallIterator => {
     assertRpcRoute(route);
     initRpcHandler();
+    const timeoutMs = options.timeoutMs ?? DEFAULT_RPC_TIMEOUT_MS;
+    validateCallTimeout(timeoutMs);
+    const deadlineAt = performance.now() + timeoutMs;
+    const supportsCancellation = hasRpcCancellationCapability(connection);
+    const correlationId = acquirePooledCorrelationId();
+    const correlationKey = correlationIdToKey(correlationId);
+    let settleRequestSent!: (sent: boolean) => void;
+    const requestSent = new Promise<boolean>((resolve) => {
+      settleRequestSent = resolve;
+    });
+    const iterator = createRpcIterator(
+      deadlineAt,
+      async (reason) => {
+        abandonedCorrelationIds.add(correlationKey);
+        const sent = await requestSent;
+        if (!sent) {
+          cleanupPendingRpc(correlationKey, correlationId);
+          return "request_not_sent";
+        }
+        if (!supportsCancellation) {
+          cleanupPendingRpc(correlationKey, correlationId);
+          return "unsupported";
+        }
+        return await sendCancellationRequest(correlationKey, correlationId, reason);
+      },
+      () => cleanupPendingRpc(correlationKey, correlationId),
+      options.signal,
+    );
+    pendingRpcs.set(correlationKey, { iterator, correlationId });
 
-    return (async function* (): AsyncIterableIterator<ResponseFrame> {
-      const timeoutMs = options.timeoutMs ?? 30000;
-      const correlationId = acquirePooledCorrelationId();
-      const correlationKey = correlationIdToKey(correlationId);
-      const iterator = createRpcIterator(
-        () => cleanupPendingRpc(correlationKey, correlationId),
-        timeoutMs,
-        options.signal,
+    if (options.signal?.aborted) {
+      const payload = RpcCodec.encodeCallRequest(correlationId, route, options.body);
+      void connection.send(MSG_RPC_REQUEST, payload, options.signal).catch(() => undefined);
+      settleRequestSent(false);
+      return iterator;
+    }
+
+    const remainingBudgetMs = supportsCancellation
+      ? Math.max(0, Math.floor(deadlineAt - performance.now()))
+      : undefined;
+    const payload = RpcCodec.encodeCallRequest(
+      correlationId,
+      route,
+      options.body,
+      remainingBudgetMs,
+    );
+    void connection.send(MSG_RPC_REQUEST, payload).then(
+      () => settleRequestSent(true),
+      (error: unknown) => {
+        settleRequestSent(false);
+        iterator.fail(error);
+      },
+    );
+    return iterator;
+  };
+
+  const sendCancellationRequest = async (
+    correlationKey: bigint,
+    correlationId: Uint8Array,
+    reason: 1 | 2,
+  ): Promise<RpcCancellationOutcome> => {
+    let resolveOutcome!: (outcome: RpcCancellationOutcome) => void;
+    const outcome = new Promise<RpcCancellationOutcome>((resolve) => {
+      resolveOutcome = resolve;
+    });
+    const timeout = setTimeout(
+      () => settleCancellationResult(correlationKey, "unconfirmed"),
+      CANCELLATION_RESULT_TIMEOUT_MS,
+    );
+    pendingCancellations.set(correlationKey, {
+      correlationId,
+      resolve: resolveOutcome,
+      timeout,
+    });
+    try {
+      await connection.send(
+        MSG_RPC_CANCELLATION,
+        RpcCodec.encodeCallerCancellation(correlationId, reason),
       );
-      pendingRpcs.set(correlationKey, { iterator, correlationId });
+    } catch {
+      settleCancellationResult(
+        correlationKey,
+        connection.getState() === ConnectionState.Closed ? "connection_closed" : "unconfirmed",
+      );
+    }
+    return await outcome;
+  };
 
-      try {
-        const payload = RpcCodec.encodeCallRequest(correlationId, route, options.body);
-        await connection.send(MSG_RPC_REQUEST, payload, options.signal);
-        yield* iterator;
-      } catch (error) {
-        cleanupPendingRpc(correlationKey, correlationId);
-        throw error;
-      } finally {
-        await iterator.return?.();
-      }
-    })();
+  const settleCancellationResult = (
+    correlationKey: bigint,
+    result: RpcCancellationOutcome,
+  ): void => {
+    const pending = pendingCancellations.get(correlationKey);
+    if (!pending) {
+      return;
+    }
+    pendingCancellations.delete(correlationKey);
+    clearTimeout(pending.timeout);
+    pending.resolve(result);
+    cleanupPendingRpc(correlationKey, pending.correlationId);
   };
 
   const registerWorkerInternal = async (
@@ -490,7 +442,11 @@ export function createRpcClient(connection: RpcConnectionPort): RpcClient {
     options: Required<RegisterWorkerOptions>,
     request = requestFrame,
   ): Promise<RegisteredWorker> => {
-    const payload = RpcCodec.encodeSubscribeWorker(route, options.maxConcurrency);
+    const payload = RpcCodec.encodeSubscribeWorker(
+      route,
+      options.maxConcurrency,
+      hasRpcCancellationCapability(connection),
+    );
     const parsed = parseStandardResponse(await request(MSG_RPC_SUBSCRIBE_WORKER, payload));
     if (!parsed.success) {
       throw new RpcError(
@@ -575,6 +531,42 @@ export function createRpcClient(connection: RpcConnectionPort): RpcClient {
         // Best-effort decode for background frames.
       }
     });
+
+    connection.registerNotificationHandler(MSG_RPC_LIFECYCLE, (payload: Uint8Array) => {
+      try {
+        if (!RpcCodec.isLifecycleControlPayload(payload)) {
+          return;
+        }
+        const control = RpcCodec.decodeLifecycleControl(payload);
+        const correlationKey = correlationIdToKey(control.correlationId);
+        if (control.kind === "worker_cancellation") {
+          const invocation = activeInvocations.get(correlationKey);
+          if (invocation) {
+            invocation.cancellationRequested = true;
+            clearTimeout(invocation.timer);
+            invocation.controller.abort(new RpcError("RPC call was cancelled", "CANCELLED"));
+            if (!invocation.started) {
+              activeInvocations.delete(correlationKey);
+              void connection
+                .send(MSG_RPC_CANCELLATION, RpcCodec.encodeWorkerCleanupAck(control.correlationId))
+                .catch(() => undefined);
+            }
+          }
+          return;
+        }
+        const results: Record<1 | 2 | 3 | 4 | 5 | 6, RpcCancellationOutcome> = {
+          1: "queued_removed",
+          2: "forwarded",
+          3: "worker_unsupported",
+          4: "already_terminal",
+          5: "unknown_or_unauthorized",
+          6: "forwarding_failed",
+        };
+        settleCancellationResult(correlationKey, results[control.status]);
+      } catch {
+        // Best-effort lifecycle control dispatch.
+      }
+    });
   };
 
   const handleRpcResponse = (
@@ -634,15 +626,52 @@ export function createRpcClient(connection: RpcConnectionPort): RpcClient {
     }
 
     const writer = createRpcResponseWriter(connection, req.correlationId);
+    const correlationKey = correlationIdToKey(req.correlationId);
+    const deadlineAt =
+      req.remainingBudgetMs === undefined ? undefined : performance.now() + req.remainingBudgetMs;
+    const invocation: ActiveRpcInvocation = {
+      controller: new AbortController(),
+      deadlineAt,
+      cancellationRequested: false,
+      started: false,
+    };
+    if (deadlineAt !== undefined) {
+      invocation.timer = setTimeout(
+        () => {
+          invocation.controller.abort(
+            new RpcError("RPC request deadline elapsed", "TIMEOUT", ErrCodeRpcTimeout),
+          );
+        },
+        Math.max(0, deadlineAt - performance.now()),
+      );
+    }
+    activeInvocations.set(correlationKey, invocation);
 
     const accepted = tryDispatchRpcHandler(async () => {
+      if (activeInvocations.get(correlationKey) !== invocation) {
+        writer.dispose();
+        return;
+      }
       try {
+        if (invocation.cancellationRequested) return;
+        if (deadlineAt !== undefined && deadlineAt <= performance.now()) {
+          invocation.controller.abort(
+            new RpcError("RPC request deadline elapsed", "TIMEOUT", ErrCodeRpcTimeout),
+          );
+          await writer.end({
+            body: encodeRpcErrorBody(ErrCodeRpcTimeout, "RPC request deadline elapsed"),
+          });
+          return;
+        }
+        if (invocation.controller.signal.aborted) return;
+        invocation.started = true;
         await registration.handler(
           {
             route: req.route,
             body: req.body,
           },
           writer,
+          createHandlerContext(invocation),
         );
       } catch (error) {
         if (isBenignShutdownError(error, connection)) {
@@ -658,21 +687,40 @@ export function createRpcClient(connection: RpcConnectionPort): RpcClient {
           // Best-effort error response.
         }
       } finally {
+        clearTimeout(invocation.timer);
+        if (activeInvocations.get(correlationKey) === invocation) {
+          activeInvocations.delete(correlationKey);
+        }
         // A handler that settles without ever sending a terminal frame
         // leaves the caller's iterator waiting until it hits the generic
         // call timeout, with nothing pointing at the actual cause — warn
         // here, with the route, so it's diagnosable instead of mysterious.
-        if (writer.needsTerminalWarning()) {
+        if (writer.needsTerminalWarning() && !invocation.controller.signal.aborted) {
           console.warn(
             `[fitz] RPC worker handler for route "${req.route}" completed without sending a terminal response (isEnd: true); the caller will hang until the call times out.`,
           );
         }
         writer.dispose();
+        // The broker may have ordered cancellation before a terminal response
+        // while its notification is still in transit. Always acknowledge cleanup
+        // when negotiated so that race cannot strand execution credit.
+        if (hasRpcCancellationCapability(connection)) {
+          try {
+            await connection.send(
+              MSG_RPC_CANCELLATION,
+              RpcCodec.encodeWorkerCleanupAck(req.correlationId),
+            );
+          } catch {
+            // The broker will reclaim this worker's credit when its session closes.
+          }
+        }
       }
     });
 
     if (!accepted) {
-      void sendBackpressureResponse(writer);
+      clearTimeout(invocation.timer);
+      activeInvocations.delete(correlationKey);
+      void sendBackpressureResponse(writer, req.correlationId);
     }
   };
 
@@ -685,7 +733,10 @@ export function createRpcClient(connection: RpcConnectionPort): RpcClient {
     return true;
   };
 
-  const sendBackpressureResponse = async (writer: ManagedResponseWriter): Promise<void> => {
+  const sendBackpressureResponse = async (
+    writer: ManagedResponseWriter,
+    id: Uint8Array,
+  ): Promise<void> => {
     try {
       await writer.end({
         body: encodeRpcErrorBody(ErrCodeRpcBackpressure, "Local RPC worker is overloaded"),
@@ -694,6 +745,11 @@ export function createRpcClient(connection: RpcConnectionPort): RpcClient {
       // Best-effort overload response.
     } finally {
       writer.dispose();
+      if (hasRpcCancellationCapability(connection)) {
+        await connection
+          .send(MSG_RPC_CANCELLATION, RpcCodec.encodeWorkerCleanupAck(id))
+          .catch(() => undefined);
+      }
     }
   };
 
@@ -752,6 +808,29 @@ function normalizeRegisterWorkerOptions(
   }
 
   return { maxConcurrency };
+}
+
+function hasRpcCancellationCapability(connection: ServerCapabilitiesPort): boolean {
+  return ((connection.getServerCapabilities?.().capabilities ?? 0) & CAP_RPC_CANCELLATION) !== 0;
+}
+
+function validateCallTimeout(timeoutMs: number): void {
+  if (!Number.isInteger(timeoutMs) || timeoutMs < 0 || timeoutMs > MAX_RPC_BUDGET_MS) {
+    throw new RpcError(
+      `Invalid rpc timeoutMs: ${timeoutMs} (expected integer in 0..=${MAX_RPC_BUDGET_MS})`,
+      "INVALID_OPTIONS",
+    );
+  }
+}
+
+function createHandlerContext(invocation: ActiveRpcInvocation): RpcHandlerContext {
+  return {
+    signal: invocation.controller.signal,
+    remainingTimeMs: () =>
+      invocation.deadlineAt === undefined
+        ? undefined
+        : Math.max(0, Math.floor(invocation.deadlineAt - performance.now())),
+  };
 }
 
 function rpcErrorCodeName(domainCode: number): string {

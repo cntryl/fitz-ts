@@ -68,8 +68,36 @@ contractual.
 
 ## Async Work
 
-- RPC calls return async iterators; cancellation and disconnect surface while
-  awaiting `next()`.
+- RPC calls return async iterators with an end-to-end `timeoutMs` budget.
+  With `CAP_RPC_CANCELLATION`, the call sends its remaining budget and `signal`
+  abort or iterator `return()` sends a best-effort remote cancellation. Read the
+  iterator's `cancellation` promise to observe the broker result. Workers receive
+  an `AbortSignal` and `remainingTimeMs()` in their handler context; forward both
+  cancellation and remaining time when an RPC handler calls another RPC.
+- Explicit A→B→C linking uses B's handler context for C's call. Each handler
+  awaits request-owned cleanup before returning; the SDK sends its negotiated
+  cleanup acknowledgment afterward, including terminal-response races.
+
+```typescript
+await client.rpc.registerWorker("rpc://realm/app/middle", async (request, writer, context) => {
+  const child = client.rpc.call("rpc://realm/app/leaf", {
+    body: request.body,
+    signal: context.signal,
+    timeoutMs: context.remainingTimeMs(),
+  });
+  try {
+    for await (const frame of child) await writer.write({ body: frame.body });
+    await writer.end();
+  } finally {
+    await child.return?.();
+  }
+});
+```
+
+- Cancellation after dispatch is cooperative. A forwarding result does not
+  prove remote cleanup, rollback, or that retrying is safe.
+- Without `CAP_RPC_CANCELLATION`, calls keep the legacy wire payload and local
+  cancellation does not stop work already admitted by a worker.
 - Async handler fan-out is bounded by `asyncHandlers.maxConcurrency`; waiting
   work is bounded independently by `asyncHandlers.queueCapacity` (default
   1,024), and `asyncHandlers.timeoutMs` reports handler deadlines.

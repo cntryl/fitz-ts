@@ -45,6 +45,14 @@ export interface ResponseWriter {
   }): Promise<void>;
 }
 
+/** Cancellation and the remaining monotonic request budget for one worker call. */
+export interface RpcHandlerContext {
+  /** Aborted when the caller disconnects, cancels, or the inherited deadline expires. */
+  signal: AbortSignal;
+  /** Current remaining budget in milliseconds, or undefined for a legacy request. */
+  remainingTimeMs(): number | undefined;
+}
+
 /**
  * Handles one admitted RPC request. The handler must call
  * {@link ResponseWriter.end} exactly once to terminate the caller's iterator;
@@ -52,7 +60,11 @@ export interface ResponseWriter {
  * a best-effort terminal error response. Handler concurrency is bounded by the
  * registration and the client's shared async-handler dispatcher.
  */
-export type RpcHandler = (req: InboundRequest, writer: ResponseWriter) => Promise<void>;
+export type RpcHandler = (
+  req: InboundRequest,
+  writer: ResponseWriter,
+  context: RpcHandlerContext,
+) => Promise<void>;
 
 /** Limits for an RPC worker registration. */
 export interface RegisterWorkerOptions {
@@ -83,10 +95,30 @@ export function createRpcSubscription(
 export interface RequestOptions {
   /** Request payload delivered to the selected worker. */
   body: Uint8Array;
-  /** Broker RPC deadline in milliseconds. Defaults to the client request timeout. */
+  /** End-to-end RPC budget in milliseconds. Defaults to the client request timeout. */
   timeoutMs?: number;
-  /** Cancels local iteration/waiting; it cannot retract work already admitted by a worker. */
+  /** Cancels local waiting and requests best-effort remote cancellation when negotiated. */
   signal?: AbortSignal;
+}
+
+/** Caller-visible result of a best-effort remote cancellation request. */
+export type RpcCancellationOutcome =
+  | "not_requested"
+  | "request_not_sent"
+  | "unsupported"
+  | "queued_removed"
+  | "forwarded"
+  | "worker_unsupported"
+  | "already_terminal"
+  | "unknown_or_unauthorized"
+  | "forwarding_failed"
+  | "unconfirmed"
+  | "connection_closed";
+
+/** Streaming call handle, including the broker's remote-cancellation result. */
+export interface RpcCallIterator extends AsyncIterableIterator<ResponseFrame> {
+  /** Resolves after local abandonment and broker response, or normal completion. */
+  readonly cancellation: Promise<RpcCancellationOutcome>;
 }
 
 /**

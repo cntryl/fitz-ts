@@ -39,6 +39,7 @@ class FakeTransport implements Transport {
   public connectError: Error | null = null;
   public gateAfterSends = 0;
   public heartbeatMode: "resolve" | "timeout" = "resolve";
+  public helloOnConnect = true;
   private reads: Array<Uint8Array | Error> = [];
   private pendingRead: {
     resolve: (value: Uint8Array) => void;
@@ -64,6 +65,13 @@ class FakeTransport implements Transport {
     this.concurrentSends += 1;
     this.maxConcurrentSends = Math.max(this.maxConcurrentSends, this.concurrentSends);
     this.sent.push(data);
+    if (
+      this.helloOnConnect &&
+      FrameCodec.decodeFrame(data).messageType === MSG_CONNECT &&
+      this.reads.length === 0
+    ) {
+      this.pushRead(FrameCodec.encodeFrame(MSG_SERVER_HELLO, new Uint8Array([0, 1, 0, 0, 0, 0])));
+    }
     if (this.sendGate && this.sent.length > this.gateAfterSends) {
       await this.sendGate;
     }
@@ -144,10 +152,11 @@ class FailingSendTransport extends FakeTransport {
 
   async send(data: Uint8Array): Promise<void> {
     this.sendCount += 1;
-    this.sent.push(data);
     if (this.sendCount > 1) {
+      this.sent.push(data);
       throw this.failure;
     }
+    await super.send(data);
   }
 }
 
@@ -1070,6 +1079,7 @@ describe("Connection", () => {
   it("keeps the default auth rejection window open for a delayed broker rejection", async () => {
     vi.useFakeTimers();
     const transport = new FakeTransport();
+    transport.helloOnConnect = false;
     const factory = vi.fn<() => Transport>().mockReturnValue(transport);
     const connection = createConnection(factory, async () => "bad-token");
     try {
@@ -1097,6 +1107,7 @@ describe("Connection", () => {
     // "connect_failed"/"reconnect_failed" event for one incident.
     vi.useFakeTimers();
     const transport = new FakeTransport();
+    transport.helloOnConnect = false;
     const factory = vi.fn<() => Transport>().mockReturnValue(transport);
     const events: FitzLifecycleEvent[] = [];
     const connection = createConnection(factory, async () => "bad-token", {
@@ -1126,7 +1137,7 @@ describe("Connection", () => {
     }
   });
 
-  it("should reconnect after a settled session drops before the first server frame", async () => {
+  it("should reconnect after a negotiated session drops before the first domain response", async () => {
     const first = new FakeTransport();
     const second = new FakeTransport();
     const events: FitzLifecycleEvent[] = [];
@@ -1147,7 +1158,7 @@ describe("Connection", () => {
     });
 
     await connection.connect();
-    first.fail(new Error("network lost after silent auth settled"));
+    first.fail(new Error("network lost after capability negotiation"));
 
     await vi.waitFor(() => {
       expect(connection.isConnected()).toBe(true);
@@ -1442,6 +1453,7 @@ describe("Connection", () => {
 
   it("aborts connect when the signal is canceled during auth settle", async () => {
     const transport = new FakeTransport();
+    transport.helloOnConnect = false;
     const connection = createConnection(
       () => transport,
       () => "",

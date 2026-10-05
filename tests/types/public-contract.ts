@@ -4,6 +4,7 @@ import type {
   NoticeClient,
   QueueClient,
   RpcClient,
+  RpcHandlerContext,
   ScheduleClient,
   StreamClient,
 } from "../../src/index.node";
@@ -29,6 +30,20 @@ void queue.reserve("queue://realm/area/resource", {
 });
 const frames = rpc.call("rpc://realm/area/resource", { body: bytes });
 void frames.next();
+void frames.cancellation;
+const rpcHandlerContext: RpcHandlerContext = {
+  signal: AbortSignal.timeout(1),
+  remainingTimeMs: () => 10,
+};
+void rpcHandlerContext.remainingTimeMs();
+void rpc.registerWorker("rpc://realm/area/resource", async (_request, _writer, context) => {
+  await rpc
+    .call("rpc://realm/area/downstream", {
+      body: bytes,
+      timeoutMs: context.remainingTimeMs(),
+    })
+    .next();
+});
 void lease.acquire("lease://realm/area/resource", { ttlSeconds: 30, waitSeconds: 1 });
 void notice.publish("notice://realm/area/resource", { body: bytes });
 void schedule.create("schedule://realm/area/resource/run", {

@@ -73,9 +73,10 @@ if (packMetadata.entryCount > 20) {
   throw new Error(`tarball contains ${packMetadata.entryCount} files; maximum is 20`);
 }
 // Public declarations and source maps are emitted into all Node/browser
-// variants. Keep bounded headroom for API growth while rejecting build debris.
-if (packMetadata.unpackedSize > 2_950_000) {
-  throw new Error(`tarball unpacks to ${packMetadata.unpackedSize} bytes; maximum is 2950000`);
+// variants. The measured package with cancellation context/iterator is
+// 2,989,086 bytes; keep a 3 MB bound while rejecting build debris.
+if (packMetadata.unpackedSize > 3_000_000) {
+  throw new Error(`tarball unpacks to ${packMetadata.unpackedSize} bytes; maximum is 3000000`);
 }
 
 run("npm", ["init", "-y"], { cwd: smokeDir, stdio: "ignore" });

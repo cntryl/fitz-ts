@@ -29,6 +29,8 @@ export const CAP_CORRELATION = 1 << 0;
 export const CAP_SESSION_METADATA = 1 << 1;
 /** Broker accepts the trailing start_exclusive byte on KV SCAN requests. */
 export const CAP_KV_SCAN_EXCLUSIVE = 1 << 2;
+/** Broker negotiates RPC cancellation and remaining request budgets. */
+export const CAP_RPC_CANCELLATION = 1 << 3;
 
 // KV Domain (100-199)
 export const MSG_KV_BEGIN = 100;
@@ -59,6 +61,8 @@ export const MSG_RPC_SUBSCRIBE_WORKER = 300;
 export const MSG_RPC_UNSUBSCRIBE_WORKER = 301;
 export const MSG_RPC_REQUEST = 302;
 export const MSG_RPC_RESPONSE = 303;
+export const MSG_RPC_CANCELLATION = 304;
+export const MSG_RPC_LIFECYCLE = 305;
 
 // Lease Domain (400-499)
 export const MSG_LEASE_ACQUIRE = 400;

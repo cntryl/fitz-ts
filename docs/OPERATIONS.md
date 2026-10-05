@@ -14,7 +14,13 @@ The client transitions through these states:
 - `RECONNECTING`
 - `CLOSED`
 
-`connect()` opens the selected transport, sends `CONNECT`, and treats the connection as authenticated only after the auth settle window passes without the broker closing the socket. The initial `connect()` attempt is one-shot; it does not retry a broker that is not listening yet.
+`connect()` opens the selected transport, sends `CONNECT`, and waits for a parsed
+`SERVER_HELLO` within the configured request timeout. The first domain command
+therefore uses the advertised capabilities even when the broker responds slowly.
+An explicit zero capability advertisement preserves legacy behavior. A missing
+advertisement times out and closes the transport. `authSettleDelayMs` remains a
+deprecated configuration field. The initial `connect()` attempt is one-shot; it
+does not retry a broker that is not listening yet.
 
 On a live client, `connect()` is idempotent. Concurrent callers share the same
 initial connect or reconnect lifecycle instead of creating replacement
