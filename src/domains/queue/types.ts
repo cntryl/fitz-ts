@@ -59,12 +59,6 @@ export function createQueueItem(
     const decoded = QueueCodec.decodeExtendResponse(response);
 
     if (decoded.status !== QueueStatus.Ok) {
-      // EXTEND never carries a real numeric domain error code on the wire
-      // (decodeExtendResponse's errorCode is always undefined) — falling
-      // back to `decoded.status` here would collide with the small
-      // domain-status enum (status 1 === QueueStatus.QueueNotFound) and
-      // mislabel every failure as "QueueNotFound" regardless of the real
-      // cause (e.g. an expired lease). Use a generic, honest code instead.
       const reason = decoded.errorMessage ?? "EXTEND_FAILED";
       throw new QueueError(`EXTEND failed: ${reason}`, "EXTEND_FAILED", decoded.errorCode);
     }
@@ -77,8 +71,6 @@ export function createQueueItem(
     const decoded = QueueCodec.decodeCompleteResponse(response);
 
     if (decoded.status !== QueueStatus.Ok) {
-      // Same reasoning as extend() above: COMPLETE's plain response never
-      // carries a real domain error code either.
       const reason = decoded.errorMessage ?? "COMPLETE_FAILED";
       throw new QueueError(`COMPLETE failed: ${reason}`, "COMPLETE_FAILED", decoded.errorCode);
     }

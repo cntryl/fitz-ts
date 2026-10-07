@@ -57,7 +57,7 @@ export function parseStandardResponse(payload: Uint8Array): ParsedResponse {
   });
 }
 
-/** Parse domains whose error envelope omits the numeric domain code. */
+/** Parse legacy plain errors and coded ingress rejections, rejecting ambiguous envelopes. */
 export function parsePlainResponse(payload: Uint8Array): ParsedResponse {
   if (payload.length === 0) {
     throw new ProtocolError("Response payload is empty", undefined, { payloadLength: 0 });
@@ -71,6 +71,12 @@ export function parsePlainResponse(payload: Uint8Array): ParsedResponse {
   if (status !== 1) {
     throw new ProtocolError(`Unknown response status: ${status}`, status, { status });
   }
+
+  const view = new DataView(payload.buffer, payload.byteOffset, payload.byteLength);
+  const plain = payload.length >= 5 && view.getUint32(1) === payload.length - 5;
+  const coded = payload.length >= 9 && view.getUint32(5) === payload.length - 9;
+  if (plain === coded) throw new ProtocolError("Malformed or ambiguous error response");
+  if (coded) return parseStandardResponse(payload);
 
   const error = reader.readString();
   if (!reader.isEOF()) {

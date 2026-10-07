@@ -302,3 +302,16 @@ uncertain extend invalidates the handle.
 - [`CLIENT_SPEC.md`](CLIENT_SPEC.md)
 - [`CLIENT_ACCEPTANCE_CRITERIA.md`](CLIENT_ACCEPTANCE_CRITERIA.md)
 - [`CHANGELOG.md`](CHANGELOG.md)
+
+### Queue backpressure and acknowledgement retries
+
+Queue capacity error `4005` means the request was rejected before admission.
+Use bounded backoff and a cancellation or deadline budget. For a rejected ACK,
+keep the existing reservation and retry its completion while the lease remains
+valid; do not rerun the work handler just to retry the ACK. Successful completion
+closes the reservation.
+
+A timeout, disconnect, cancellation after sending, or error `4007` can leave the
+outcome unknown. Do not blindly replay enqueue, reserve, or completion in those
+cases. Reconnection invalidates old reservation handles. A retryable error is a
+classification, not a guarantee of automatic retries or exactly-once processing.

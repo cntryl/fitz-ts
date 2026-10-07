@@ -443,19 +443,13 @@ export function createScheduleClient(connection: ScheduleConnectionPort): Schedu
       throw new ScheduleError(
         `${operation} failed: ${result.error ?? "unknown error"}`,
         `${operation}_FAILED`,
+        result.errorCode,
       );
     }
     return result.data;
   };
 
-  const assertExtensionSuccess = (payload: Uint8Array, operation: string): Uint8Array => {
-    if (payload.length >= 5 && payload[0] === 1) {
-      const plainLength =
-        (payload[1]! * 0x1000000 + (payload[2]! << 16) + (payload[3]! << 8) + payload[4]!) >>> 0;
-      if (plainLength + 5 === payload.length) return assertPlainSuccess(payload, operation);
-    }
-    return assertSuccess(payload, operation);
-  };
+  const assertExtensionSuccess = assertPlainSuccess;
 
   const mapErrorCode = (message?: string): string => {
     const normalized = message?.toLowerCase() ?? "";

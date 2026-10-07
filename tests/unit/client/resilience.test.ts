@@ -459,3 +459,56 @@ describe("Connection resilience", () => {
     await connection.close();
   });
 });
+
+it("should cancel queue enqueue during capacity backoff", async () => {
+  // Arrange
+  const transport = new ScriptedTransport();
+  let backoffStarted!: () => void;
+  const backoff = new Promise<void>((resolve) => {
+    backoffStarted = resolve;
+  });
+  transport.onFrame = (frame, active) => {
+    if (frame.messageType === MSG_QUEUE_ENQUEUE) {
+      active.pushRead(
+        FrameCodec.encodeFrame(MSG_QUEUE_ENQUEUE, encodeQueueError(4005, "not accepted")),
+      );
+    }
+  };
+  const connection = createConnection(
+    () => transport,
+    () => "",
+    {
+      authSettleDelayMs: 0,
+      retry: { enabled: true, maxAttempts: 3, backoffMs: 10000, maxBackoffMs: 10000 },
+      observability: {
+        logger: {
+          log: (_level, event) => {
+            if (event === "fitz.request.retry") backoffStarted();
+          },
+        },
+      },
+    },
+  );
+  await connection.connect();
+  const controller = new AbortController();
+  const pending = createQueueClient(connection).enqueue("queue://realm/area/jobs", {
+    body: new Uint8Array(),
+    signal: controller.signal,
+  });
+  const rejected = expect(pending).rejects.toMatchObject({ name: "AbortError" });
+  await backoff;
+  // Act
+  controller.abort();
+  // Assert
+  try {
+    await Promise.race([
+      rejected,
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error("backoff ignored cancellation")), 100),
+      ),
+    ]);
+    expect(transport.sentCount(MSG_QUEUE_ENQUEUE)).toBe(1);
+  } finally {
+    await connection.close();
+  }
+});

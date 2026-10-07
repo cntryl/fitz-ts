@@ -219,3 +219,16 @@ describe("ScheduleClient domain errors", () => {
     });
   });
 });
+
+it("should preserve ingress capacity when canceling schedule", async () => {
+  // Arrange
+  const writer = createBufferWriter(100);
+  writer.writeU8(1);
+  writer.writeU32BE(7010);
+  writer.writeString("not accepted");
+  const client = createScheduleClient(new FakeScheduleConnection(writer.getBuffer()));
+  // Act
+  const result = client.cancel("schedule://realm/area/resource/run");
+  // Assert
+  await expect(result).rejects.toMatchObject({ domainCode: 7010 });
+});
