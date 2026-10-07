@@ -202,6 +202,7 @@ export function createQueueClient(connection: QueueConnectionPort): QueueClient 
       {
         domain: "queue",
         operation: "enqueue",
+        signal: options.signal,
         retryClass: "confirmed_negative_retry",
       },
       async () => {

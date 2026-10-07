@@ -176,7 +176,7 @@ function isTransientQueueCommitFailure(error: FitzError): boolean {
   );
 }
 
-/** Returns whether Fitz classifies `error` as safe for an automatic operation retry. */
+/** Classifies transient errors; each operation separately controls whether replay is safe. */
 export function isRetryable(error: unknown): boolean {
   if (!(error instanceof FitzError)) {
     return false;
@@ -187,8 +187,8 @@ export function isRetryable(error: unknown): boolean {
   }
 
   const key = retryableKey(error);
-  if (key !== null && retryableErrorCodes.has(key)) {
-    return true;
+  if (key !== null) {
+    return retryableErrorCodes.has(key);
   }
 
   return isTransientQueueCommitFailure(error);

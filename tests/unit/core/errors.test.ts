@@ -213,3 +213,16 @@ describe("core errors", () => {
     );
   });
 });
+
+it("should treat coded Queue unknown outcomes as terminal regardless of message text", () => {
+  // Arrange
+  const error = new QueueError(
+    'Failed to commit transaction: WriteStall("Memory budget exceeded")',
+    "ERROR",
+    4007,
+  );
+  // Act
+  const retryable = isRetryable(error);
+  // Assert
+  expect(retryable).toBe(false);
+});

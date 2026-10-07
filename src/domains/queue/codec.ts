@@ -10,7 +10,7 @@ import {
   writeU64BENumberAt,
   type BufferReader,
 } from "../../core/buffer";
-import { parseStandardResponse } from "../../protocol/response";
+import { parsePlainResponse, parseStandardResponse } from "../../protocol/response";
 import { QueueError } from "../../core/errors";
 import { isRouteShape, routeMatchesPattern } from "../_routes";
 import {
@@ -41,11 +41,11 @@ function parseQueueResponse(payload: Uint8Array): ParsedQueueResponse {
 }
 
 function parsePlainQueueResponse(payload: Uint8Array): ParsedQueueResponse {
-  const reader = createBufferReader(payload);
-  const status = reader.readU8();
-  if (status === 0) return { status: 0, reader };
-  if (status !== 1) throw new RangeError(`Unknown Queue response status: ${status}`);
-  return { status: 1, errorMessage: reader.readString() };
+  const parsed = parsePlainResponse(payload);
+  if (!parsed.success) {
+    return { status: 1, errorCode: parsed.errorCode, errorMessage: parsed.error };
+  }
+  return { status: 0, reader: createBufferReader(parsed.data) };
 }
 
 export const QueueCodec = {
@@ -203,6 +203,8 @@ export const QueueCodec = {
       return response;
     }
 
+    if (!response.reader.isEOF())
+      throw new QueueError("COMPLETE response has trailing bytes", "INVALID_RESPONSE");
     return { status: 0 };
   },
 
@@ -238,6 +240,8 @@ export const QueueCodec = {
       return response;
     }
 
+    if (!response.reader.isEOF())
+      throw new QueueError("EXTEND response has trailing bytes", "INVALID_RESPONSE");
     return { status: 0 };
   },
 

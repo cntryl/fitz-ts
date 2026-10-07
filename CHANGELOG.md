@@ -6,6 +6,14 @@ The format is based on Keep a Changelog and the project follows Semantic Version
 
 ## [Unreleased]
 
+### Fixed
+
+- Treat coded Queue unknown outcomes as terminal even when their diagnostic text resembles a historical transient storage error.
+
+- Preserve coded Queue admission failures alongside legacy plain errors, including retryable capacity rejection and terminal unknown outcomes.
+- Preserve coded Schedule admission failures on legacy plain-response operations.
+- Cancel Queue enqueue backoff promptly through the caller AbortSignal. Update the transitive source-map-js dependency to its patched version.
+
 ### Added
 
 - Configure an optional friendly service name, trimmed and sent only after the broker advertises session metadata.
