@@ -1,5 +1,6 @@
 import type {
   KvClient,
+  KvTransaction,
   LeaseClient,
   NoticeClient,
   QueueClient,
@@ -19,7 +20,6 @@ declare const stream: StreamClient;
 declare const bytes: Uint8Array;
 
 void kv.begin("kv://realm/area/resource", {
-  durability: "Sync",
   signal: AbortSignal.timeout(1),
 });
 void queue.enqueue("queue://realm/area/resource", { body: bytes, delaySeconds: 2 });
@@ -71,3 +71,11 @@ void stream.read("stream://**", 0n, 100);
 void stream.readPage("stream://**", 0n, 100);
 // @ts-expect-error subscription iterator alias was removed
 void stream.subscribeIterator("stream://**");
+
+declare const transaction: KvTransaction;
+void transaction.commit({ durability: "Buffered" });
+void transaction.commit({ durability: "Sync" });
+// @ts-expect-error COMMIT requires an explicit persistence choice
+void transaction.commit();
+// @ts-expect-error persistence belongs at COMMIT
+void kv.begin("kv://realm/area/resource", { durability: "Sync" });

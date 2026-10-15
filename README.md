@@ -28,9 +28,9 @@ const client = createClient({
 
 await client.connect();
 
-const tx = await client.kv.begin("kv://realm/area/users", { durability: "Sync" });
+const tx = await client.kv.begin("kv://realm/area/users");
 await tx.put(new TextEncoder().encode("user-1"), new TextEncoder().encode('{"name":"Alice"}'));
-await tx.commit();
+await tx.commit({ durability: "Sync" });
 
 await client.close();
 ```
@@ -315,3 +315,7 @@ A timeout, disconnect, cancellation after sending, or error `4007` can leave the
 outcome unknown. Do not blindly replay enqueue, reserve, or completion in those
 cases. Reconnection invalidates old reservation handles. A retryable error is a
 classification, not a guarantee of automatic retries or exactly-once processing.
+
+### Commit-time persistence
+
+KV BEGIN selects only scope and transaction mode. Choose Buffered or Sync explicitly at each KV and Stream COMMIT. Buffered maps to local Buffered or cloud CloudAsync; Sync maps to local Sync or cloud CloudStrict without downgrade. Disposal rolls back uncommitted work. Queue is best effort.

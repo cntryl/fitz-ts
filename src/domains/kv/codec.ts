@@ -21,15 +21,14 @@ import {
 } from "./types";
 
 export const KvCodec = {
-  encodeBegin(route: string, mode: TxMode, durability: DurabilityMode): Uint8Array {
+  encodeBegin(route: string, mode: TxMode): Uint8Array {
     const routeBytes = getRouteEncoding(route);
-    const buffer = new Uint8Array(routeBytes.length + 2);
+    const buffer = new Uint8Array(routeBytes.length + 1);
     let offset = 0;
 
     buffer.set(routeBytes, offset);
     offset += routeBytes.length;
-    buffer[offset++] = mode === "ReadWrite" ? 1 : 0;
-    buffer[offset] = this.encodeDurability(durability);
+    buffer[offset] = mode === "ReadWrite" ? 1 : 0;
     return buffer;
   },
 
@@ -134,18 +133,15 @@ export const KvCodec = {
     return buffer;
   },
 
-  encodeCommit(txId: bigint, route: string): Uint8Array {
-    const routeBytes = getRouteEncoding(route);
-    const buffer = new Uint8Array(8 + routeBytes.length);
-    let offset = 0;
-
-    offset = writeU64BEAt(buffer, offset, txId);
-    buffer.set(routeBytes, offset);
+  encodeCommit(txId: bigint, route: string, durability: DurabilityMode): Uint8Array {
+    const value = this.encodeDurability(durability);
+    const buffer = encodeTransactionScope(txId, route, 1);
+    buffer[buffer.length - 1] = value;
     return buffer;
   },
 
   encodeRollback(txId: bigint, route: string): Uint8Array {
-    return this.encodeCommit(txId, route);
+    return encodeTransactionScope(txId, route, 0);
   },
 
   encodeScan(txId: bigint, route: string, options: KvScanOptions = {}): Uint8Array {
@@ -247,3 +243,11 @@ export const KvCodec = {
     }
   },
 };
+
+function encodeTransactionScope(txId: bigint, route: string, extraBytes: number): Uint8Array {
+  const routeBytes = getRouteEncoding(route);
+  const buffer = new Uint8Array(8 + routeBytes.length + extraBytes);
+  writeU64BEAt(buffer, 0, txId);
+  buffer.set(routeBytes, 8);
+  return buffer;
+}

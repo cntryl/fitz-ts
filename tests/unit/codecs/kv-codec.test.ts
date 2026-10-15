@@ -19,10 +19,9 @@ describe("KvCodec", () => {
       // Arrange
       const route = "kv://acme/app/users";
       const mode = "ReadWrite";
-      const durability = "Sync";
 
       // Act
-      const encoded = KvCodec.encodeBegin(route, mode, durability);
+      const encoded = KvCodec.encodeBegin(route, mode);
 
       // Assert
       expect(encoded).toBeInstanceOf(Uint8Array);
@@ -31,7 +30,7 @@ describe("KvCodec", () => {
 
     it("should_encode_begin_read_only_mode", () => {
       // Arrange/Act
-      const encoded = KvCodec.encodeBegin("kv://test/app/data", "ReadOnly", "Buffered");
+      const encoded = KvCodec.encodeBegin("kv://test/app/data", "ReadOnly");
 
       // Assert: Verify encoding is valid
       const reader = createBufferReader(encoded);
@@ -39,15 +38,12 @@ describe("KvCodec", () => {
       expect(route).toBe("kv://test/app/data");
     });
 
-    it("should_encode_begin_with_different_durabilities", () => {
-      const testCases = [
-        { durability: "Buffered", desc: "Buffered durability" },
-        { durability: "Sync", desc: "Sync durability" },
-      ] as const;
-
-      for (const tc of testCases) {
-        const encoded = KvCodec.encodeBegin("kv://test/app/data", "ReadWrite", tc.durability);
-        expect(encoded.length).toBeGreaterThan(0);
+    it("should_encode_begin_with_each_access_mode", () => {
+      for (const mode of ["ReadOnly", "ReadWrite"] as const) {
+        const reader = createBufferReader(KvCodec.encodeBegin("kv://test/app/data", mode));
+        expect(reader.readString()).toBe("kv://test/app/data");
+        expect(reader.readU8()).toBe(mode === "ReadWrite" ? 1 : 0);
+        expect(reader.isEOF()).toBe(true);
       }
     });
   });
@@ -387,7 +383,7 @@ describe("KvCodec", () => {
   describe("COMMIT encoding", () => {
     it("should_encode_commit", () => {
       // Arrange/Act
-      const encoded = KvCodec.encodeCommit(100n, "kv://test/app/data");
+      const encoded = KvCodec.encodeCommit(100n, "kv://test/app/data", "Sync");
 
       // Assert
       const reader = createBufferReader(encoded);
@@ -411,10 +407,9 @@ describe("KvCodec", () => {
       // Arrange
       const route = "kv://acme/payments/invoices";
       const mode = "ReadWrite";
-      const durability = "Sync";
 
       // Act
-      const encoded = KvCodec.encodeBegin(route, mode, durability);
+      const encoded = KvCodec.encodeBegin(route, mode);
       const response = buildU64Response(999n);
       const decoded = KvCodec.decodeBeginResponse(response);
 

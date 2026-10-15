@@ -13,9 +13,13 @@ export type DurabilityMode = "Buffered" | "Sync";
 export interface KvBeginOptions {
   /** Access mode. Defaults to `ReadWrite`. */
   mode?: TxMode;
-  /** Required acknowledgement/durability level for commit. */
-  durability: DurabilityMode;
   /** Cancels transaction creation; it does not cancel an already-created transaction. */
+  signal?: AbortSignal;
+}
+
+/** Commit persistence. */
+export interface KvCommitOptions {
+  durability: DurabilityMode;
   signal?: AbortSignal;
 }
 

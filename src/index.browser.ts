@@ -133,6 +133,7 @@ export type {
   TxMode,
   DurabilityMode,
   KvBeginOptions,
+  KvCommitOptions,
   KvGetResult,
   KvHandler,
   KvNotification,

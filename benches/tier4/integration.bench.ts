@@ -6,7 +6,7 @@ import { QueueCodec } from "../../src/domains/queue/codec";
 import { ScheduleCodec } from "../../src/domains/schedule/codec";
 import { StreamCodec } from "../../src/domains/stream/codec";
 import { COMPOSITE_SYNC_BATCH_SIZE, benchBatch } from "../_bench";
-import { durability, payloads, routes, scheduleCron, streamMetadata } from "../_shared";
+import { payloads, routes, scheduleCron, streamMetadata } from "../_shared";
 
 const body = payloads.integration;
 
@@ -14,7 +14,7 @@ describe("fitz-ts integration benchmarks", () => {
   benchBatch("encode frame + notice + kv begin", COMPOSITE_SYNC_BATCH_SIZE, () => {
     const noticePayload = NoticeCodec.encodePublish(routes.notice, body);
     FrameCodec.encodeFrame(401, noticePayload);
-    return KvCodec.encodeBegin(routes.kv, "ReadWrite", durability);
+    return KvCodec.encodeBegin(routes.kv, "ReadWrite");
   });
 
   benchBatch(

@@ -219,9 +219,9 @@ describe(`Fitz conformance — fitz-ts [transport=${TRANSPORT}, auth=${AUTH_MODE
         expect(connected).toBe(true);
 
         const route = uniqueRoute("kv");
-        const tx = await client.kv.begin(route, { durability: "Sync" });
+        const tx = await client.kv.begin(route, {});
         await tx.put({ key: b("cs001-key"), value: b("cs001-value") });
-        await tx.commit();
+        await tx.commit({ durability: "Sync" });
         evidence.push("first domain request (kv) succeeded");
 
         return { verdict: "pass", evidence };
@@ -260,9 +260,7 @@ describe(`Fitz conformance — fitz-ts [transport=${TRANSPORT}, auth=${AUTH_MODE
           }
           // If still connected but domain ops fail, that's partial
           try {
-            await client.kv.begin(uniqueRoute("kv"), {
-              durability: "Sync",
-            });
+            await client.kv.begin(uniqueRoute("kv"), {});
             evidence.push("domain request unexpectedly succeeded — verdict partial");
             return { verdict: "partial", evidence };
           } catch {
@@ -319,12 +317,12 @@ describe(`Fitz conformance — fitz-ts [transport=${TRANSPORT}, auth=${AUTH_MODE
       await withClient({}, async (client) => {
         const route = uniqueRoute("kv");
 
-        const tx = await client.kv.begin(route, { durability: "Sync" });
+        const tx = await client.kv.begin(route, {});
         await tx.put({ key: b("user:1"), value: b("Alice") });
-        await tx.commit();
+        await tx.commit({ durability: "Sync" });
         evidence.push("kv begin/put/commit succeeded");
 
-        const rtx = await client.kv.begin(route, { mode: "ReadOnly", durability: "Sync" });
+        const rtx = await client.kv.begin(route, { mode: "ReadOnly" });
         const result = await rtx.get({ key: b("user:1") });
         expect(result.type).toBe("found");
         if (result.type === "found") {
@@ -354,9 +352,9 @@ describe(`Fitz conformance — fitz-ts [transport=${TRANSPORT}, auth=${AUTH_MODE
 
         // Client must still be usable
         const route = uniqueRoute("kv");
-        const tx = await client.kv.begin(route, { durability: "Sync" });
+        const tx = await client.kv.begin(route, {});
         await tx.put({ key: b("k"), value: b("v") });
-        await tx.commit();
+        await tx.commit({ durability: "Sync" });
         evidence.push("client remains usable after unknown-route error");
       });
 
@@ -376,13 +374,13 @@ describe(`Fitz conformance — fitz-ts [transport=${TRANSPORT}, auth=${AUTH_MODE
         const route = uniqueRoute("kv");
 
         // Write key once
-        const tx1 = await client.kv.begin(route, { durability: "Sync" });
+        const tx1 = await client.kv.begin(route, {});
         await tx1.insert({ key: b("dup-key"), value: b("first") });
-        await tx1.commit();
+        await tx1.commit({ durability: "Sync" });
         evidence.push("first insert succeeded");
 
         // Attempting insert on an existing key is a server-rejected operation
-        const tx2 = await client.kv.begin(route, { durability: "Sync" });
+        const tx2 = await client.kv.begin(route, {});
         let caught: unknown;
         try {
           await tx2.insert({ key: b("dup-key"), value: b("second") });
@@ -395,7 +393,7 @@ describe(`Fitz conformance — fitz-ts [transport=${TRANSPORT}, auth=${AUTH_MODE
         evidence.push(`duplicate insert threw: ${(caught as Error).constructor.name}`);
 
         // Client must remain usable
-        const rtx = await client.kv.begin(route, { mode: "ReadOnly", durability: "Sync" });
+        const rtx = await client.kv.begin(route, { mode: "ReadOnly" });
         const val = await rtx.get({ key: b("dup-key") });
         expect(val.type).toBe("found");
         evidence.push("client remains usable after server-rejected operation");
@@ -431,11 +429,11 @@ describe(`Fitz conformance — fitz-ts [transport=${TRANSPORT}, auth=${AUTH_MODE
 
         // Also verify that kv insert conflict carries a domainCode
         const kvRoute = uniqueRoute("kv");
-        const tx = await client.kv.begin(kvRoute, { durability: "Sync" });
+        const tx = await client.kv.begin(kvRoute, {});
         await tx.insert({ key: b("x"), value: b("1") });
-        await tx.commit();
+        await tx.commit({ durability: "Sync" });
 
-        const tx2 = await client.kv.begin(kvRoute, { durability: "Sync" });
+        const tx2 = await client.kv.begin(kvRoute, {});
         let kvErr: unknown;
         try {
           await tx2.insert({ key: b("x"), value: b("2") });
@@ -502,9 +500,9 @@ describe(`Fitz conformance — fitz-ts [transport=${TRANSPORT}, auth=${AUTH_MODE
 
         // Connection still healthy
         const kvRoute = uniqueRoute("kv");
-        const tx = await callerClient.kv.begin(kvRoute, { durability: "Sync" });
+        const tx = await callerClient.kv.begin(kvRoute, {});
         await tx.put({ key: b("post-timeout"), value: b("ok") });
-        await tx.commit();
+        await tx.commit({ durability: "Sync" });
         evidence.push("connection healthy after timeout");
 
         await sub.unsubscribe().catch(() => undefined);
@@ -581,9 +579,9 @@ describe(`Fitz conformance — fitz-ts [transport=${TRANSPORT}, auth=${AUTH_MODE
 
         // Subsequent request should succeed
         const kvRoute = uniqueRoute("kv");
-        const tx = await callerClient.kv.begin(kvRoute, { durability: "Sync" });
+        const tx = await callerClient.kv.begin(kvRoute, {});
         await tx.put({ key: b("after-cancel"), value: b("ok") });
-        await tx.commit();
+        await tx.commit({ durability: "Sync" });
         evidence.push("subsequent request succeeded after cancellation");
       } finally {
         await workerClient.close().catch(() => undefined);
@@ -697,9 +695,9 @@ describe(`Fitz conformance — fitz-ts [transport=${TRANSPORT}, auth=${AUTH_MODE
         });
         await client2.connect();
         const route = uniqueRoute("kv");
-        const tx = await client2.kv.begin(route, { durability: "Sync" });
+        const tx = await client2.kv.begin(route, {});
         await tx.put({ key: b("after-reconnect"), value: b("ok") });
-        await tx.commit();
+        await tx.commit({ durability: "Sync" });
         evidence.push("new requests succeed after reconnect (new client)");
         await client2.close().catch(() => undefined);
 
@@ -839,9 +837,9 @@ describe(`Fitz conformance — fitz-ts [transport=${TRANSPORT}, auth=${AUTH_MODE
 
         // Client must remain usable (no resource leak)
         const kvRoute = uniqueRoute("kv");
-        const tx = await client.kv.begin(kvRoute, { durability: "Sync" });
+        const tx = await client.kv.begin(kvRoute, {});
         await tx.put({ key: b("after-stream-error"), value: b("ok") });
-        await tx.commit();
+        await tx.commit({ durability: "Sync" });
         evidence.push("client still usable after stream error");
       });
 
@@ -862,10 +860,10 @@ describe(`Fitz conformance — fitz-ts [transport=${TRANSPORT}, auth=${AUTH_MODE
         const routes = [uniqueRoute("kv"), uniqueRoute("kv"), uniqueRoute("kv")];
 
         const tasks = routes.map(async (route, i) => {
-          const tx = await client.kv.begin(route, { durability: "Sync" });
+          const tx = await client.kv.begin(route, {});
           await tx.put({ key: b(`key-${i}`), value: b(`value-${i}`) });
-          await tx.commit();
-          const rtx = await client.kv.begin(route, { mode: "ReadOnly", durability: "Sync" });
+          await tx.commit({ durability: "Sync" });
+          const rtx = await client.kv.begin(route, { mode: "ReadOnly" });
           return rtx.get({ key: b(`key-${i}`) });
         });
 
@@ -909,7 +907,7 @@ describe(`Fitz conformance — fitz-ts [transport=${TRANSPORT}, auth=${AUTH_MODE
 
         // Start an async KV operation, close the client mid-flight
         const route = uniqueRoute("kv");
-        const kvBeginPromise = client.kv.begin(route, { durability: "Sync" });
+        const kvBeginPromise = client.kv.begin(route, {});
         // Prevent vitest unhandled rejection warnings before explicit await below.
         kvBeginPromise.catch(() => undefined);
 
@@ -920,7 +918,7 @@ describe(`Fitz conformance — fitz-ts [transport=${TRANSPORT}, auth=${AUTH_MODE
         try {
           const tx = await kvBeginPromise;
           await tx.put({ key: b("key"), value: b("value") });
-          await tx.commit();
+          await tx.commit({ durability: "Sync" });
         } catch (err) {
           caught = err;
         }

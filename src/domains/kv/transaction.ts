@@ -13,6 +13,7 @@ import type {
 } from "../base";
 import { KvCodec } from "./codec";
 import {
+  KvCommitOptions,
   KvGetResult,
   KvScanOptions,
   KvScanPage,
@@ -88,11 +89,8 @@ export interface KvTransaction extends AsyncDisposable {
    * capability, reverse scans throw after yielding the first truncated page.
    */
   scanAll(options?: KvScanOptions): AsyncIterable<KvScanPage["entries"][number]>;
-  /** Finalizes mutations using the durability selected by {@link KvBeginOptions}. */
-  commit(options?: {
-    /** Cancels waiting; post-send commit outcome can be ambiguous. */
-    signal?: AbortSignal;
-  }): Promise<void>;
+  /** Commits with explicit persistence. */
+  commit(options: KvCommitOptions): Promise<void>;
   /** Discards uncommitted mutations. Safe cleanup should prefer disposal when either outcome is acceptable. */
   rollback(options?: {
     /** Cancels waiting; the local transaction still becomes unusable. */
@@ -280,11 +278,14 @@ export function createKvTransaction(
     }
   };
 
-  const commit = async (options: { signal?: AbortSignal } = {}): Promise<void> => {
+  const commit = async (options: KvCommitOptions): Promise<void> => {
     ensureOpen();
+    if (!options?.durability) {
+      throw new KvError("COMMIT requires explicit durability", "MISSING_DURABILITY");
+    }
+    const payload = KvCodec.encodeCommit(txId, route, options.durability);
     closed = true;
     unsubscribeDisconnect();
-    const payload = KvCodec.encodeCommit(txId, route);
     const response = await connection.request(MSG_KV_COMMIT, payload, options.signal);
     checkStatus(KvCodec.decodeStatusResponse(response), "COMMIT");
   };
