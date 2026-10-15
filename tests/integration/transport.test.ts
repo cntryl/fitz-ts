@@ -241,7 +241,7 @@ describe("Transport integration", () => {
       await f.client().close();
 
       await expect(
-        Promise.resolve().then(() => f.client().kv.begin(route, { durability: "Sync" })),
+        Promise.resolve().then(() => f.client().kv.begin(route, {})),
       ).rejects.toBeInstanceOf(ConnectionError);
     });
 

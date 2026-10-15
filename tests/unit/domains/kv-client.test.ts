@@ -319,11 +319,11 @@ describe("KvClient", () => {
     ).rejects.toMatchObject({ domainCode: 1012 });
   });
 
-  it("encodes the explicitly requested Sync durability in BEGIN payload", async () => {
+  it("encodes scope and access mode only in BEGIN payload", async () => {
     const connection = new FakeKvConnection();
     const client = createKvClient(connection);
 
-    await client.begin("kv://realm/area/resource", { durability: "Sync" });
+    await client.begin("kv://realm/area/resource", {});
 
     expect(connection.lastRequest).not.toBeNull();
     expect(connection.lastRequest?.messageType).toBe(MSG_KV_BEGIN);
@@ -336,14 +336,14 @@ describe("KvClient", () => {
     const reader = createBufferReader(lastRequest.payload);
     reader.readString();
     reader.readU8();
-    expect(reader.readU8()).toBe(1);
+    expect(reader.isEOF()).toBe(true);
   });
 
   it("accepts bare server-legal KV routes", async () => {
     const connection = new FakeKvConnection();
     const client = createKvClient(connection);
 
-    await client.begin("realm/area/resource", { durability: "Buffered" });
+    await client.begin("realm/area/resource", {});
 
     const lastRequest = connection.lastRequest;
     if (!lastRequest) {
@@ -352,17 +352,15 @@ describe("KvClient", () => {
 
     const reader = createBufferReader(lastRequest.payload);
     expect(reader.readString()).toBe("realm/area/resource");
-    reader.readU8();
-    expect(reader.readU8()).toBe(0);
+    expect(reader.readU8()).toBe(1);
+    expect(reader.isEOF()).toBe(true);
   });
 
   it("rejects wrong-scheme KV routes before sending", async () => {
     const connection = new FakeKvConnection();
     const client = createKvClient(connection);
 
-    await expectKvRouteFailure(
-      client.begin("queue://realm/area/resource", { durability: "Buffered" }),
-    );
+    await expectKvRouteFailure(client.begin("queue://realm/area/resource", {}));
 
     expect(connection.lastRequest).toBeNull();
   });
@@ -371,7 +369,7 @@ describe("KvClient", () => {
     const connection = new FakeKvConnection();
     const client = createKvClient(connection);
 
-    await expectKvRouteFailure(client.begin("kv://realm//resource", { durability: "Buffered" }));
+    await expectKvRouteFailure(client.begin("kv://realm//resource", {}));
 
     expect(connection.lastRequest).toBeNull();
   });
@@ -380,16 +378,17 @@ describe("KvClient", () => {
     const connection = new FakeKvConnection();
     const client = createKvClient(connection);
 
-    await expectKvRouteFailure(client.begin("kv://realm/area/*", { durability: "Buffered" }));
+    await expectKvRouteFailure(client.begin("kv://realm/area/*", {}));
 
     expect(connection.lastRequest).toBeNull();
   });
 
-  it("rejects BEGIN when durability is omitted", async () => {
+  it("rejects COMMIT when durability is omitted", async () => {
     const connection = new FakeKvConnection();
     const client = createKvClient(connection);
 
-    await expect(client.begin("kv://realm/area/resource", {} as never)).rejects.toMatchObject({
+    const tx = await client.begin("kv://realm/area/resource");
+    await expect(tx.commit({} as never)).rejects.toMatchObject({
       code: "KV_MISSING_DURABILITY",
     });
   });
@@ -398,9 +397,7 @@ describe("KvClient", () => {
     const connection = new FakeKvConnection();
     const client = createKvClient(connection);
 
-    const tx = await client.begin("kv://realm/area/resource", {
-      durability: "Sync",
-    });
+    const tx = await client.begin("kv://realm/area/resource", {});
     connection.disconnect();
 
     await expect(tx.get({ key: new Uint8Array([1]) })).rejects.toMatchObject({
@@ -412,9 +409,7 @@ describe("KvClient", () => {
     const connection = new FakeKvConnection();
     const client = createKvClient(connection);
 
-    const tx = await client.begin("kv://realm/area/resource", {
-      durability: "Sync",
-    });
+    const tx = await client.begin("kv://realm/area/resource", {});
     // status=2 (LeaseExpired), no trailing error-message bytes.
     connection.respond(MSG_KV_PUT, new Uint8Array([2]));
 
@@ -427,9 +422,7 @@ describe("KvClient", () => {
     const connection = new FakeKvConnection();
     const client = createKvClient(connection);
 
-    const tx = await client.begin("kv://realm/area/resource", {
-      durability: "Sync",
-    });
+    const tx = await client.begin("kv://realm/area/resource", {});
     const controller = new AbortController();
     const pending = tx.get({ key: new Uint8Array([1]), signal: controller.signal });
 
@@ -444,9 +437,7 @@ describe("KvClient", () => {
     const connection = new FakeKvConnection();
     const client = createKvClient(connection);
 
-    const tx = await client.begin("kv://realm/area/resource", {
-      durability: "Sync",
-    });
+    const tx = await client.begin("kv://realm/area/resource", {});
     connection.respond(MSG_KV_SCAN, encodeScanResponse([new Uint8Array([1])], true));
 
     await expect(tx.scan()).resolves.toEqual({
@@ -464,7 +455,7 @@ describe("KvClient", () => {
   it("accepts reverse scan bounds in descending order", async () => {
     const connection = new FakeKvConnection();
     const client = createKvClient(connection);
-    const tx = await client.begin("kv://realm/area/resource", { durability: "Sync" });
+    const tx = await client.begin("kv://realm/area/resource", {});
     connection.respond(MSG_KV_SCAN, encodeScanResponse([], false));
 
     await expect(
@@ -476,7 +467,7 @@ describe("KvClient", () => {
   it("preserves an inverted forward scan as an empty server result", async () => {
     const connection = new FakeKvConnection();
     const client = createKvClient(connection);
-    const tx = await client.begin("kv://realm/area/resource", { durability: "Sync" });
+    const tx = await client.begin("kv://realm/area/resource", {});
     connection.respond(MSG_KV_SCAN, encodeScanResponse([], false));
 
     await expect(
@@ -488,7 +479,7 @@ describe("KvClient", () => {
     const connection = new FakeKvConnection();
     connection.capabilities = CAP_SESSION_METADATA;
     const client = createKvClient(connection);
-    const tx = await client.begin("kv://realm/area/resource", { durability: "Sync" });
+    const tx = await client.begin("kv://realm/area/resource", {});
 
     await expect(
       tx.scan({ startKey: new Uint8Array([0x10]), startExclusive: true }),
@@ -502,7 +493,7 @@ describe("KvClient", () => {
     const connection = new FakeKvConnection();
     connection.capabilities = CAP_KV_SCAN_EXCLUSIVE;
     const client = createKvClient(connection);
-    const tx = await client.begin("kv://realm/area/resource", { durability: "Sync" });
+    const tx = await client.begin("kv://realm/area/resource", {});
     connection.respond(MSG_KV_SCAN, encodeScanResponse([], false));
 
     await tx.scan({ startKey: new Uint8Array([0x10]), startExclusive: true });
@@ -514,7 +505,7 @@ describe("KvClient", () => {
   it("paginates forward with the legacy immediate-successor fallback", async () => {
     const connection = new FakeKvConnection();
     const client = createKvClient(connection);
-    const tx = await client.begin("kv://realm/area/resource", { durability: "Sync" });
+    const tx = await client.begin("kv://realm/area/resource", {});
     connection.respond(MSG_KV_SCAN, encodeScanResponse([new Uint8Array([0x10])], true));
     connection.respond(MSG_KV_SCAN, encodeScanResponse([new Uint8Array([0x20])], false));
 
@@ -537,7 +528,7 @@ describe("KvClient", () => {
     const connection = new FakeKvConnection();
     connection.capabilities = CAP_KV_SCAN_EXCLUSIVE;
     const client = createKvClient(connection);
-    const tx = await client.begin("kv://realm/area/resource", { durability: "Sync" });
+    const tx = await client.begin("kv://realm/area/resource", {});
     connection.respond(MSG_KV_SCAN, encodeScanResponse([new Uint8Array([0x7a])], true));
     connection.respond(MSG_KV_SCAN, encodeScanResponse([new Uint8Array([0x79])], false));
 
@@ -552,12 +543,10 @@ describe("KvClient", () => {
     const connection = new FakeKvConnection();
     const client = createKvClient(connection);
 
-    const tx = await client.begin("kv://realm/area/resource", {
-      durability: "Sync",
-    });
+    const tx = await client.begin("kv://realm/area/resource", {});
     connection.respond(MSG_KV_COMMIT, new Uint8Array([3]));
 
-    await expect(tx.commit()).rejects.toMatchObject({
+    await expect(tx.commit({ durability: "Sync" })).rejects.toMatchObject({
       code: "KV_COMMIT",
     });
     expect(tx.isOpen()).toBe(false);
@@ -571,7 +560,7 @@ describe("KvClient", () => {
     // Arrange
     const connection = new FakeKvConnection();
     const client = createKvClient(connection);
-    const tx = await client.begin("kv://realm/area/resource", { durability: "Sync" });
+    const tx = await client.begin("kv://realm/area/resource", {});
     connection.respond(MSG_KV_ROLLBACK, new Uint8Array([0]));
 
     // Act

@@ -6,6 +6,8 @@ The format is based on Keep a Changelog and the project follows Semantic Version
 
 ## [Unreleased]
 
+- Breaking: KV BEGIN no longer accepts persistence. KV COMMIT requires an explicit Buffered or Sync choice; Stream COMMIT also requires an explicit choice. No connection default or silent Sync downgrade is used.
+
 ### Fixed
 
 - Treat coded Queue unknown outcomes as terminal even when their diagnostic text resembles a historical transient storage error.

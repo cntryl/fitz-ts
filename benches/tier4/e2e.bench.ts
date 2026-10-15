@@ -16,7 +16,7 @@ describe("fitz-ts integration benchmarks", () => {
   benchBatch("end-to-end encode + parse batch", COMPOSITE_SYNC_BATCH_SIZE, () => {
     const frames = [
       FrameCodec.encodeFrame(401, NoticeCodec.encodePublish(routes.notice, body)),
-      FrameCodec.encodeFrame(102, KvCodec.encodeBegin(routes.kv, "ReadWrite", "Sync")),
+      FrameCodec.encodeFrame(102, KvCodec.encodeBegin(routes.kv, "ReadWrite")),
       FrameCodec.encodeFrame(502, QueueCodec.encodeEnqueue(routes.queue, body)),
       FrameCodec.encodeFrame(
         503,

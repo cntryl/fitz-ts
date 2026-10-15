@@ -72,7 +72,7 @@ type KvSubscriptionState = {
  */
 export interface KvClient {
   /** Starts a transaction scoped to one concrete KV route. */
-  begin(route: string, options: KvBeginOptions): Promise<KvTransaction>;
+  begin(route: string, options?: KvBeginOptions): Promise<KvTransaction>;
   /** Registers a callback for mutations matching `pattern`. Dispose the returned handle. */
   subscribe(
     pattern: string,
@@ -125,18 +125,14 @@ export function createKvClient(connection: KvConnectionPort): KvClient {
     }
   });
 
-  const begin = async (route: string, options: KvBeginOptions): Promise<KvTransaction> => {
+  const begin = async (route: string, options: KvBeginOptions = {}): Promise<KvTransaction> => {
     if (!isRouteShape(route, "kv", 3, { allowBareRoute: true })) {
       throw new KvError(
         `Invalid kv route: ${route} (expected kv://{realm}/{area}/{resource} or {realm}/{area}/{resource}, no empty segments or wildcards)`,
         "INVALID_ROUTE",
       );
     }
-    if (!options?.durability) {
-      throw new KvError("BEGIN requires explicit durability", "MISSING_DURABILITY");
-    }
-
-    const payload = KvCodec.encodeBegin(route, options.mode ?? "ReadWrite", options.durability);
+    const payload = KvCodec.encodeBegin(route, options.mode ?? "ReadWrite");
     const response = await requestFrame(MSG_KV_BEGIN, payload, options.signal);
     const decoded = KvCodec.decodeBeginResponse(response);
 

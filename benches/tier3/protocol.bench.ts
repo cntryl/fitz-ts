@@ -24,7 +24,7 @@ describe("fitz-ts protocol benchmarks", () => {
   });
 
   benchBatch("kv begin + frame encode path", COMPOSITE_SYNC_BATCH_SIZE, () => {
-    const payload = KvCodec.encodeBegin(routes.kv, "ReadWrite", "Sync");
+    const payload = KvCodec.encodeBegin(routes.kv, "ReadWrite");
     return FrameCodec.encodeFrame(101, payload);
   });
 

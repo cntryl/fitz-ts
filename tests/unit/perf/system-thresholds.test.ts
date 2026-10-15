@@ -63,7 +63,7 @@ describe("fitz-ts system perf thresholds", () => {
   it("keeps kv begin + frame encode within budget", () => {
     expect(
       measureSync(100_000, () => {
-        const payload = KvCodec.encodeBegin(routes.kv, "ReadWrite", "Sync");
+        const payload = KvCodec.encodeBegin(routes.kv, "ReadWrite");
         FrameCodec.encodeFrame(101, payload);
       }),
     ).toBeLessThan(adjustedThreshold(thresholdsMs.kvBeginFrameEncode));

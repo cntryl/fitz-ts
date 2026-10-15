@@ -12,7 +12,7 @@ const body = payloads.system;
 
 describe("fitz-ts system benchmarks", () => {
   benchBatch("frame encode + kv begin payload encode", COMPOSITE_SYNC_BATCH_SIZE, () => {
-    const payload = KvCodec.encodeBegin(routes.kv, "ReadWrite", "Sync");
+    const payload = KvCodec.encodeBegin(routes.kv, "ReadWrite");
     return FrameCodec.encodeFrame(101, payload);
   });
 

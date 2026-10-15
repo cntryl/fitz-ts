@@ -296,6 +296,7 @@ describe("public surface", () => {
       "TxMode",
       "DurabilityMode",
       "KvBeginOptions",
+      "KvCommitOptions",
       "KvGetResult",
       "KvHandler",
       "KvNotification",
