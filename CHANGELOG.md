@@ -6,6 +6,7 @@ The format is based on Keep a Changelog and the project follows Semantic Version
 
 ## [Unreleased]
 
+- Update the Vite+/Vitest toolchain and Vite lockfile to patched versions; allow the browser smoke test to target an explicit broker WebSocket address.
 - Minify published Node/browser bundles while retaining declarations and source maps to stay within the existing package size budget.
 - Remove message-text Queue retry inference: broker domain failures require explicit Wire 2 NOT_APPLIED metadata before retry classification.
 - Qualify fixed headers, base RPC budgets/cancellation, exclusive scan, error disposition and reconnect behavior in native fixtures.

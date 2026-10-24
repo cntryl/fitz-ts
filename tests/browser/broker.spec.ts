@@ -1,8 +1,9 @@
 import { expect, test } from "@playwright/test";
 
 test("publishes and receives a notice through the real WebSocket broker", async ({ page }) => {
+  const brokerUrl = process.env.FITZ_BROKER_ANON_WS_ADDR ?? "ws://localhost:4290/ws";
   await page.goto("/tests/browser/index.html");
-  const result = await page.evaluate(async () => {
+  const result = await page.evaluate(async (url) => {
     type BrowserGlobal = typeof globalThis & {
       fitzCreateClient: (config: object) => {
         connect(): Promise<void>;
@@ -18,7 +19,7 @@ test("publishes and receives a notice through the real WebSocket broker", async 
     };
     const createClient = (globalThis as BrowserGlobal).fitzCreateClient;
     const client = createClient({
-      url: "ws://localhost:4290/ws",
+      url,
       transport: "ws",
       tokenProvider: () => "",
     });
@@ -41,6 +42,6 @@ test("publishes and receives a notice through the real WebSocket broker", async 
       await subscription.unsubscribe();
       await client.close();
     }
-  });
+  }, brokerUrl);
   expect(result).toBe("browser-ok");
 });
