@@ -10,15 +10,15 @@ export const ErrKvKeyNotFound = 4;
 export const ErrKvOperationNotAllowed = 5;
 
 /** KV error code: transaction isolation conflict; callers may retry a new transaction. */
-export const ErrCodeKvIsolationConflict = 1004;
+export const ErrCodeKvIsolationConflict = 1053;
 /** KV error code: backend failure with unknown operation outcome; do not blindly retry. */
-export const ErrCodeKvBackendError = 1009;
+export const ErrCodeKvBackendError = 1006;
 /** KV error code: mailbox full before request admission. */
-export const ErrCodeKvBusy = 1014;
+export const ErrCodeKvBusy = 1005;
 /** KV error code: invalid subscription selector or request. */
-export const ErrCodeKvInvalidSubscription = 1012;
+export const ErrCodeKvInvalidSubscription = 1003;
 /** KV error code: broker subscription limit reached. */
-export const ErrCodeKvSubscriptionLimit = 1013;
+export const ErrCodeKvSubscriptionLimit = 1004;
 
 /** Queue status: route does not identify an existing queue. */
 export const ErrQueueNotFound = 1;
@@ -34,40 +34,40 @@ export const ErrQueueInvalidDelay = 5;
 /** Queue error code: capacity is exhausted; classified as retryable. */
 export const ErrCodeQueueFull = 4005;
 /** Stream error code: mailbox full before request admission. */
-export const ErrCodeStreamBusy = 2014;
+export const ErrCodeStreamBusy = 2005;
 /** Notice error code: mailbox full before request admission. */
-export const ErrCodeNoticeBusy = 3006;
+export const ErrCodeNoticeBusy = 3005;
 /** Lease error code: request queue full before admission. */
-export const ErrCodeLeaseQueueFull = 5007;
+export const ErrCodeLeaseQueueFull = 5056;
 /** Queue error code: invalid availability subscription. */
-export const ErrCodeQueueInvalidSubscription = 4010;
+export const ErrCodeQueueInvalidSubscription = 4003;
 /** Queue error code: broker subscription limit reached. */
-export const ErrCodeQueueSubscriptionLimit = 4011;
+export const ErrCodeQueueSubscriptionLimit = 4004;
 
 /** RPC error code: request exceeded its broker deadline. */
-export const ErrCodeRpcTimeout = 6001;
+export const ErrCodeRpcTimeout = 6007;
 /** RPC error code: no worker is currently available for the route. */
-export const ErrCodeRpcWorkerNotFound = 6002;
+export const ErrCodeRpcWorkerNotFound = 6050;
 /** RPC error code: worker capacity is exhausted. */
-export const ErrCodeRpcBackpressure = 6003;
+export const ErrCodeRpcBackpressure = 6005;
 /** RPC error code: route has no registered worker. */
-export const ErrCodeRpcRouteNotRegistered = 6004;
+export const ErrCodeRpcRouteNotRegistered = 6051;
 /** RPC error code: correlation is unknown or already complete. */
-export const ErrCodeRpcCorrelationNotFound = 6005;
+export const ErrCodeRpcCorrelationNotFound = 6052;
 /** RPC error code: response frames arrived with an invalid sequence. */
-export const ErrCodeRpcInvalidSequence = 6006;
+export const ErrCodeRpcInvalidSequence = 6053;
 /** RPC error code: correlation identifier was reused. */
-export const ErrCodeRpcDuplicateCorrelation = 6007;
+export const ErrCodeRpcDuplicateCorrelation = 6054;
 /** RPC error code: response came from a worker that does not own the request. */
-export const ErrCodeRpcWrongWorker = 6008;
+export const ErrCodeRpcWrongWorker = 6055;
 /** RPC error code: caller or worker is not authorized for the route. */
-export const ErrCodeRpcUnauthorized = 6009;
+export const ErrCodeRpcUnauthorized = 6001;
 /** RPC error code: broker backend failed. */
-export const ErrCodeRpcBackendError = 6010;
+export const ErrCodeRpcBackendError = 6006;
 /** RPC error code: invalid worker subscription. */
-export const ErrCodeRpcInvalidSubscription = 6012;
+export const ErrCodeRpcInvalidSubscription = 6003;
 /** RPC error code: broker worker-subscription limit reached. */
-export const ErrCodeRpcSubscriptionLimit = 6013;
+export const ErrCodeRpcSubscriptionLimit = 6004;
 
 /** Lease status: another owner currently holds the lease. */
 export const ErrLeaseHeld = 1;
@@ -77,15 +77,15 @@ export const ErrLeaseNotFound = 2;
 export const ErrLeaseInvalidToken = 3;
 
 /** Lease error code: another owner holds the lease; acquisition may wait or retry. */
-export const ErrCodeLeaseHeld = 5001;
+export const ErrCodeLeaseHeld = 5050;
 /** Lease error code: malformed acquisition or lifecycle request. */
 export const ErrCodeLeaseBadRequest = 5008;
 /** Lease error code: invalid change-subscription route. */
-export const ErrCodeLeaseInvalidSubscriptionRoute = 5010;
+export const ErrCodeLeaseInvalidSubscriptionRoute = 5003;
 /** Lease error code: LIST cursor is unknown, evicted, or reused with a different pattern. */
-export const ErrCodeLeaseInvalidListCursor = 5011;
+export const ErrCodeLeaseInvalidListCursor = 5057;
 /** Lease error code: LIST pattern is malformed. */
-export const ErrCodeLeaseInvalidListPattern = 5012;
+export const ErrCodeLeaseInvalidListPattern = 5003;
 
 /** Notice status: publish or subscription failed without a more specific status. */
 export const ErrNoticeGeneral = 1;
@@ -116,38 +116,29 @@ export const ErrScheduleInvalidDelay = 4;
 /** Schedule status: timestamp is invalid. */
 export const ErrScheduleInvalidTimestamp = 5;
 /** Schedule error code: delivery mode is not `Broadcast` or `Single`. */
-export const ErrCodeScheduleInvalidDeliveryMode = 7008;
+export const ErrCodeScheduleInvalidDeliveryMode = 7054;
 /** Stream error code: invalid commit subscription selector. */
-export const ErrCodeStreamInvalidSubscription = 2010;
+export const ErrCodeStreamInvalidSubscription = 2003;
 /** Stream error code: broker subscription limit reached. */
-export const ErrCodeStreamSubscriptionLimit = 2011;
+export const ErrCodeStreamSubscriptionLimit = 2004;
 /** Notice error code: subscription pattern is invalid. */
-export const ErrCodeNoticeInvalidPattern = 3002;
+export const ErrCodeNoticeInvalidPattern = 3003;
 /** Notice error code: broker subscription limit reached. */
-export const ErrCodeNoticeSubscriptionLimit = 3003;
+export const ErrCodeNoticeSubscriptionLimit = 3004;
 /** Schedule error code: invalid firing-subscription pattern. */
-export const ErrCodeScheduleInvalidSubscription = 7006;
+export const ErrCodeScheduleInvalidSubscription = 7003;
 /** Schedule error code: broker subscription limit reached. */
-export const ErrCodeScheduleSubscriptionLimit = 7007;
-/** Schedule error code: broker backend is unavailable or saturated. */
-export const ErrCodeScheduleBackendError = 7010;
+export const ErrCodeScheduleSubscriptionLimit = 7004;
+/** Schedule error code: broker declined work before application due to saturation. */
+export const ErrCodeScheduleBusy = 7005;
+/** Schedule error code: broker backend failed after request acceptance. */
+export const ErrCodeScheduleBackendError = 7006;
 
 const retryableErrorCodes = new Set([
-  "KV_3",
   `KV_${ErrCodeKvIsolationConflict}`,
-  `KV_${ErrCodeKvBusy}`,
-  `STREAM_${ErrCodeStreamBusy}`,
-  `NOTICE_${ErrCodeNoticeBusy}`,
-  "QUEUE_4",
-  `QUEUE_${ErrCodeQueueFull}`,
-  "LEASE_1",
   `LEASE_${ErrCodeLeaseHeld}`,
   `LEASE_${ErrCodeLeaseQueueFull}`,
-  `RPC_${ErrCodeRpcTimeout}`,
-  `RPC_${ErrCodeRpcWorkerNotFound}`,
-  `RPC_${ErrCodeRpcBackpressure}`,
   `RPC_${ErrCodeRpcRouteNotRegistered}`,
-  `SCHEDULE_${ErrCodeScheduleBackendError}`,
 ]);
 
 function retryableKey(error: FitzError): string | null {
@@ -186,6 +177,16 @@ export function isRetryable(error: unknown): boolean {
     return true;
   }
 
+  if (error.effect === undefined && isTransientQueueCommitFailure(error)) {
+    return true;
+  }
+  if (error.effect !== 0) {
+    return false;
+  }
+  if (error.errorClass === 5) {
+    return true;
+  }
+
   const key = retryableKey(error);
   if (key !== null) {
     return retryableErrorCodes.has(key);
@@ -207,6 +208,10 @@ export class FitzError extends Error {
   domainCode?: number;
   /** Safe structured diagnostic context associated with the failure. */
   context?: Record<string, unknown>;
+  /** Error class supplied by the Wire-2 broker response, when present. */
+  errorClass?: number;
+  /** Application effect supplied by the Wire-2 broker response, when present. */
+  effect?: number;
 
   /** Creates a Fitz error. Application code usually receives a more specific subclass. */
   constructor(
@@ -227,6 +232,17 @@ export class FitzError extends Error {
   getContext(): Record<string, unknown> | undefined {
     return this.context;
   }
+}
+
+/** Retains the broker's Wire-2 retry disposition on a surfaced domain error. */
+export function attachErrorDisposition<T extends FitzError>(
+  error: T,
+  errorClass: number | undefined,
+  effect: number | undefined,
+): T {
+  error.errorClass = errorClass;
+  error.effect = effect;
+  return error;
 }
 
 /** Network transport failed before a valid Fitz response was received. */

@@ -1,8 +1,8 @@
 /**
  * Connection manager for Fitz protocol.
  *
- * CONNECT has no success ACK. SERVER_HELLO confirms negotiation before the
- * first domain command; an explicit zero capability advertisement is legacy.
+ * CONNECT negotiates wire version 2 and HELLO confirms the session before the
+ * first domain command.
  */
 
 import { Transport } from "../transport/types";
@@ -18,15 +18,13 @@ import {
 } from "../core/types";
 import { createScope, Scope } from "../core/lifecycle";
 import { utf8Encoder } from "../core/buffer";
-import { createFrameParser, FrameCodec } from "../frame/codec";
 import {
-  CAP_SESSION_METADATA,
-  MSG_CONNECT,
-  MSG_CORRELATED,
-  MSG_SERVER_HELLO,
-  MSG_SESSION_METADATA,
-} from "../frame/types";
-import { decodeCorrelation, decodeServerHello } from "../frame/codec";
+  createFrameParser,
+  DEFAULT_MAX_MESSAGE_BYTES,
+  FrameCodec,
+  type GoAway,
+} from "../frame/codec";
+import { MSG_CONNECT, MSG_CONNECT_REJECTED, MSG_GOAWAY, MSG_HELLO } from "../frame/types";
 import {
   AuthenticationError,
   ConnectionError,
@@ -57,11 +55,12 @@ import { createReadinessWaiter } from "./internal/readiness";
 import { createHeartbeatLoop } from "./internal/heartbeat";
 import { createConnectionTelemetry } from "./internal/telemetry";
 import { createReconnectScheduler } from "./internal/reconnect";
-import { waitForServerHello } from "./internal/negotiation";
+import { waitForHello } from "./internal/negotiation";
 import type { PushFrameClassifier, PushFrameClassifierRegistration } from "./multiplexer";
 
 export interface ConnectionOptions {
   serviceName?: string;
+  onGoAway?: (message: GoAway) => void;
   timeout?: number;
   maxInFlightRequests?: number;
   maxRequestQueueSize?: number;
@@ -86,31 +85,21 @@ type TransportFactory = () => Transport;
 type ReconnectListener = () => void | Promise<void>;
 type DisconnectListener = () => void;
 
-function encodeServiceName(serviceName: string): Uint8Array {
-  if (typeof serviceName !== "string") {
-    throw new TypeError("serviceName must be a string");
-  }
-  const normalizedServiceName = serviceName.trim();
-  if (normalizedServiceName.length === 0) {
-    throw new TypeError("serviceName must not be empty");
-  }
-  const bytes = utf8Encoder.encode(normalizedServiceName);
-  if (bytes.length > 128) {
-    throw new RangeError("serviceName must be at most 128 UTF-8 bytes");
-  }
-  for (const character of normalizedServiceName) {
+function normalizeServiceName(serviceName: string | undefined): string {
+  if (serviceName === undefined) return "";
+  if (typeof serviceName !== "string") throw new TypeError("serviceName must be a string");
+  const normalized = serviceName.trim();
+  const bytes = utf8Encoder.encode(normalized);
+  if (bytes.length > 128) throw new RangeError("serviceName must be at most 128 UTF-8 bytes");
+  for (const character of normalized) {
     const codePoint = character.codePointAt(0)!;
     if (codePoint >= 0xd800 && codePoint <= 0xdfff) {
       throw new TypeError("serviceName must contain valid Unicode characters");
     }
-    if (/\p{Cc}/u.test(character)) {
+    if (/\p{Cc}/u.test(character))
       throw new TypeError("serviceName must not contain control characters");
-    }
   }
-  const payload = new Uint8Array(4 + bytes.length);
-  new DataView(payload.buffer).setUint32(0, bytes.length, false);
-  payload.set(bytes, 4);
-  return payload;
+  return normalized;
 }
 
 export type Connection = ReturnType<typeof createConnection>;
@@ -135,9 +124,9 @@ export function createConnection(
   const maxInFlightRequests = options.maxInFlightRequests ?? 256;
   const maxRequestQueueSize = options.maxRequestQueueSize ?? 1024;
   const observability = options.observability;
-  const sessionMetadata =
-    options.serviceName === undefined ? undefined : encodeServiceName(options.serviceName);
-  let serviceMetadataSent = false;
+  const serviceName = normalizeServiceName(options.serviceName);
+  const onGoAway = options.onGoAway;
+  let maxMessageBytes = DEFAULT_MAX_MESSAGE_BYTES;
   const closeReceiveBudgetMs = 200;
 
   let transport: Transport | null = null;
@@ -362,6 +351,7 @@ export function createConnection(
     requestPayload: Uint8Array,
     signal?: AbortSignal,
     allowReconnectRestore: boolean = false,
+    headerFlags: number = 0,
   ): Promise<Uint8Array> => {
     let sendStarted = false;
     let activeTransport: Transport | null = null;
@@ -372,7 +362,14 @@ export function createConnection(
     try {
       const requestTransport = ensureTransport();
       activeTransport = requestTransport;
-      const frame = FrameCodec.encodeFrame(messageType, requestPayload);
+      const frame = FrameCodec.encodeFrame(messageType, requestPayload, { flags: headerFlags });
+      if (frame.length > maxMessageBytes) {
+        throw new ProtocolError("Message exceeds the negotiated max_message_bytes", undefined, {
+          messageType,
+          messageBytes: frame.length,
+          maxMessageBytes,
+        });
+      }
 
       return await multiplexer.request(
         messageType,
@@ -421,10 +418,20 @@ export function createConnection(
     return await requestInternal(messageType, requestPayload, signal, true);
   };
 
+  const requestWithFlags = async (
+    messageType: number,
+    requestPayload: Uint8Array,
+    flags: number,
+    signal?: AbortSignal,
+  ): Promise<Uint8Array> => {
+    return await requestInternal(messageType, requestPayload, signal, false, flags);
+  };
+
   const send = async (
     messageType: number,
     requestPayload: Uint8Array,
     signal?: AbortSignal,
+    correlation: bigint = 0n,
   ): Promise<void> => {
     let sendStarted = false;
     let activeTransport: Transport | null = null;
@@ -441,7 +448,14 @@ export function createConnection(
     try {
       const sendTransport = ensureTransport();
       activeTransport = sendTransport;
-      const frame = FrameCodec.encodeFrame(messageType, requestPayload);
+      const frame = FrameCodec.encodeFrame(messageType, requestPayload, { correlation });
+      if (frame.length > maxMessageBytes) {
+        throw new ProtocolError("Message exceeds the negotiated max_message_bytes", undefined, {
+          messageType,
+          messageBytes: frame.length,
+          maxMessageBytes,
+        });
+      }
 
       sendStarted = true;
       await sendSerialized(sendTransport, frame);
@@ -464,6 +478,14 @@ export function createConnection(
     } finally {
       releaseRequestSlot();
     }
+  };
+
+  const sendCorrelated = async (
+    messageType: number,
+    requestPayload: Uint8Array,
+    signal?: AbortSignal,
+  ): Promise<void> => {
+    await send(messageType, requestPayload, signal, multiplexer.allocateCorrelationId());
   };
 
   const sendFireAndForget = async (
@@ -737,6 +759,8 @@ export function createConnection(
     receiveLoopAbort = false;
     frameParser.reset();
     clearPartialFrameTimeout();
+    maxMessageBytes = DEFAULT_MAX_MESSAGE_BYTES;
+    frameParser.setMaxMessageBytes(DEFAULT_MAX_MESSAGE_BYTES);
     sessionConfirmed = false;
     if (!isReconnect) {
       hasEstablishedSession = false;
@@ -744,7 +768,6 @@ export function createConnection(
     requestGate = createRequestGate(maxInFlightRequests, maxRequestQueueSize);
     const activeTransport = transportFactory();
     transport = activeTransport;
-    serviceMetadataSent = false;
     stopHeartbeat();
     setState(isReconnect ? ConnectionState.Reconnecting : ConnectionState.Connecting);
     emitLifecycleEvent(isReconnect ? "reconnect_start" : "connect_start");
@@ -768,7 +791,7 @@ export function createConnection(
 
       const sendConnectPromise = sendConnect(activeTransport);
       void sendConnectPromise.catch(() => undefined);
-      await waitForServerHello(
+      await waitForHello(
         Promise.all([sendConnectPromise, authOutcome.promise]).then(() => undefined),
         timeout,
         signal,
@@ -854,7 +877,12 @@ export function createConnection(
     if (transport !== activeTransport) {
       throw new ConnectionError("Connection changed while preparing CONNECT", { state });
     }
-    const frame = FrameCodec.encodeFrame(MSG_CONNECT, utf8Encoder.encode(token));
+    const value = FrameCodec.encodeConnect({
+      jwt: token,
+      serviceName,
+      clientBuild: "fitz-ts/2.0.0",
+    });
+    const frame = FrameCodec.encodeFrame(MSG_CONNECT, value);
     await activeTransport.send(frame);
     markOutboundActivity();
   };
@@ -874,50 +902,68 @@ export function createConnection(
           confirmSession();
         }
 
-        // A CORRELATED record labels the record that follows it, and a
-        // SERVER_HELLO answers nothing at all. Both are consumed here so the
-        // multiplexer only ever sees real messages.
-        let pendingCorrelation: bigint | undefined;
         for (const frame of frames) {
-          if (frame.messageType === MSG_SERVER_HELLO) {
-            if (pendingCorrelation !== undefined) {
-              throw new ProtocolError("A CORRELATED record cannot label SERVER_HELLO");
+          if (frame.messageType === MSG_HELLO) {
+            if (frame.correlation !== 0n) {
+              throw new ProtocolError("HELLO must have correlation 0");
             }
-            const hello = decodeServerHello(frame.payload);
-            if (!hello) {
-              throw new ProtocolError("Malformed SERVER_HELLO");
+            const hello = FrameCodec.decodeHello(frame.payload);
+            if (hello.version !== 2) {
+              throw new ProtocolError(
+                `Broker negotiated unsupported wire version ${hello.version}`,
+              );
             }
-            if (hello) {
-              multiplexer.setCapabilities(hello.protocolVersion, hello.capabilities);
-              authOutcome?.resolve();
-              if (
-                sessionMetadata !== undefined &&
-                (hello.capabilities & CAP_SESSION_METADATA) !== 0 &&
-                !serviceMetadataSent
-              ) {
-                await sendSerialized(
-                  activeTransport,
-                  FrameCodec.encodeFrame(MSG_SESSION_METADATA, sessionMetadata),
-                );
-                serviceMetadataSent = true;
-              }
+            if (hello.maxInFlight === 0) {
+              throw new ProtocolError("HELLO max_in_flight must be non-zero");
+            }
+            maxMessageBytes = hello.maxMessageBytes;
+            frameParser.setMaxMessageBytes(maxMessageBytes);
+            requestGate = createRequestGate(
+              Math.min(maxInFlightRequests, hello.maxInFlight),
+              maxRequestQueueSize,
+            );
+            multiplexer.setCapabilities(hello.version, hello.brokerCapabilities);
+            authOutcome?.resolve();
+            continue;
+          }
+
+          if (frame.messageType === MSG_CONNECT_REJECTED) {
+            if (frame.correlation !== 0n) {
+              throw new ProtocolError("CONNECT_REJECTED must have correlation 0");
+            }
+            const rejected = FrameCodec.decodeConnectRejected(frame.payload);
+            const failure =
+              rejected.code === 1
+                ? new AuthenticationError(rejected.message || "Authentication rejected", {
+                    code: rejected.code,
+                  })
+                : new ProtocolError(rejected.message || "CONNECT rejected", rejected.code);
+            if (rejected.code === 1) authRejected = true;
+            authOutcome?.reject(failure);
+            continue;
+          }
+
+          if (frame.messageType === MSG_GOAWAY) {
+            if (frame.correlation !== 0n) {
+              throw new ProtocolError("GOAWAY must have correlation 0");
+            }
+            const goAway = FrameCodec.decodeGoAway(frame.payload);
+            emitLifecycleEvent("goaway", goAway);
+            try {
+              onGoAway?.(goAway);
+            } catch (error) {
+              log("warn", "fitz.connection.goaway_handler_failed", {
+                error: describeError(error),
+              });
             }
             continue;
           }
 
-          if (frame.messageType === MSG_CORRELATED) {
-            if (pendingCorrelation !== undefined) {
-              throw new ProtocolError("A CORRELATED record cannot label another CORRELATED record");
-            }
-            pendingCorrelation = decodeCorrelation(frame.payload);
-            continue;
-          }
-
-          multiplexer.dispatch(frame.messageType, frame.payload, pendingCorrelation);
-          pendingCorrelation = undefined;
-        }
-        if (pendingCorrelation !== undefined) {
-          throw new ProtocolError("Transport frame ended after a CORRELATED record");
+          multiplexer.dispatch(
+            frame.messageType,
+            frame.payload,
+            frame.correlation === 0n ? undefined : frame.correlation,
+          );
         }
       } catch (error) {
         if (receiveLoopAbort || closeRequested) {
@@ -1171,8 +1217,10 @@ export function createConnection(
     connect,
     close,
     request,
+    requestWithFlags,
     requestDuringReconnectRestore,
     send,
+    sendCorrelated,
     sendFireAndForget,
     registerNotificationHandler,
     unregisterNotificationHandler,

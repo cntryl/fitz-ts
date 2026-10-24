@@ -13,7 +13,7 @@ import type {
   RequestPort,
   RetryExecutionPort,
 } from "../base";
-import { LeaseError } from "../../core/errors";
+import { attachErrorDisposition, LeaseError } from "../../core/errors";
 import { sleepWithAbort } from "../../client/internal/async";
 import {
   MSG_LEASE_ACQUIRE,
@@ -526,10 +526,14 @@ export function createLeaseClient(connection: LeaseConnectionPort): LeaseClient 
         const response = await requestFrame(MSG_LEASE_QUERY, payload, options.signal);
         const decoded = LeaseCodec.decodeQueryResponse(response);
         if (decoded.status !== 0) {
-          throw new LeaseError(
-            `QUERY failed: ${decoded.errorMessage ?? `status ${decoded.status}`}`,
-            "QUERY_FAILED",
-            decoded.errorCode,
+          throw attachErrorDisposition(
+            new LeaseError(
+              `QUERY failed: ${decoded.errorMessage ?? `status ${decoded.status}`}`,
+              "QUERY_FAILED",
+              decoded.errorCode,
+            ),
+            decoded.errorClass,
+            decoded.effect,
           );
         }
         return {
@@ -593,10 +597,14 @@ export function createLeaseClient(connection: LeaseConnectionPort): LeaseClient 
     const payload = LeaseCodec.encodeSubscribe(route);
     const parsed = parseStandardResponse(await request(MSG_LEASE_SUBSCRIBE, payload));
     if (!parsed.success) {
-      throw new LeaseError(
-        `SUBSCRIBE failed: ${parsed.error ?? "unknown error"}`,
-        "SUBSCRIBE_FAILED",
-        parsed.errorCode,
+      throw attachErrorDisposition(
+        new LeaseError(
+          `SUBSCRIBE failed: ${parsed.error ?? "unknown error"}`,
+          "SUBSCRIBE_FAILED",
+          parsed.errorCode,
+        ),
+        parsed.errorClass,
+        parsed.effect,
       );
     }
     const reader = createBufferReader(parsed.data);
@@ -654,10 +662,14 @@ export function createLeaseClient(connection: LeaseConnectionPort): LeaseClient 
       const payload = LeaseCodec.encodeUnsubscribe(route);
       const parsed = parseStandardResponse(await requestFrame(MSG_LEASE_UNSUBSCRIBE, payload));
       if (!parsed.success) {
-        throw new LeaseError(
-          `UNSUBSCRIBE failed: ${parsed.error ?? "unknown error"}`,
-          "UNSUBSCRIBE_FAILED",
-          parsed.errorCode,
+        throw attachErrorDisposition(
+          new LeaseError(
+            `UNSUBSCRIBE failed: ${parsed.error ?? "unknown error"}`,
+            "UNSUBSCRIBE_FAILED",
+            parsed.errorCode,
+          ),
+          parsed.errorClass,
+          parsed.effect,
         );
       }
     })();

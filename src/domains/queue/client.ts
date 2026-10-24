@@ -14,7 +14,7 @@ import type {
   RetryExecutionPort,
 } from "../base";
 import { attachResilienceMeta } from "../../client/resilience";
-import { QueueError } from "../../core/errors";
+import { attachErrorDisposition, QueueError } from "../../core/errors";
 import { createWakeGate } from "../../core/wake-gate";
 import {
   MSG_QUEUE_ENQUEUE,
@@ -445,7 +445,13 @@ export function createQueueClient(connection: QueueConnectionPort): QueueClient 
   };
 
   const checkStatus = (
-    response: { status: number; errorCode?: number; errorMessage?: string },
+    response: {
+      status: number;
+      errorCode?: number;
+      errorMessage?: string;
+      errorClass?: number;
+      effect?: number;
+    },
     operation: string,
   ): void => {
     if (response.status === QueueStatus.Ok) {
@@ -471,7 +477,11 @@ export function createQueueClient(connection: QueueConnectionPort): QueueClient 
     const reason = response.errorMessage ?? statusName;
 
     throw attachResilienceMeta(
-      new QueueError(`${operation} failed: ${reason}`, statusName, errorCode),
+      attachErrorDisposition(
+        new QueueError(`${operation} failed: ${reason}`, statusName, errorCode),
+        response.errorClass,
+        response.effect,
+      ),
       {
         boundary: "post-send",
         failureKind: "domain",

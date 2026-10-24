@@ -14,14 +14,12 @@ import { ProtocolError } from "../../core/errors";
 import { SubscribeResponse, UnsubscribeResponse } from "./types";
 
 const CORRELATION_ID_LENGTH = 16;
-const RPC_LIFECYCLE_EXTENSION_VERSION = 1;
 const RPC_WORKER_CANCELLATION_SUPPORTED = 0x01;
-const RPC_REMAINING_BUDGET_PRESENT = 0x01;
 export const MAX_RPC_BUDGET_MS = 86_400_000;
 const RPC_RESPONSE_FLAG_STREAM_END = 0x01;
 const RPC_RESPONSE_FLAGS_SUPPORTED = RPC_RESPONSE_FLAG_STREAM_END;
 const RPC_ERROR_CODE_MIN = 6001;
-const RPC_ERROR_CODE_MAX = 6013;
+const RPC_ERROR_CODE_MAX = 6055;
 const getCryptoProvider = (): Crypto | undefined => globalThis.crypto as Crypto | undefined;
 const correlationIdPool: Uint8Array[] = [];
 const maxCorrelationIdPoolSize = 64;
@@ -81,19 +79,15 @@ const readRemainingBudgetExtension = (
   payload: Uint8Array,
   offset: number,
 ): { remainingBudgetMs?: number; nextOffset: number } | undefined => {
-  if (offset === payload.length) {
-    return { nextOffset: offset };
+  if (offset + 1 > payload.length) return undefined;
+  const hasBudget = payload[offset];
+  if (hasBudget === 0 && offset + 1 === payload.length) {
+    return { nextOffset: payload.length };
   }
-  if (offset + 6 !== payload.length) {
+  if (hasBudget !== 1 || offset + 5 !== payload.length) {
     return undefined;
   }
-  if (
-    payload[offset] !== RPC_LIFECYCLE_EXTENSION_VERSION ||
-    payload[offset + 1] !== RPC_REMAINING_BUDGET_PRESENT
-  ) {
-    return undefined;
-  }
-  const remainingBudgetMs = readU32BE(payload, offset + 2);
+  const remainingBudgetMs = readU32BE(payload, offset + 1);
   if (remainingBudgetMs === undefined || remainingBudgetMs > MAX_RPC_BUDGET_MS) {
     return undefined;
   }
@@ -209,7 +203,8 @@ export const RpcCodec = {
       routeBytes.length +
       4 +
       body.length +
-      (remainingBudgetMs === undefined ? 0 : 6);
+      1 +
+      (remainingBudgetMs === undefined ? 0 : 4);
 
     const buffer = new Uint8Array(payloadLength);
     let offset = 0;
@@ -224,9 +219,8 @@ export const RpcCodec = {
     buffer[offset++] = body.length & 0xff;
     buffer.set(body, offset);
     offset += body.length;
+    buffer[offset++] = remainingBudgetMs === undefined ? 0 : 1;
     if (remainingBudgetMs !== undefined) {
-      buffer[offset++] = RPC_LIFECYCLE_EXTENSION_VERSION;
-      buffer[offset++] = RPC_REMAINING_BUDGET_PRESENT;
       buffer[offset++] = (remainingBudgetMs >>> 24) & 0xff;
       buffer[offset++] = (remainingBudgetMs >>> 16) & 0xff;
       buffer[offset++] = (remainingBudgetMs >>> 8) & 0xff;
@@ -406,7 +400,7 @@ export const RpcCodec = {
 
   /**
    * Encode RPC_SUBSCRIBE_WORKER (300)
-   * Payload: [string worker_route][u32 max_concurrent]
+   * Payload: [string worker_route][u32 max_concurrent][u8 flags]
    */
   encodeSubscribeWorker(
     route: string,
@@ -414,17 +408,14 @@ export const RpcCodec = {
     supportsCancellation = false,
   ): Uint8Array {
     const routeBytes = getRouteEncoding(route);
-    const buffer = new Uint8Array(routeBytes.length + 4 + (supportsCancellation ? 2 : 0));
+    const buffer = new Uint8Array(routeBytes.length + 5);
     buffer.set(routeBytes, 0);
     let offset = routeBytes.length;
     buffer[offset++] = (maxConcurrent >> 24) & 0xff;
     buffer[offset++] = (maxConcurrent >> 16) & 0xff;
     buffer[offset++] = (maxConcurrent >> 8) & 0xff;
     buffer[offset] = maxConcurrent & 0xff;
-    if (supportsCancellation) {
-      buffer[offset + 1] = RPC_LIFECYCLE_EXTENSION_VERSION;
-      buffer[offset + 2] = RPC_WORKER_CANCELLATION_SUPPORTED;
-    }
+    buffer[offset + 1] = supportsCancellation ? RPC_WORKER_CANCELLATION_SUPPORTED : 0;
     return buffer;
   },
 
@@ -464,8 +455,10 @@ export const RpcCodec = {
     return { status };
   },
 
-  tryDecodeTerminalErrorBody(payload: Uint8Array): { code: number; message: string } | null {
-    if (payload.length < 5) {
+  tryDecodeTerminalErrorBody(
+    payload: Uint8Array,
+  ): { code: number; errorClass: number; effect: number; message: string } | null {
+    if (payload.length < 9) {
       return null;
     }
 
@@ -475,17 +468,20 @@ export const RpcCodec = {
         return null;
       }
 
-      const code = reader.readU32BE();
+      const code = reader.readU16BE();
+      const errorClass = reader.readU8();
+      const effect = reader.readU8();
       if (code < RPC_ERROR_CODE_MIN || code > RPC_ERROR_CODE_MAX) {
         return null;
       }
+      if (errorClass > 10 || effect > 2) return null;
 
       const message = reader.readString();
       if (!reader.isEOF()) {
         return null;
       }
 
-      return { code, message };
+      return { code, errorClass, effect, message };
     } catch {
       return null;
     }
@@ -493,9 +489,11 @@ export const RpcCodec = {
 
   /**
    * Decode a standard RPC error body.
-   * Format: [u8 status=1][u32 error_code][string message]
+   * Format: [u8 status=1][u16 code][u8 class][u8 effect][string message]
    */
-  decodeErrorBody(payload: Uint8Array): { code: number; message: string } | null {
+  decodeErrorBody(
+    payload: Uint8Array,
+  ): { code: number; errorClass: number; effect: number; message: string } | null {
     return this.tryDecodeTerminalErrorBody(payload);
   },
 

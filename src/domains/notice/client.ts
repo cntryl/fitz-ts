@@ -8,12 +8,13 @@ import type {
   BackgroundErrorPort,
   FireAndForgetPort,
   NotificationPort,
-  OptionalResponsePort,
   ReconnectListenerPort,
   ReconnectRestoreRequestPort,
+  RequestFlagsPort,
   RequestPort,
 } from "../base";
-import { NoticeError } from "../../core/errors";
+import { attachErrorDisposition, NoticeError } from "../../core/errors";
+import { FLAG_ACK_REQUESTED } from "../../frame/codec";
 import {
   MSG_NOTICE_NOTIFY,
   MSG_NOTICE_PUBLISH,
@@ -64,7 +65,7 @@ type NoticeConnectionPort = RequestPort &
   NotificationPort &
   AsyncDispatchPort &
   FireAndForgetPort &
-  OptionalResponsePort &
+  RequestFlagsPort &
   Partial<ReconnectRestoreRequestPort>;
 
 /**
@@ -80,6 +81,8 @@ export interface NoticeClient {
     options: {
       /** Notice payload. */
       body: Uint8Array;
+      /** Wait for broker acceptance; this does not confirm subscriber delivery. */
+      ackRequested?: boolean;
       /** Cancels local sending; delivery remains unconfirmed by design. */
       signal?: AbortSignal;
     },
@@ -100,8 +103,7 @@ export interface NoticeClient {
 }
 
 export function createNoticeClient(connection: NoticeConnectionPort): NoticeClient {
-  const { requestFrame, requestReconnectFrame, expectOptionalResponse } =
-    createDomainClient(connection);
+  const { requestFrame, requestReconnectFrame } = createDomainClient(connection);
   const subscriptionsByPattern = new Map<string, NoticeSubscriptionState>();
   const patternsBySubId = new Map<bigint, string>();
   const subIdGeneration = createGenerationCounter();
@@ -186,20 +188,35 @@ export function createNoticeClient(connection: NoticeConnectionPort): NoticeClie
 
   const publish = async (
     route: string,
-    options: { body: Uint8Array; signal?: AbortSignal },
+    options: { body: Uint8Array; ackRequested?: boolean; signal?: AbortSignal },
   ): Promise<void> => {
     assertNoticeRoute(route);
     const payload = NoticeCodec.encodePublish(route, options.body);
-    const cancelOptionalResponse = expectOptionalResponse(MSG_NOTICE_PUBLISH);
-    try {
-      await connection.sendFireAndForget(MSG_NOTICE_PUBLISH, payload, options.signal);
-    } finally {
-      // Must run on the success path too — this fire-and-forget PUBLISH
-      // never gets an actual response, so leaving the registration in place
-      // only on success would leak one optional-response slot per
-      // successful publish() call for the lifetime of the connection.
-      cancelOptionalResponse();
+    if (options.ackRequested) {
+      if (!connection.requestWithFlags) {
+        throw new NoticeError("Connection does not support ACK_REQUESTED", "UNSUPPORTED");
+      }
+      const response = await connection.requestWithFlags(
+        MSG_NOTICE_PUBLISH,
+        payload,
+        FLAG_ACK_REQUESTED,
+        options.signal,
+      );
+      const parsed = parseStandardResponse(response);
+      if (!parsed.success) {
+        throw attachErrorDisposition(
+          new NoticeError(
+            `PUBLISH failed: ${parsed.error ?? "unknown error"}`,
+            parsed.errorCode === undefined ? "PUBLISH_FAILED" : String(parsed.errorCode),
+            parsed.errorCode,
+          ),
+          parsed.errorClass,
+          parsed.effect,
+        );
+      }
+      return;
     }
+    await connection.sendFireAndForget(MSG_NOTICE_PUBLISH, payload, options.signal);
   };
 
   const subscribe = async (
@@ -243,10 +260,14 @@ export function createNoticeClient(connection: NoticeConnectionPort): NoticeClie
           ),
         );
         if (!parsed.success) {
-          throw new NoticeError(
-            `UNSUBSCRIBE_ALL failed: ${parsed.error ?? "unknown error"}`,
-            "UNSUBSCRIBE_ALL_FAILED",
-            parsed.errorCode,
+          throw attachErrorDisposition(
+            new NoticeError(
+              `UNSUBSCRIBE_ALL failed: ${parsed.error ?? "unknown error"}`,
+              "UNSUBSCRIBE_ALL_FAILED",
+              parsed.errorCode,
+            ),
+            parsed.errorClass,
+            parsed.effect,
           );
         }
         if (parsed.data.length !== 0) {
@@ -292,10 +313,14 @@ export function createNoticeClient(connection: NoticeConnectionPort): NoticeClie
     const response = await request(MSG_NOTICE_SUBSCRIBE, payload);
     const parsed = parseStandardResponse(response);
     if (!parsed.success) {
-      throw new NoticeError(
-        `SUBSCRIBE failed: ${parsed.error ?? "unknown error"}`,
-        "SUBSCRIBE_FAILED",
-        parsed.errorCode,
+      throw attachErrorDisposition(
+        new NoticeError(
+          `SUBSCRIBE failed: ${parsed.error ?? "unknown error"}`,
+          "SUBSCRIBE_FAILED",
+          parsed.errorCode,
+        ),
+        parsed.errorClass,
+        parsed.effect,
       );
     }
     const reader = createBufferReader(parsed.data);
@@ -352,10 +377,14 @@ export function createNoticeClient(connection: NoticeConnectionPort): NoticeClie
       const payload = NoticeCodec.encodeUnsubscribe(subscription.subId);
       const parsed = parseStandardResponse(await requestFrame(MSG_NOTICE_UNSUBSCRIBE, payload));
       if (!parsed.success) {
-        throw new NoticeError(
-          `UNSUBSCRIBE failed: ${parsed.error ?? "unknown error"}`,
-          "UNSUBSCRIBE_FAILED",
-          parsed.errorCode,
+        throw attachErrorDisposition(
+          new NoticeError(
+            `UNSUBSCRIBE failed: ${parsed.error ?? "unknown error"}`,
+            "UNSUBSCRIBE_FAILED",
+            parsed.errorCode,
+          ),
+          parsed.errorClass,
+          parsed.effect,
         );
       }
     })();

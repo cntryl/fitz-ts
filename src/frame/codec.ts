@@ -1,18 +1,43 @@
-/**
- * Frame encoding/decoding for Fitz protocol
- * Format: [MessageType (variable)][Length (u16 BE)][Payload]
- * MessageType: 0-254 = single byte, 255+ = escape 0xFF + u16 BE
- */
+/** Wire format 2 framing and control-message codecs. */
 
+import { createBufferReader, createBufferWriter } from "../core/buffer";
 import { CodecError } from "../core/errors";
-import { MSG_CORRELATE } from "./types";
 
-/** Wire width of a correlation value. */
-const CORRELATION_BYTES = 8;
+export const HEADER_LENGTH = 15;
+export const DEFAULT_MAX_MESSAGE_BYTES = 1024 * 1024;
+export const FLAG_ACK_REQUESTED = 0x01;
+const RESERVED_FLAGS = 0xfe;
+const MAX_U64 = 0xffffffffffffffffn;
 
 export interface Frame {
   messageType: number;
+  flags: number;
+  correlation: bigint;
   payload: Uint8Array;
+}
+
+export interface FrameOptions {
+  flags?: number;
+  correlation?: bigint;
+}
+
+export interface Hello {
+  version: number;
+  brokerCapabilities: number;
+  maxMessageBytes: number;
+  maxInFlight: number;
+  sessionId: bigint;
+}
+
+export interface ConnectRejected {
+  code: number;
+  message: string;
+}
+
+export interface GoAway {
+  code: number;
+  graceMs: number;
+  reason: string;
 }
 
 export interface PendingFrameInfo {
@@ -25,347 +50,219 @@ export interface PendingFrameInfo {
   payloadBytesRemaining?: number;
 }
 
-const encodeFrame = (messageType: number, payload: Uint8Array): Uint8Array => {
-  if (messageType < 0) {
-    throw new CodecError(`Invalid message type: ${messageType}`);
-  }
-  if (messageType > 0xffff) {
-    throw new CodecError(`Invalid message type: ${messageType}`);
-  }
-
-  const payloadLength = payload.length;
-  if (payloadLength > 0xffff) {
-    throw new CodecError(`Frame payload too large: ${payloadLength} bytes`);
-  }
-
-  const typeSize = messageType <= 254 ? 1 : 3;
-  const buffer = new Uint8Array(typeSize + 2 + payloadLength);
-  let offset = 0;
-
-  if (messageType <= 254) {
-    buffer[offset++] = messageType;
-  } else {
-    buffer[offset++] = 0xff;
-    buffer[offset++] = (messageType >> 8) & 0xff;
-    buffer[offset++] = messageType & 0xff;
-  }
-
-  buffer[offset++] = (payloadLength >> 8) & 0xff;
-  buffer[offset++] = payloadLength & 0xff;
-  buffer.set(payload, offset);
-
-  return buffer;
-};
-
-const decodeFrame = (buffer: Uint8Array): Frame => {
-  let offset = 0;
-
-  const firstByte = buffer[offset++]!;
-  let messageType: number;
-
-  if (firstByte === 0xff) {
-    if (offset + 2 > buffer.length) {
-      throw new CodecError("Frame incomplete: invalid message type header");
-    }
-    messageType = (buffer[offset]! << 8) | buffer[offset + 1]!;
-    offset += 2;
-  } else {
-    messageType = firstByte;
-  }
-
-  if (offset + 2 > buffer.length) {
-    throw new CodecError("Frame incomplete: missing length header");
-  }
-
-  const length = (buffer[offset]! << 8) | buffer[offset + 1]!;
-  offset += 2;
-
-  const remaining = buffer.length - offset;
-  if (remaining < length) {
-    throw new CodecError(`Frame incomplete: expected ${length} bytes, got ${remaining}`);
-  }
-  if (remaining > length) {
-    const nextOffset = offset + length;
-    const nextFirstByte = buffer[nextOffset]!;
-    const nextMessageType =
-      nextFirstByte === 0xff && nextOffset + 2 < buffer.length
-        ? (buffer[nextOffset + 1]! << 8) | buffer[nextOffset + 2]!
-        : nextFirstByte;
-    if (nextMessageType === messageType) {
-      throw new CodecError(`Duplicate TLV tag: ${messageType}`);
-    }
-    throw new CodecError(`Frame has trailing data: expected ${length} bytes, got ${remaining}`);
-  }
-
-  const payload = buffer.subarray(offset, offset + length);
-  return { messageType, payload };
-};
-
-const getMessageTypeSize = (messageType: number): number => {
-  if (messageType <= 254) {
-    return 1;
-  }
-  return 3;
-};
-
-const calculateFrameSize = (messageType: number, payloadLength: number): number => {
-  return getMessageTypeSize(messageType) + 2 + payloadLength;
-};
-
-/**
- * Encode a CORRELATE record labelling the request that follows it.
- *
- * The two records travel in one transport frame, so the broker sees the label
- * immediately before the record it belongs to. Zero is reserved as the absent
- * value and is rejected here rather than on the wire.
- */
-const encodeCorrelate = (correlationId: bigint): Uint8Array => {
-  if (correlationId <= 0n || correlationId > 0xffffffffffffffffn) {
-    throw new CodecError(`Invalid correlation id: ${correlationId}`);
-  }
-  const value = new Uint8Array(CORRELATION_BYTES);
-  new DataView(value.buffer).setBigUint64(0, correlationId, false);
-  return encodeFrame(MSG_CORRELATE, value);
-};
-
-/** Read a correlation value from a CORRELATE/CORRELATED record payload. */
-const decodeCorrelation = (payload: Uint8Array): bigint | undefined => {
-  if (payload.length !== CORRELATION_BYTES) {
-    return undefined;
-  }
-  const view = new DataView(payload.buffer, payload.byteOffset, payload.byteLength);
-  const value = view.getBigUint64(0, false);
-  return value === 0n ? undefined : value;
-};
-
-/** Read a SERVER_HELLO body, ignoring trailing bytes a later version may append. */
-const decodeServerHello = (
+const encodeFrame = (
+  messageType: number,
   payload: Uint8Array,
-): { protocolVersion: number; capabilities: number } | undefined => {
-  if (payload.length < 6) {
-    return undefined;
+  options: FrameOptions = {},
+): Uint8Array => {
+  if (!Number.isInteger(messageType) || messageType < 0 || messageType > 0xffff) {
+    throw new CodecError(`Invalid message type: ${messageType}`);
+  }
+  const flags = options.flags ?? 0;
+  const correlation = options.correlation ?? 0n;
+  if (!Number.isInteger(flags) || flags < 0 || flags > 0xff || (flags & RESERVED_FLAGS) !== 0) {
+    throw new CodecError(`Invalid message flags: ${flags}`);
+  }
+  if (correlation < 0n || correlation > MAX_U64) {
+    throw new CodecError(`Invalid correlation id: ${correlation}`);
+  }
+  if (payload.length + HEADER_LENGTH > DEFAULT_MAX_MESSAGE_BYTES) {
+    throw new CodecError(`Message exceeds ${DEFAULT_MAX_MESSAGE_BYTES} bytes`);
+  }
+
+  const frame = new Uint8Array(HEADER_LENGTH + payload.length);
+  const view = new DataView(frame.buffer);
+  view.setUint16(0, messageType, false);
+  view.setUint8(2, flags);
+  view.setBigUint64(3, correlation, false);
+  view.setUint32(11, payload.length, false);
+  frame.set(payload, HEADER_LENGTH);
+  return frame;
+};
+
+const decodeFrame = (frame: Uint8Array, maxMessageBytes = DEFAULT_MAX_MESSAGE_BYTES): Frame => {
+  if (frame.length < HEADER_LENGTH) {
+    throw new CodecError(`Message header is truncated: got ${frame.length} bytes`);
+  }
+  const view = new DataView(frame.buffer, frame.byteOffset, frame.byteLength);
+  const messageType = view.getUint16(0, false);
+  const flags = view.getUint8(2);
+  if ((flags & RESERVED_FLAGS) !== 0) {
+    throw new CodecError(`Reserved message flags are set: ${flags}`);
+  }
+  const correlation = view.getBigUint64(3, false);
+  const payloadLength = view.getUint32(11, false);
+  if (payloadLength + HEADER_LENGTH > maxMessageBytes) {
+    throw new CodecError(`Message exceeds negotiated limit of ${maxMessageBytes} bytes`);
+  }
+  const actualPayloadLength = frame.length - HEADER_LENGTH;
+  if (actualPayloadLength !== payloadLength) {
+    throw new CodecError(
+      `Message length mismatch: declared ${payloadLength}, got ${actualPayloadLength}`,
+    );
+  }
+  return {
+    messageType,
+    flags,
+    correlation,
+    payload: frame.subarray(HEADER_LENGTH),
+  };
+};
+
+const withCorrelation = (frame: Uint8Array, correlation: bigint): Uint8Array => {
+  if (correlation <= 0n || correlation > MAX_U64) {
+    throw new CodecError(`Invalid request correlation: ${correlation}`);
+  }
+  if (frame.length < HEADER_LENGTH) {
+    throw new CodecError("Cannot label a truncated message");
+  }
+  const labelled = frame.slice();
+  new DataView(labelled.buffer).setBigUint64(3, correlation, false);
+  return labelled;
+};
+
+const encodeConnect = (input: {
+  jwt: string;
+  serviceName: string;
+  clientBuild: string;
+}): Uint8Array => {
+  const writer = createBufferWriter();
+  writer.writeU16BE(2);
+  writer.writeU16BE(2);
+  writer.writeU32BE(0);
+  writer.writeString(input.jwt);
+  writer.writeString(input.serviceName);
+  writer.writeString(input.clientBuild);
+  return writer.getBuffer();
+};
+
+const decodeHello = (payload: Uint8Array): Hello => {
+  const minimumLength = 2 + 4 + 4 + 4 + 8;
+  if (payload.length < minimumLength) {
+    throw new CodecError(`HELLO needs at least ${minimumLength} bytes`);
   }
   const view = new DataView(payload.buffer, payload.byteOffset, payload.byteLength);
   return {
-    protocolVersion: view.getUint16(0, false),
-    capabilities: view.getUint32(2, false),
+    version: view.getUint16(0, false),
+    brokerCapabilities: view.getUint32(2, false),
+    maxMessageBytes: view.getUint32(6, false),
+    maxInFlight: view.getUint32(10, false),
+    sessionId: view.getBigUint64(14, false),
   };
+};
+
+const decodeConnectRejected = (payload: Uint8Array): ConnectRejected => {
+  const reader = createBufferReader(payload);
+  const code = reader.readU16BE();
+  const message = reader.readString();
+  if (!reader.isEOF()) {
+    throw new CodecError("CONNECT_REJECTED has trailing data");
+  }
+  return { code, message };
+};
+
+const decodeGoAway = (payload: Uint8Array): GoAway => {
+  const reader = createBufferReader(payload);
+  const code = reader.readU16BE();
+  const graceMs = reader.readU32BE();
+  const reason = reader.readString();
+  if (!reader.isEOF()) {
+    throw new CodecError("GOAWAY has trailing data");
+  }
+  return { code, graceMs, reason };
 };
 
 export const FrameCodec = {
   encodeFrame,
   decodeFrame,
-  getMessageTypeSize,
-  calculateFrameSize,
-  encodeCorrelate,
-  decodeCorrelation,
-  decodeServerHello,
+  withCorrelation,
+  encodeConnect,
+  decodeHello,
+  decodeConnectRejected,
+  decodeGoAway,
+  calculateFrameSize: (_messageType: number, payloadLength: number): number =>
+    HEADER_LENGTH + payloadLength,
 };
 
-export { encodeCorrelate, decodeCorrelation, decodeServerHello };
+export { decodeConnectRejected, decodeGoAway, decodeHello, encodeConnect, withCorrelation };
 
-/**
- * Helper for streaming frame parsing
- */
 export type FrameParser = ReturnType<typeof createFrameParser>;
 
-export function createFrameParser() {
-  let buffer: Uint8Array = new Uint8Array(1024);
-  let offset = 0;
-  let end = 0;
-  let messageType = -1;
-  let payloadLength = -1;
-  let state = 0; // 0=reading_type, 1=reading_length, 2=reading_payload
-
-  const ensureCapacity = (needed: number): void => {
-    if (buffer.length >= needed) {
-      return;
-    }
-
-    const newCapacity = Math.max(buffer.length * 2, needed, 1024);
-    const newBuffer = new Uint8Array(newCapacity);
-    if (end > offset) {
-      newBuffer.set(buffer.subarray(offset, end));
-      end -= offset;
-      offset = 0;
-    } else {
-      end = 0;
-      offset = 0;
-    }
-    buffer = newBuffer;
-  };
-
-  const appendData = (data: Uint8Array): void => {
-    if (data.length === 0) {
-      return;
-    }
-
-    const remaining = end - offset;
-    if (remaining === 0) {
-      offset = 0;
-      end = 0;
-    } else if (buffer.length - end < data.length) {
-      if (offset > 0) {
-        buffer.copyWithin(0, offset, end);
-        end = remaining;
-        offset = 0;
-      }
-    }
-
-    ensureCapacity(end + data.length);
-    buffer.set(data, end);
-    end += data.length;
-  };
-
-  const parseCompleteInputFrames = (data: Uint8Array): { frames: Frame[]; consumed: number } => {
-    const frames: Frame[] = [];
-    let cursor = 0;
-
-    while (cursor < data.length) {
-      const frameStart = cursor;
-      const firstByte = data[cursor++]!;
-      let parsedMessageType: number;
-
-      if (firstByte === 0xff) {
-        if (cursor + 2 > data.length) {
-          return { frames, consumed: frameStart };
-        }
-        parsedMessageType = (data[cursor]! << 8) | data[cursor + 1]!;
-        cursor += 2;
-      } else {
-        parsedMessageType = firstByte;
-      }
-
-      if (cursor + 2 > data.length) {
-        return { frames, consumed: frameStart };
-      }
-
-      const parsedPayloadLength = (data[cursor]! << 8) | data[cursor + 1]!;
-      cursor += 2;
-      if (cursor + parsedPayloadLength > data.length) {
-        return { frames, consumed: frameStart };
-      }
-
-      frames.push({
-        messageType: parsedMessageType,
-        payload: data.subarray(cursor, cursor + parsedPayloadLength),
-      });
-      cursor += parsedPayloadLength;
-    }
-
-    return { frames, consumed: cursor };
-  };
+export function createFrameParser(initialMaxMessageBytes = DEFAULT_MAX_MESSAGE_BYTES) {
+  let buffer = new Uint8Array(0);
+  let maxMessageBytes = initialMaxMessageBytes;
 
   const parseFrames = (data: Uint8Array): Frame[] => {
-    if (state === 0 && offset === end && data.length > 0) {
-      const parsed = parseCompleteInputFrames(data);
-      if (parsed.consumed === data.length) {
-        return parsed.frames;
+    if (data.length > 0) {
+      if (buffer.length + data.length > maxMessageBytes) {
+        throw new CodecError(`Message exceeds negotiated limit of ${maxMessageBytes} bytes`);
       }
-
-      if (parsed.consumed > 0) {
-        appendData(data.subarray(parsed.consumed));
-        return parsed.frames;
-      }
+      const combined = new Uint8Array(buffer.length + data.length);
+      combined.set(buffer);
+      combined.set(data, buffer.length);
+      buffer = combined;
+    }
+    if (buffer.length < HEADER_LENGTH) {
+      return [];
     }
 
-    appendData(data);
-
-    const frames: Frame[] = [];
-
-    while (true) {
-      if (state === 0) {
-        if (offset >= end) break;
-
-        const firstByte = buffer[offset]!;
-        if (firstByte === 0xff) {
-          if (offset + 3 > end) break;
-          messageType = (buffer[offset + 1]! << 8) | buffer[offset + 2]!;
-          offset += 3;
-        } else {
-          messageType = firstByte;
-          offset += 1;
-        }
-
-        state = 1;
-      }
-
-      if (state === 1) {
-        if (offset + 2 > end) break;
-        payloadLength = (buffer[offset]! << 8) | buffer[offset + 1]!;
-        offset += 2;
-        state = 2;
-      }
-
-      if (state === 2) {
-        if (offset + payloadLength > end) break;
-        frames.push({
-          messageType,
-          payload: buffer.slice(offset, offset + payloadLength),
-        });
-        offset += payloadLength;
-        messageType = -1;
-        payloadLength = -1;
-        state = 0;
-      }
+    const view = new DataView(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+    const payloadLength = view.getUint32(11, false);
+    const frameLength = HEADER_LENGTH + payloadLength;
+    if (frameLength > maxMessageBytes) {
+      throw new CodecError(`Message exceeds negotiated limit of ${maxMessageBytes} bytes`);
+    }
+    if (buffer.length < frameLength) {
+      return [];
+    }
+    if (buffer.length > frameLength) {
+      throw new CodecError("Transport frame contains more than one message");
     }
 
-    if (offset === end) {
-      offset = 0;
-      end = 0;
-    }
-
-    return frames;
-  };
-
-  const hasCompleteFrame = (): boolean => {
-    return state === 2 && payloadLength >= 0 && offset + payloadLength <= end;
+    const complete = buffer;
+    buffer = new Uint8Array(0);
+    return [decodeFrame(complete, maxMessageBytes)];
   };
 
   const getPendingFrameInfo = (): PendingFrameInfo => {
-    const bufferedBytes = end - offset;
-
-    if (state === 2 && payloadLength >= 0) {
-      const payloadBytesRead = Math.max(0, bufferedBytes);
+    if (buffer.length === 0) {
+      return { hasPending: false, bufferedBytes: 0, state: "type" };
+    }
+    if (buffer.length < HEADER_LENGTH) {
       return {
         hasPending: true,
-        bufferedBytes,
-        state: "payload",
-        messageType,
-        payloadLength,
-        payloadBytesRead,
-        payloadBytesRemaining: Math.max(0, payloadLength - payloadBytesRead),
+        bufferedBytes: buffer.length,
+        state: buffer.length < 2 ? "type" : "length",
+        ...(buffer.length >= 2 ? { messageType: (buffer[0]! << 8) | buffer[1]! } : {}),
       };
     }
-
-    if (state === 1) {
-      return {
-        hasPending: true,
-        bufferedBytes,
-        state: "length",
-        messageType,
-      };
-    }
-
+    const view = new DataView(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+    const payloadLength = view.getUint32(11, false);
+    const payloadBytesRead = buffer.length - HEADER_LENGTH;
     return {
-      hasPending: bufferedBytes > 0,
-      bufferedBytes,
-      state: "type",
+      hasPending: true,
+      bufferedBytes: buffer.length,
+      state: "payload",
+      messageType: view.getUint16(0, false),
+      payloadLength,
+      payloadBytesRead,
+      payloadBytesRemaining: Math.max(0, payloadLength - payloadBytesRead),
     };
   };
 
   const reset = (): void => {
-    offset = 0;
-    end = 0;
-    messageType = -1;
-    payloadLength = -1;
-    state = 0;
+    buffer = new Uint8Array(0);
   };
 
   return {
     parseFrames,
-    hasCompleteFrame,
     getPendingFrameInfo,
     reset,
+    setMaxMessageBytes: (value: number): void => {
+      if (!Number.isInteger(value) || value < HEADER_LENGTH) {
+        throw new CodecError(`Invalid max_message_bytes value: ${value}`);
+      }
+      maxMessageBytes = value;
+    },
   };
 }

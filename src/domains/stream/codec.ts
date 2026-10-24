@@ -16,6 +16,7 @@ import {
   type BufferWriter,
 } from "../../core/buffer";
 import { StreamError } from "../../core/errors";
+import { parseStandardResponse } from "../../protocol/response";
 import {
   MSG_STREAM_APPEND,
   MSG_STREAM_BEGIN,
@@ -51,9 +52,7 @@ export interface StreamWireReadOptions {
 
 export const StreamCodec = {
   /**
-   * Decode the response envelope selected by the authoritative request message type.
-   * Status 2 carries `[u32 code][string message]` for Stream errors.
-   * Legacy status 1 is coded for READ and plain text for other operations.
+   * Decode the common wire format 2 response envelope.
    */
   decodeResponse(
     payload: Uint8Array,
@@ -63,35 +62,20 @@ export const StreamCodec = {
     data: Uint8Array;
     errorCode?: number;
     errorMessage?: string;
+    errorClass?: number;
+    effect?: number;
   } {
-    const operation = streamOperationName(messageType);
-    const reader = createBufferReader(payload);
-    const status = reader.readU8();
-    if (status === 0) {
-      return { status, data: reader.remaining() };
-    }
-    if (status !== 1 && status !== 2) {
-      if (!reader.isEOF()) {
-        throw new StreamError(
-          `${operation} status response has trailing bytes`,
-          `${operation}_INVALID_RESPONSE`,
-          status,
-        );
-      }
-      return { status, data: new Uint8Array(0) };
-    }
-
-    const errorCode =
-      status === 2 || messageType === MSG_STREAM_READ ? reader.readU32BE() : undefined;
-    const errorMessage = reader.readString();
-    if (!reader.isEOF()) {
-      throw new StreamError(
-        `${operation} error response has trailing bytes`,
-        `${operation}_INVALID_RESPONSE`,
-        errorCode,
-      );
-    }
-    return { status, data: new Uint8Array(0), errorCode, errorMessage };
+    streamOperationName(messageType);
+    const parsed = parseStandardResponse(payload);
+    if (parsed.success) return { status: 0, data: parsed.data };
+    return {
+      status: 1,
+      data: new Uint8Array(0),
+      errorCode: parsed.errorCode,
+      errorMessage: parsed.error,
+      errorClass: parsed.errorClass,
+      effect: parsed.effect,
+    };
   },
 
   /**
@@ -124,6 +108,8 @@ export const StreamCodec = {
     sessionId?: bigint;
     errorCode?: number;
     errorMessage?: string;
+    errorClass?: number;
+    effect?: number;
   } {
     const decoded = this.decodeResponse(payload, MSG_STREAM_BEGIN);
     if (decoded.status !== 0) return decoded;
@@ -185,6 +171,8 @@ export const StreamCodec = {
     offset?: bigint;
     errorCode?: number;
     errorMessage?: string;
+    errorClass?: number;
+    effect?: number;
   } {
     const decoded = this.decodeResponse(payload, MSG_STREAM_APPEND);
     if (decoded.status !== 0 || decoded.data.length < 12) {
@@ -221,6 +209,8 @@ export const StreamCodec = {
     status: number;
     errorCode?: number;
     errorMessage?: string;
+    errorClass?: number;
+    effect?: number;
   } {
     return this.decodeResponse(payload, MSG_STREAM_COMMIT);
   },
@@ -243,6 +233,8 @@ export const StreamCodec = {
     status: number;
     errorCode?: number;
     errorMessage?: string;
+    errorClass?: number;
+    effect?: number;
   } {
     return this.decodeResponse(payload, MSG_STREAM_ROLLBACK);
   },
@@ -321,6 +313,8 @@ export const StreamCodec = {
     cursor?: StreamReadCursor;
     errorCode?: number;
     errorMessage?: string;
+    errorClass?: number;
+    effect?: number;
   } {
     const decoded = this.decodeResponse(payload, MSG_STREAM_READ);
     if (decoded.status !== 0) {
@@ -408,6 +402,8 @@ export const StreamCodec = {
     record?: StreamRecord;
     errorCode?: number;
     errorMessage?: string;
+    errorClass?: number;
+    effect?: number;
   } {
     const decoded = this.decodeResponse(payload, MSG_STREAM_LAST);
     if (decoded.status !== 0 || decoded.data.length === 0) {
@@ -440,6 +436,8 @@ export const StreamCodec = {
     metadata?: StreamMetadata;
     errorCode?: number;
     errorMessage?: string;
+    errorClass?: number;
+    effect?: number;
   } {
     const decoded = this.decodeResponse(payload, MSG_STREAM_GET_METADATA);
     if (decoded.status !== 0 || decoded.data.length === 0) {

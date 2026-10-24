@@ -33,7 +33,7 @@ export interface KvScanOptions {
   limit?: number;
   /** Reverses key order and range traversal when `true`. */
   reverse?: boolean;
-  /** Starts strictly after `startKey` in the selected direction; requires the broker capability. */
+  /** Starts strictly after `startKey` in the selected direction. */
   startExclusive?: boolean;
   /** Cancels this scan request without closing the transaction. */
   signal?: AbortSignal;
@@ -92,11 +92,15 @@ export function createKvSubscription(
 export interface KvBeginResponse {
   status: number;
   txId?: bigint;
+  errorClass?: number;
+  effect?: number;
 }
 
 export interface KvStatusResponse {
   status: number;
   errorMessage?: string;
+  errorClass?: number;
+  effect?: number;
 }
 
 export interface KvGetResponse {
@@ -104,6 +108,8 @@ export interface KvGetResponse {
   found: boolean;
   value?: Uint8Array;
   errorMessage?: string;
+  errorClass?: number;
+  effect?: number;
 }
 
 export interface KvScanResponse {
@@ -111,6 +117,8 @@ export interface KvScanResponse {
   entries: Array<{ key: Uint8Array; value: Uint8Array }>;
   hasMore: boolean;
   errorMessage?: string;
+  errorClass?: number;
+  effect?: number;
 }
 
 export enum KvStatus {

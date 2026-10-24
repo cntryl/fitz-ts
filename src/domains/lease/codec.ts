@@ -10,7 +10,7 @@ import {
   writeU64BENumberAt,
   writeU32BEAt,
 } from "../../core/buffer";
-import { LeaseError, ProtocolError } from "../../core/errors";
+import { attachErrorDisposition, LeaseError, ProtocolError } from "../../core/errors";
 import { parseStandardResponse } from "../../protocol/response";
 import {
   AcquireResponse,
@@ -65,10 +65,14 @@ export const LeaseCodec = {
     }
     const parsed = parseStandardResponse(payload);
     if (!parsed.success) {
-      throw new LeaseError(
-        `ACQUIRE failed: ${parsed.error ?? "unknown error"}`,
-        "ACQUIRE_FAILED",
-        parsed.errorCode,
+      throw attachErrorDisposition(
+        new LeaseError(
+          `ACQUIRE failed: ${parsed.error ?? "unknown error"}`,
+          "ACQUIRE_FAILED",
+          parsed.errorCode,
+        ),
+        parsed.errorClass,
+        parsed.effect,
       );
     }
     const reader = createBufferReader(parsed.data);
@@ -151,7 +155,13 @@ export const LeaseCodec = {
   decodeQueryResponse(payload: Uint8Array): QueryResponse {
     const parsed = parseStandardResponse(payload);
     if (!parsed.success) {
-      return { status: 1, errorMessage: parsed.error, errorCode: parsed.errorCode };
+      return {
+        status: 1,
+        errorMessage: parsed.error,
+        errorCode: parsed.errorCode,
+        errorClass: parsed.errorClass,
+        effect: parsed.effect,
+      };
     }
     const status = 0;
     const reader = createBufferReader(parsed.data);
@@ -240,10 +250,14 @@ export const LeaseCodec = {
   decodeListResponse(payload: Uint8Array): LeaseListPage {
     const parsed = parseStandardResponse(payload);
     if (!parsed.success) {
-      throw new LeaseError(
-        `LIST failed: ${parsed.error ?? "unknown error"}`,
-        "LIST_FAILED",
-        parsed.errorCode,
+      throw attachErrorDisposition(
+        new LeaseError(
+          `LIST failed: ${parsed.error ?? "unknown error"}`,
+          "LIST_FAILED",
+          parsed.errorCode,
+        ),
+        parsed.errorClass,
+        parsed.effect,
       );
     }
 
@@ -284,10 +298,14 @@ export const LeaseCodec = {
   decodeSuccessResponse(payload: Uint8Array, operation: string): Uint8Array {
     const parsed = parseStandardResponse(payload);
     if (!parsed.success) {
-      throw new LeaseError(
-        `${operation} failed: ${parsed.error ?? "unknown error"}`,
-        `${operation}_FAILED`,
-        parsed.errorCode,
+      throw attachErrorDisposition(
+        new LeaseError(
+          `${operation} failed: ${parsed.error ?? "unknown error"}`,
+          `${operation}_FAILED`,
+          parsed.errorCode,
+        ),
+        parsed.errorClass,
+        parsed.effect,
       );
     }
     return parsed.data;

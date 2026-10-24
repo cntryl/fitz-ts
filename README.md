@@ -38,9 +38,9 @@ await tx.commit({ durability: "Sync" });
 await client.close();
 ```
 
-`serviceName` is optional. New brokers record it on the active session after
-advertising the `SESSION_METADATA` capability; surrounding whitespace is trimmed before it is
-reported, and older brokers receive no metadata frame.
+`serviceName` is optional. When supplied, surrounding whitespace is trimmed
+and the value is included in the wire format 2 `CONNECT` handshake for broker
+session visibility.
 
 ## Startup Orchestration
 
@@ -114,7 +114,10 @@ Queue and stream subscriptions are wake signals, not work handlers. The authorit
 
 `notice.unsubscribeAll()` removes all Notice subscriptions for the current broker session and completes their local handles after the broker acknowledges opcode 503.
 
-Schedule `create()` and offset-based `entries()` remain the portable operations. Brokers exposing the additive Schedule extensions also support `createBatch(entries)` (706) and `listV2({ cursor, limit })` (707). A cursor page includes `entries`, `hasMore`, and an opaque `continuation` for the next request.
+Schedule LIST (702) uses cursor pagination. `entries()` requests the first page;
+use `listV2({ cursor, limit })` to request later pages. The page includes
+`entries`, `hasMore`, and an opaque `continuation`. `createBatch(entries)` uses
+message 706; message 707 is retired.
 
 ## Stream Replay
 

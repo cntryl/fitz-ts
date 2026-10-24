@@ -227,9 +227,8 @@ export function createClientWithTransport<TConfig extends ClientConfig>(
     timeout: config.timeout ?? 30000,
     transport: config.transport ?? "auto",
     webSocket: config.webSocket ?? {},
-    // maxFrameSize applies to the complete TLV frame, whose 5-byte header is
-    // in addition to the spec's 65535-byte maximum value.
-    maxFrameSize: config.maxFrameSize ?? 65540,
+    // maxFrameSize applies to the complete fixed-header wire message.
+    maxFrameSize: config.maxFrameSize ?? 1024 * 1024,
     authSettleDelayMs: config.authSettleDelayMs ?? 1000,
     maxInFlightRequests: config.maxInFlightRequests ?? 256,
     maxRequestQueueSize: config.maxRequestQueueSize ?? 1024,
