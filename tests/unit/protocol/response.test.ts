@@ -1,3 +1,4 @@
+import { errorPayload } from "../helpers/wire-errors";
 import { describe, expect, it } from "vite-plus/test";
 
 import { ProtocolError } from "../../../src/core/errors";
@@ -29,13 +30,7 @@ describe("response helpers", () => {
   });
 
   it("throws ProtocolError with operation context for error responses", () => {
-    const encoder = new TextEncoder();
-    const message = encoder.encode("permission denied");
-    const payload = new Uint8Array(1 + 4 + 4 + message.length);
-    payload[0] = 1;
-    new DataView(payload.buffer).setUint32(1, 9876, false);
-    new DataView(payload.buffer).setUint32(5, message.length, false);
-    payload.set(message, 9);
+    const payload = errorPayload(9876, "permission denied");
 
     expect(() => assertSuccess(payload, "KV_GET")).toThrowError(ProtocolError);
     try {
@@ -52,33 +47,26 @@ describe("response helpers", () => {
   });
 
   it("preserves unknown broker error codes and messages", () => {
-    const message = new TextEncoder().encode("future broker error");
-    const payload = new Uint8Array(9 + message.length);
-    payload[0] = 1;
-    new DataView(payload.buffer).setUint32(1, 4_000_000_000, false);
-    new DataView(payload.buffer).setUint32(5, message.length, false);
-    payload.set(message, 9);
+    const payload = errorPayload(65000, "future broker error");
 
     expect(parseStandardResponse(payload)).toEqual({
       success: false,
       data: new Uint8Array(0),
       error: "future broker error",
-      errorCode: 4_000_000_000,
+      errorCode: 65000,
+      errorClass: 0,
+      effect: 0,
     });
   });
 
-  it("decodes string-only domain errors without inventing a numeric code", () => {
+  it("rejects legacy string-only domain errors", () => {
     const message = new TextEncoder().encode("lease wait timed out");
     const payload = new Uint8Array(5 + message.length);
     payload[0] = 1;
     new DataView(payload.buffer).setUint32(1, message.length, false);
     payload.set(message, 5);
 
-    expect(parsePlainResponse(payload)).toEqual({
-      success: false,
-      data: new Uint8Array(0),
-      error: "lease wait timed out",
-    });
-    expect(() => assertPlainSuccess(payload, "LEASE_ACQUIRE")).toThrow("lease wait timed out");
+    expect(() => parsePlainResponse(payload)).toThrow();
+    expect(() => assertPlainSuccess(payload, "LEASE_ACQUIRE")).toThrow();
   });
 });

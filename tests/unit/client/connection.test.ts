@@ -129,6 +129,22 @@ class FakeTransport implements Transport {
   }
 
   pushRead(data: Uint8Array): void {
+    try {
+      const response = FrameCodec.decodeFrame(data);
+      if (response.correlation === 0n) {
+        const request = this.sent
+          .map((frame) => FrameCodec.decodeFrame(frame))
+          .reverse()
+          .find((frame) => frame.messageType === response.messageType && frame.correlation !== 0n);
+        if (request)
+          data = FrameCodec.encodeFrame(response.messageType, response.payload, {
+            flags: response.flags,
+            correlation: request.correlation,
+          });
+      }
+    } catch {
+      /* Preserve deliberately malformed input. */
+    }
     if (this.pendingRead) {
       this.pendingRead.resolve(data);
       this.pendingRead = null;
@@ -268,7 +284,7 @@ describe("Connection", () => {
     expect(connection.isConnected()).toBe(true);
     expect(tokenProvider).toHaveBeenCalledTimes(1);
     expect(transport.sent).toHaveLength(1);
-    expect(transport.sent[0][0]).toBe(MSG_CONNECT);
+    expect(FrameCodec.decodeFrame(transport.sent[0]).messageType).toBe(MSG_CONNECT);
 
     await connection.close();
   });
@@ -1331,7 +1347,7 @@ describe("Connection", () => {
     await vi.waitFor(() => {
       expect(transport.sent).toHaveLength(2);
     });
-    connection.getMultiplexer().dispatch(77, new Uint8Array([9]));
+    connection.getMultiplexer().dispatch(77, new Uint8Array([9]), 1n);
 
     await expect(pending).resolves.toEqual(new Uint8Array([9]));
     expect(tracer.spans).toHaveLength(1);

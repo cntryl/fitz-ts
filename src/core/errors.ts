@@ -149,24 +149,6 @@ function retryableKey(error: FitzError): string | null {
   return `${prefix}_${error.domainCode}`;
 }
 
-function isTransientQueueCommitFailure(error: FitzError): boolean {
-  if (!error.code.startsWith("QUEUE_")) {
-    return false;
-  }
-
-  const message = error.message.toLowerCase();
-  if (!message.includes("failed to commit transaction:")) {
-    return false;
-  }
-
-  return (
-    message.includes("writestall(") ||
-    message.includes("memory budget exceeded") ||
-    message.includes("lease heartbeat reports unhealthy") ||
-    message.includes("refusing writes")
-  );
-}
-
 /** Classifies transient errors; each operation separately controls whether replay is safe. */
 export function isRetryable(error: unknown): boolean {
   if (!(error instanceof FitzError)) {
@@ -177,9 +159,6 @@ export function isRetryable(error: unknown): boolean {
     return true;
   }
 
-  if (error.effect === undefined && isTransientQueueCommitFailure(error)) {
-    return true;
-  }
   if (error.effect !== 0) {
     return false;
   }
@@ -192,7 +171,7 @@ export function isRetryable(error: unknown): boolean {
     return retryableErrorCodes.has(key);
   }
 
-  return isTransientQueueCommitFailure(error);
+  return false;
 }
 
 /**

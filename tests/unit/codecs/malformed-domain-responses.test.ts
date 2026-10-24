@@ -9,7 +9,12 @@ import { StreamCodec } from "../../../src/domains/stream/codec";
 
 describe("malformed domain responses", () => {
   it.each([
-    ["kv", () => KvCodec.decodeBeginResponse(new Uint8Array()), "Buffer overflow", undefined],
+    [
+      "kv",
+      () => KvCodec.decodeBeginResponse(new Uint8Array()),
+      "Response payload is empty",
+      "PROTOCOL_ERROR",
+    ],
     [
       "queue",
       () =>
@@ -35,7 +40,7 @@ describe("malformed domain responses", () => {
     [
       "stream",
       () => StreamCodec.decodeBeginResponse(new Uint8Array()),
-      "Buffer overflow",
+      "Response payload is empty",
       undefined,
     ],
     [

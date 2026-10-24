@@ -6,6 +6,10 @@ The format is based on Keep a Changelog and the project follows Semantic Version
 
 ## [Unreleased]
 
+- Minify published Node/browser bundles while retaining declarations and source maps to stay within the existing package size budget.
+- Remove message-text Queue retry inference: broker domain failures require explicit Wire 2 NOT_APPLIED metadata before retry classification.
+- Qualify fixed headers, base RPC budgets/cancellation, exclusive scan, error disposition and reconnect behavior in native fixtures.
+
 - Requires the server commit-time persistence contract from cntryl/fitz#471; the old KV wire format is incompatible. Validated against `fitz:develop`.
 
 - Breaking: KV BEGIN no longer accepts persistence. KV COMMIT requires an explicit Buffered or Sync choice; Stream COMMIT also requires an explicit choice. No connection default or silent Sync downgrade is used.

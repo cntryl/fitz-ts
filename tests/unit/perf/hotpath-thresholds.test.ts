@@ -113,11 +113,16 @@ perfDescribe("fitz-ts hot-path thresholds", () => {
   it("keeps the multiplexer hot paths within budget", async () => {
     const multiplexer = createMultiplexer();
     multiplexer.setConnected();
-    multiplexer.setCapabilities(1, 1);
+    multiplexer.setCapabilities(2, 1);
     let roundTripCorrelation = 1n;
 
     const roundTripElapsed = await measureAsync(10_000, async () => {
-      const pending = multiplexer.request(302, body, async () => undefined, 1_000);
+      const pending = multiplexer.request(
+        302,
+        FrameCodec.encodeFrame(302, body),
+        async () => undefined,
+        1_000,
+      );
       multiplexer.dispatch(302, body, roundTripCorrelation);
       roundTripCorrelation += 1n;
       await pending;
@@ -128,10 +133,15 @@ perfDescribe("fitz-ts hot-path thresholds", () => {
     const drainElapsed = await measureAsync(1, async () => {
       const drainingMux = createMultiplexer();
       drainingMux.setConnected();
-      drainingMux.setCapabilities(1, 1);
+      drainingMux.setCapabilities(2, 1);
 
       const pending = Array.from({ length: 1_000 }, (_, index) =>
-        drainingMux.request(302, encoder.encode(`response-${index}`), async () => undefined, 5_000),
+        drainingMux.request(
+          302,
+          FrameCodec.encodeFrame(302, encoder.encode(`response-${index}`)),
+          async () => undefined,
+          5_000,
+        ),
       );
 
       for (let index = 0; index < 1_000; index += 1) {
@@ -147,15 +157,13 @@ perfDescribe("fitz-ts hot-path thresholds", () => {
   it("keeps the frame parser and publish throughput within budget", () => {
     const frameA = FrameCodec.encodeFrame(302, encoder.encode("response-1"));
     const frameB = FrameCodec.encodeFrame(303, encoder.encode("response-2"));
-    const combined = new Uint8Array(frameA.length + frameB.length);
-    combined.set(frameA);
-    combined.set(frameB, frameA.length);
 
     const parserElapsed = measureSync(10_000, () => {
       const parser = createFrameParser();
-      for (let index = 0; index < combined.length; index += 3) {
-        parser.parseFrames(combined.subarray(index, Math.min(combined.length, index + 3)));
-      }
+      for (const frame of [frameA, frameB])
+        for (let index = 0; index < frame.length; index += 3) {
+          parser.parseFrames(frame.subarray(index, Math.min(frame.length, index + 3)));
+        }
     });
     expect(parserElapsed).toBeLessThan(thresholdsMs.frameParserFragmentedStream);
 

@@ -1,3 +1,5 @@
+import { errorPayload } from "../helpers/wire-errors";
+import { writeErrorCode } from "../helpers/wire-errors";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { createBufferWriter } from "../../../src/core/buffer";
@@ -157,14 +159,7 @@ function renewResponse(token: bigint): Uint8Array {
 }
 
 function errorResponse(code: number, message: string): Uint8Array {
-  const encoded = new TextEncoder().encode(message);
-  const bytes = new Uint8Array(1 + 4 + 4 + encoded.length);
-  bytes[0] = 1;
-  const view = new DataView(bytes.buffer);
-  view.setUint32(1, code);
-  view.setUint32(5, encoded.length);
-  bytes.set(encoded, 9);
-  return bytes;
+  return errorPayload(code, message);
 }
 
 class FakeLeaseConnection {
@@ -291,16 +286,10 @@ describe("lease acquisition", () => {
       waitSeconds: 1,
     });
     await Promise.resolve();
-    const message = new TextEncoder().encode("lease wait timed out");
-    const error = new Uint8Array(1 + 4 + 4 + message.length);
-    error[0] = 1;
-    const view = new DataView(error.buffer);
-    view.setUint32(1, 5006);
-    view.setUint32(5, message.length);
-    error.set(message, 9);
+    const error = errorPayload(5055, "lease wait timed out");
     connection.handlers.get(MSG_LEASE_ACQUIRE)?.(error);
 
-    await expect(pending).rejects.toMatchObject({ domainCode: 5006 });
+    await expect(pending).rejects.toMatchObject({ domainCode: 5055 });
     await expect(pending).rejects.toThrow("lease wait timed out");
   });
 
@@ -424,7 +413,7 @@ describe("withLease", () => {
   });
 
   it("does not invoke the callback when acquisition fails", async () => {
-    const connection = new FakeLeaseConnection([errorResponse(5005, "lease held")]);
+    const connection = new FakeLeaseConnection([errorResponse(5050, "lease held")]);
     const client = createLeaseClient(connection as unknown as Connection);
     let invoked = false;
 
@@ -453,7 +442,7 @@ describe("withLease", () => {
       { ttlSeconds: 30, waitSeconds: 1 },
     );
     await Promise.resolve();
-    connection.handlers.get(MSG_LEASE_ACQUIRE)?.(errorResponse(5006, "lease wait timed out"));
+    connection.handlers.get(MSG_LEASE_ACQUIRE)?.(errorResponse(5055, "lease wait timed out"));
 
     await expect(pending).rejects.toThrow("lease wait timed out");
     expect(invoked).toBe(false);
@@ -627,7 +616,7 @@ describe("lease subscribe/unsubscribe", () => {
 
     const writer = createBufferWriter();
     writer.writeU8(1);
-    writer.writeU32BE(5010);
+    writeErrorCode(writer, 5010);
     writer.writeString("broker rejected unsubscribe");
     connection.respond(MSG_LEASE_UNSUBSCRIBE, writer.getBuffer());
 

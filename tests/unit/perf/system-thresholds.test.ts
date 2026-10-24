@@ -7,7 +7,7 @@ import { KvCodec } from "../../../src/domains/kv/codec";
 import { NoticeCodec } from "../../../src/domains/notice/codec";
 import { QueueCodec } from "../../../src/domains/queue/codec";
 import { StreamCodec } from "../../../src/domains/stream/codec";
-import { encoder, buildFrameBatch, routes } from "../../../benches/_shared";
+import { encoder, routes } from "../../../benches/_shared";
 
 const body = encoder.encode("system-threshold-payload");
 const key = encoder.encode("bench-key");
@@ -50,12 +50,11 @@ describe("fitz-ts system perf thresholds", () => {
       FrameCodec.encodeFrame(402, QueueCodec.encodeEnqueue(routes.queue, body)),
       FrameCodec.encodeFrame(403, StreamCodec.encodeBegin(routes.stream, encoder.encode("meta"))),
     ];
-    const combined = buildFrameBatch(frames);
 
     expect(
       measureSync(10_000, () => {
         const parser = createFrameParser();
-        parser.parseFrames(combined);
+        for (const frame of frames) parser.parseFrames(frame);
       }),
     ).toBeLessThan(adjustedThreshold(thresholdsMs.frameBatchEncodeParse));
   });

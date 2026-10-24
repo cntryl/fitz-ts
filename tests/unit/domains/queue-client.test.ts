@@ -367,7 +367,10 @@ describe("QueueClient reserveWhenAvailable", () => {
 describe("QueueItem.extend", () => {
   it("reports a generic EXTEND_FAILED code instead of mislabeling every failure as QueueNotFound", async () => {
     const writer = createBufferWriter();
-    writer.writeU8(1); // status=1 (failure), no domain error code on the wire
+    writer.writeU8(1);
+    writer.writeU16BE(4050);
+    writer.writeU8(0);
+    writer.writeU8(0);
     writer.writeString("lease token expired");
     const failureResponse = writer.getBuffer();
 

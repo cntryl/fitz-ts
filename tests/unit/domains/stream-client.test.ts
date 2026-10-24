@@ -1,3 +1,4 @@
+import { errorPayload } from "../helpers/wire-errors";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
@@ -197,11 +198,11 @@ describe("StreamClient", () => {
     const client = createStreamClient(connection as unknown as Connection);
 
     const session = await client.begin("stream://realm/area/resource");
-    connection.respond(MSG_STREAM_COMMIT, new Uint8Array([7]));
+    connection.respond(MSG_STREAM_COMMIT, errorPayload(2050, "ExpectedOffsetMismatch"));
     connection.respond(MSG_STREAM_ROLLBACK, new Uint8Array([0]));
 
     await expect(session.commit({ mode: "Sync" })).rejects.toMatchObject({
-      domainCode: 7,
+      domainCode: 2050,
     });
     expect(session.isOpen()).toBe(true);
     await expect(session.rollback()).resolves.toBeUndefined();
@@ -361,10 +362,10 @@ describe("StreamClient", () => {
     // Status 7 (ExpectedOffsetMismatch) with no broker-supplied errorMessage
     // — before the fix, client.ts's local checkStatus passed an empty names
     // map to formatStatusName and always fell back to "Unknown(7)".
-    connection.respond(MSG_STREAM_COMMIT, new Uint8Array([7]));
+    connection.respond(MSG_STREAM_COMMIT, errorPayload(2050, "ExpectedOffsetMismatch"));
 
     await expect(session.commit({ mode: "Sync" })).rejects.toMatchObject({
-      domainCode: 7,
+      domainCode: 2050,
       message: "COMMIT failed: ExpectedOffsetMismatch",
     });
   });

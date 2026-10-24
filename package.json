@@ -77,8 +77,8 @@
   "scripts": {
     "clean:dist": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
     "build": "npm run clean:dist && npm run build:node && npm run build:browser",
-    "build:node": "vp pack src/index.node.ts --format esm,cjs --platform node --target node22 --out-dir dist/node --clean --dts --deps.never-bundle ws",
-    "build:browser": "vp pack src/index.browser.ts --format esm,cjs --platform browser --target es2024 --out-dir dist/browser --no-clean --dts",
+    "build:node": "vp pack src/index.node.ts --minify --format esm,cjs --platform node --target node22 --out-dir dist/node --clean --dts --deps.never-bundle ws",
+    "build:browser": "vp pack src/index.browser.ts --minify --format esm,cjs --platform browser --target es2024 --out-dir dist/browser --no-clean --dts",
     "package:lint": "publint && attw --pack . --ignore-rules no-resolution",
     "fixture:check": "node tests/package-consumer/check-stream-fixture.js",
     "typecheck:contract": "tsc -p tests/types/tsconfig.json",

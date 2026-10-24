@@ -33,10 +33,10 @@ describe("Queue integration", () => {
         timeoutMessage: "broker did not advertise correlation capability",
       });
       expect(f.client().getServerCapabilities()).toMatchObject({
-        protocolVersion: 1,
+        protocolVersion: 2,
         correlationEnabled: true,
       });
-      expect(f.client().getServerCapabilities().capabilities & 1).toBe(1);
+      expect(f.client().getServerCapabilities().capabilities).toBe(0);
       const parkedRoute = f.uniqueRoute("queue");
       const readyRoute = f.uniqueRoute("queue");
       await f.client().queue.enqueue(readyRoute, { body: b("second") });

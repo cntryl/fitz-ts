@@ -1,3 +1,4 @@
+import { writeErrorCode } from "../helpers/wire-errors";
 import { describe, expect, it, vi } from "vite-plus/test";
 
 import { ConnectionState } from "../../../src/core/types";
@@ -36,7 +37,7 @@ class FakeRpcConnection {
   public lastSignal: AbortSignal | undefined;
   public asyncDispatchAccepted = true;
   public pausedTasks: Array<() => void | Promise<void>> | undefined;
-  public rpcResponse: Uint8Array = new Uint8Array([0]);
+  public rpcResponse: Uint8Array = new Uint8Array([0, 0, 0, 0, 0]);
   public requestError: Error | undefined;
   private capabilities = 0;
   private readonly requestGates = new Map<number, Promise<void>>();
@@ -124,7 +125,7 @@ class FakeRpcConnection {
   }
 
   getServerCapabilities(): { protocolVersion: number; capabilities: number } {
-    return { protocolVersion: 1, capabilities: this.capabilities };
+    return { protocolVersion: 2, capabilities: this.capabilities };
   }
 
   setCapabilities(capabilities: number): void {
@@ -195,7 +196,7 @@ describe("RpcClient", () => {
     await expect(iterator.cancellation).resolves.toBe("forwarded");
   });
 
-  it("keeps legacy request encoding and reports cancellation as unsupported", async () => {
+  it("supports cancellation with zero optional capability bits", async () => {
     const connection = new FakeRpcConnection();
     const client = createRpcClient(connection);
     const iterator = client.call("rpc://realm/area/method", {
@@ -205,12 +206,15 @@ describe("RpcClient", () => {
 
     await vi.waitFor(() => expect(connection.sendCalls).toHaveLength(1));
     const request = RpcCodec.decodeInboundRequest(connection.sendCalls[0]!.payload);
-    expect(request.remainingBudgetMs).toBeUndefined();
+    expect(request.remainingBudgetMs).toBeGreaterThan(0);
     await iterator.return?.();
 
-    await expect(iterator.cancellation).resolves.toBe("unsupported");
+    connection.notificationHandlers.get(MSG_RPC_LIFECYCLE)?.(
+      encodeLifecycleControl(4, request.correlationId, 2),
+    );
+    await expect(iterator.cancellation).resolves.toBe("forwarded");
     expect(connection.sendCalls.some((call) => call.messageType === MSG_RPC_CANCELLATION)).toBe(
-      false,
+      true,
     );
   });
 
@@ -231,7 +235,7 @@ describe("RpcClient", () => {
       });
       await writer.end({ body: new Uint8Array([1]) });
     });
-    expect(connection.requestCalls[0]?.payload.slice(-2)).toEqual(new Uint8Array([1, 1]));
+    expect(connection.requestCalls[0]?.payload.slice(-1)).toEqual(new Uint8Array([1]));
 
     const correlationId = new Uint8Array(16).fill(9);
     const requestHandler = connection.notificationHandlers.get(MSG_RPC_REQUEST);
@@ -545,7 +549,7 @@ describe("RpcClient", () => {
     expect(response.sequence).toBe(0n);
     expect(response.streamEnd).toBe(true);
     expect(response.correlationKey).toBe(9n);
-    expect(RpcCodec.decodeErrorBody(response.body)).toEqual({
+    expect(RpcCodec.decodeErrorBody(response.body)).toMatchObject({
       code: ErrCodeRpcBackpressure,
       message: "Local RPC worker is overloaded",
     });
@@ -576,7 +580,7 @@ describe("RpcClient", () => {
     );
     const writer = createBufferWriter();
     writer.writeU8(1);
-    writer.writeU32BE(3002);
+    writeErrorCode(writer, 3002);
     writer.writeString("worker not found");
     connection.rpcResponse = writer.getBuffer();
 
@@ -1102,7 +1106,7 @@ function encodeLifecycleControl(kind: 2 | 4, correlationId: Uint8Array, value: n
 function encodeRpcErrorBody(code: number, message: string): Uint8Array {
   const writer = createBufferWriter();
   writer.writeU8(1);
-  writer.writeU32BE(code);
+  writeErrorCode(writer, code);
   writer.writeString(message);
   return writer.getBuffer();
 }
@@ -1111,6 +1115,7 @@ function readSubscribeMaxConcurrency(payload: Uint8Array): number {
   const reader = createBufferReader(payload);
   reader.readString();
   const maxConcurrency = reader.readU32BE();
+  expect(reader.readU8()).toBe(1);
   expect(reader.isEOF()).toBe(true);
   return maxConcurrency;
 }

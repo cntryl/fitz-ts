@@ -1,3 +1,4 @@
+import { errorPayload } from "../helpers/wire-errors";
 import { describe, expect, it, vi } from "vite-plus/test";
 
 import { createConnection } from "../../../src/client/connection";
@@ -76,6 +77,22 @@ class ScriptedTransport implements Transport {
   }
 
   pushRead(data: Uint8Array): void {
+    try {
+      const response = FrameCodec.decodeFrame(data);
+      if (response.correlation === 0n) {
+        const request = this.sent
+          .map((frame) => FrameCodec.decodeFrame(frame))
+          .reverse()
+          .find((frame) => frame.messageType === response.messageType && frame.correlation !== 0n);
+        if (request)
+          data = FrameCodec.encodeFrame(response.messageType, response.payload, {
+            flags: response.flags,
+            correlation: request.correlation,
+          });
+      }
+    } catch {
+      /* Preserve deliberately malformed input. */
+    }
     if (this.pendingRead) {
       this.pendingRead.resolve(data);
       this.pendingRead = null;
@@ -119,20 +136,8 @@ function encodeQueueSuccess(messageId: bigint): Uint8Array {
   return payload;
 }
 
-function encodeQueueError(errorCode: number, message: string): Uint8Array {
-  const messageBytes = new TextEncoder().encode(message);
-  const payload = new Uint8Array(9 + messageBytes.length);
-  payload[0] = 1;
-  payload[1] = (errorCode >> 24) & 0xff;
-  payload[2] = (errorCode >> 16) & 0xff;
-  payload[3] = (errorCode >> 8) & 0xff;
-  payload[4] = errorCode & 0xff;
-  payload[5] = (messageBytes.length >> 24) & 0xff;
-  payload[6] = (messageBytes.length >> 16) & 0xff;
-  payload[7] = (messageBytes.length >> 8) & 0xff;
-  payload[8] = messageBytes.length & 0xff;
-  payload.set(messageBytes, 9);
-  return payload;
+function encodeQueueError(code: number, message: string): Uint8Array {
+  return errorPayload(code, message);
 }
 
 function encodeLeaseQueryFree(): Uint8Array {
@@ -349,7 +354,7 @@ describe("Connection resilience", () => {
           FrameCodec.encodeFrame(
             MSG_QUEUE_ENQUEUE,
             encodeQueueError(
-              4,
+              4005,
               'Failed to commit transaction: WriteStall("Memory budget exceeded")',
             ),
           ),
@@ -390,7 +395,7 @@ describe("Connection resilience", () => {
     transport.onFrame = async (frame, activeTransport) => {
       if (frame.messageType === MSG_QUEUE_ENQUEUE) {
         activeTransport.pushRead(
-          FrameCodec.encodeFrame(MSG_QUEUE_ENQUEUE, encodeQueueError(3, "invalid lease token")),
+          FrameCodec.encodeFrame(MSG_QUEUE_ENQUEUE, encodeQueueError(4050, "invalid lease token")),
         );
       }
     };
@@ -416,7 +421,7 @@ describe("Connection resilience", () => {
     await expect(
       queue.enqueue("queue://realm/area/resource", { body: new Uint8Array([1]) }),
     ).rejects.toMatchObject({
-      code: "QUEUE_InvalidToken",
+      domainCode: 4050,
     });
     expect(transport.sentCount(MSG_QUEUE_ENQUEUE)).toBe(1);
 
