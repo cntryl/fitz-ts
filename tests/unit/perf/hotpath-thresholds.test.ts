@@ -86,10 +86,10 @@ perfDescribe("fitz-ts hot-path thresholds", () => {
     const encodedFrame = FrameCodec.encodeFrame(101, body);
 
     expect(measureSync(100_000, () => FrameCodec.encodeFrame(101, body))).toBeLessThan(
-      thresholdsMs.frameEncode,
+      adjustedThreshold(thresholdsMs.frameEncode),
     );
     expect(measureSync(100_000, () => FrameCodec.decodeFrame(encodedFrame))).toBeLessThan(
-      thresholdsMs.frameDecode,
+      adjustedThreshold(thresholdsMs.frameDecode),
     );
     expect(measureSync(100_000, () => NoticeCodec.encodePublish(noticeRoute, body))).toBeLessThan(
       adjustedThreshold(thresholdsMs.noticePublishEncode),
