@@ -2,8 +2,7 @@ import { describe, expect, it, vi } from "vite-plus/test";
 
 import { createConnection } from "../../../src/client/connection";
 import type { Transport } from "../../../src/transport/types";
-import { FrameCodec } from "../../../src/frame/codec";
-import { MSG_SERVER_HELLO } from "../../../src/frame/types";
+import { wire2HelloFrame } from "./wire-fixtures";
 
 class FakeTransport implements Transport {
   public connected = false;
@@ -23,7 +22,7 @@ class FakeTransport implements Transport {
   async receive(): Promise<Uint8Array> {
     if (this.helloPending) {
       this.helloPending = false;
-      return FrameCodec.encodeFrame(MSG_SERVER_HELLO, new Uint8Array([0, 1, 0, 0, 0, 0]));
+      return wire2HelloFrame();
     }
     return await new Promise<Uint8Array>((resolve, reject) => {
       this.resolveReceive = resolve;

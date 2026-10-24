@@ -248,6 +248,14 @@ export interface RpcClient {
 
 export function createRpcClient(connection: RpcConnectionPort): RpcClient {
   const { requestFrame, requestReconnectFrame } = createDomainClient(connection);
+  const sendRpcFrame = (
+    messageType: number,
+    payload: Uint8Array,
+    signal?: AbortSignal,
+  ): Promise<void> =>
+    connection.sendCorrelated
+      ? connection.sendCorrelated(messageType, payload, signal)
+      : connection.send(messageType, payload, signal);
   type PendingRpcEntry = { iterator: RpcIterator; correlationId: Uint8Array };
   const pendingRpcs = new Map<bigint, PendingRpcEntry>();
   const pendingCancellations = new Map<bigint, PendingCancellation>();
@@ -368,11 +376,7 @@ export function createRpcClient(connection: RpcConnectionPort): RpcClient {
 
     if (options.signal?.aborted) {
       const payload = RpcCodec.encodeCallRequest(correlationId, route, options.body);
-      void (connection.sendCorrelated ?? connection.send)(
-        MSG_RPC_REQUEST,
-        payload,
-        options.signal,
-      ).catch(() => undefined);
+      void sendRpcFrame(MSG_RPC_REQUEST, payload, options.signal).catch(() => undefined);
       settleRequestSent(false);
       return iterator;
     }
@@ -386,7 +390,7 @@ export function createRpcClient(connection: RpcConnectionPort): RpcClient {
       options.body,
       remainingBudgetMs,
     );
-    void (connection.sendCorrelated ?? connection.send)(MSG_RPC_REQUEST, payload).then(
+    void sendRpcFrame(MSG_RPC_REQUEST, payload).then(
       () => settleRequestSent(true),
       (error: unknown) => {
         settleRequestSent(false);
@@ -415,7 +419,7 @@ export function createRpcClient(connection: RpcConnectionPort): RpcClient {
       timeout,
     });
     try {
-      await (connection.sendCorrelated ?? connection.send)(
+      await sendRpcFrame(
         MSG_RPC_CANCELLATION,
         RpcCodec.encodeCallerCancellation(correlationId, reason),
       );
