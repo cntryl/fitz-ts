@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from "vite-plus/test";
 import { createConnection } from "../../../src/client/connection";
 import { shouldRetryOperation } from "../../../src/client/resilience";
 import { ConnectionError, RequestQueueFullError } from "../../../src/core/errors";
-import { Frame, FrameCodec } from "../../../src/frame/codec";
+import { FLAG_RESPONSE_FINAL, Frame, FrameCodec } from "../../../src/frame/codec";
 import { MSG_LEASE_QUERY, MSG_QUEUE_ENQUEUE } from "../../../src/frame/types";
 import { createLeaseClient } from "../../../src/domains/lease/client";
 import { createQueueClient } from "../../../src/domains/queue/client";
@@ -86,7 +86,13 @@ class ScriptedTransport implements Transport {
           .find((frame) => frame.messageType === response.messageType && frame.correlation !== 0n);
         if (request)
           data = FrameCodec.encodeFrame(response.messageType, response.payload, {
-            flags: response.flags,
+            flags:
+              response.flags |
+              (response.messageType === 400 &&
+              response.payload[0] === 0 &&
+              response.payload[1] === 2
+                ? 0
+                : FLAG_RESPONSE_FINAL),
             correlation: request.correlation,
           });
       }

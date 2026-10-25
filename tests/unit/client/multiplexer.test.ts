@@ -2,7 +2,7 @@ import { FrameCodec } from "../../../src/frame/codec";
 import { describe, expect, it, vi } from "vite-plus/test";
 
 import { createMultiplexer } from "../../../src/client/multiplexer";
-import { ConnectionError, TimeoutError } from "../../../src/core/errors";
+import { ConnectionError, ProtocolError, TimeoutError } from "../../../src/core/errors";
 import { CAP_CORRELATION, MSG_RPC_REQUEST, MSG_RPC_RESPONSE } from "../../../src/frame/types";
 import { RpcCodec } from "../../../src/domains/rpc/codec";
 import type { FitzMeter, FitzSpan, FitzTracer } from "../../../src/core/types";
@@ -129,16 +129,31 @@ describe("Multiplexer", () => {
     expect(meter.histograms).toContain("fitz.request.duration");
   });
 
-  it("routes a later phase normally after its correlation already completed", () => {
+  it("rejects an unmatched nonzero correlation instead of routing by message type", () => {
     const multiplexer = createMultiplexer();
     multiplexer.setConnected();
     const handler = vi.fn();
     multiplexer.registerNotificationHandler(400, handler);
 
-    multiplexer.dispatch(400, new Uint8Array([7]), 999n);
+    expect(() => multiplexer.dispatch(400, new Uint8Array([7]), 999n)).toThrow(ProtocolError);
+    expect(handler).not.toHaveBeenCalled();
+  });
 
-    expect(handler).toHaveBeenCalledWith(new Uint8Array([7]));
-    expect(multiplexer.getMetrics().responsesDropped).toBe(0);
+  it("keeps a correlated request pending until its final response phase", async () => {
+    const multiplexer = createMultiplexer();
+    multiplexer.setConnected();
+    multiplexer.setCapabilities(2, CAP_CORRELATION);
+    const request = multiplexer.request(
+      400,
+      FrameCodec.encodeFrame(400, new Uint8Array([1])),
+      async () => undefined,
+      1000,
+    );
+
+    multiplexer.dispatch(400, new Uint8Array([0, 2]), 1n, false);
+    multiplexer.dispatch(400, new Uint8Array([0, 0, 0, 9]), 1n, true);
+
+    await expect(request).resolves.toEqual(new Uint8Array([0, 0, 0, 9]));
   });
 
   it("records timeout failures once and closes the span", async () => {

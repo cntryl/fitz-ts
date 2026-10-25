@@ -21,6 +21,7 @@ import { utf8Encoder } from "../core/buffer";
 import {
   createFrameParser,
   DEFAULT_MAX_MESSAGE_BYTES,
+  FLAG_RESPONSE_FINAL,
   FrameCodec,
   type GoAway,
 } from "../frame/codec";
@@ -963,6 +964,7 @@ export function createConnection(
             frame.messageType,
             frame.payload,
             frame.correlation === 0n ? undefined : frame.correlation,
+            (frame.flags & FLAG_RESPONSE_FINAL) !== 0,
           );
         }
       } catch (error) {

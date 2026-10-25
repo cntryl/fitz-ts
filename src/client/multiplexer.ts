@@ -13,7 +13,7 @@ import {
   type FitzMeter,
   type FitzTracer,
 } from "../core/types";
-import { ConnectionError, TimeoutError } from "../core/errors";
+import { ConnectionError, ProtocolError, TimeoutError } from "../core/errors";
 import { abortError } from "../core/abort";
 import { FrameCodec } from "../frame/codec";
 
@@ -657,19 +657,28 @@ export function createMultiplexer(observability: MultiplexerObservability = {}) 
     recordRequestFinished(messageType);
   };
 
-  const dispatch = (messageType: number, payload: Uint8Array, correlationId?: bigint): void => {
-    // Resolve a live correlation before type-based routing. A correlation may
-    // produce more than one domain-defined phase, so an unknown identifier must
-    // fall through to the normal message-type path rather than be discarded.
+  const dispatch = (
+    messageType: number,
+    payload: Uint8Array,
+    correlationId?: bigint,
+    responseFinal = true,
+  ): void => {
     if (correlationId !== undefined) {
       const correlated = pendingByCorrelation.get(correlationId);
+      if (!correlated) {
+        throw new ProtocolError(`Unexpected response correlation ${correlationId}`);
+      }
+      if (correlated.discardResponse) {
+        if (responseFinal) pendingByCorrelation.delete(correlationId);
+        responsesIgnored++;
+        meter?.counter("fitz.response.ignored", 1, { messageType });
+        return;
+      }
+      if (!responseFinal) {
+        return;
+      }
       if (correlated) {
         pendingByCorrelation.delete(correlationId);
-        if (correlated.discardResponse) {
-          responsesIgnored++;
-          meter?.counter("fitz.response.ignored", 1, { messageType });
-          return;
-        }
         correlated.deadline = -1;
         recordRequestFinished(messageType);
         responsesTotal++;

@@ -16,7 +16,7 @@ import {
   TransportError,
 } from "../../../src/core/errors";
 import { createNoticeClient } from "../../../src/domains/notice/client";
-import { FrameCodec } from "../../../src/frame/codec";
+import { FLAG_RESPONSE_FINAL, FrameCodec } from "../../../src/frame/codec";
 import { MSG_CONNECT, MSG_NOTICE_NOTIFY, MSG_NOTICE_SUBSCRIBE } from "../../../src/frame/types";
 import type { Transport } from "../../../src/transport/types";
 import { wire2HelloFrame } from "./wire-fixtures";
@@ -138,7 +138,13 @@ class FakeTransport implements Transport {
           .find((frame) => frame.messageType === response.messageType && frame.correlation !== 0n);
         if (request)
           data = FrameCodec.encodeFrame(response.messageType, response.payload, {
-            flags: response.flags,
+            flags:
+              response.flags |
+              (response.messageType === 400 &&
+              response.payload[0] === 0 &&
+              response.payload[1] === 2
+                ? 0
+                : FLAG_RESPONSE_FINAL),
             correlation: request.correlation,
           });
       }
