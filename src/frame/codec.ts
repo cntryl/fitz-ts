@@ -6,7 +6,8 @@ import { CodecError } from "../core/errors";
 export const HEADER_LENGTH = 15;
 export const DEFAULT_MAX_MESSAGE_BYTES = 1024 * 1024;
 export const FLAG_ACK_REQUESTED = 0x01;
-const RESERVED_FLAGS = 0xfe;
+export const FLAG_RESPONSE_FINAL = 0x02;
+const RESERVED_FLAGS = 0xfc;
 const MAX_U64 = 0xffffffffffffffffn;
 
 export interface Frame {

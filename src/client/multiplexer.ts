@@ -240,6 +240,7 @@ export function createMultiplexer(observability: MultiplexerObservability = {}) 
 
   const setConnected = (): void => {
     state = ConnectionState.Authenticated;
+    nextCorrelationId = 1n;
   };
 
   /**
@@ -262,11 +263,14 @@ export function createMultiplexer(observability: MultiplexerObservability = {}) 
   });
 
   const allocateCorrelationId = (): bigint => {
-    let correlationId: bigint;
-    do {
-      correlationId = nextCorrelationId;
-      nextCorrelationId = nextCorrelationId === 0xffffffffffffffffn ? 1n : nextCorrelationId + 1n;
-    } while (pendingByCorrelation.has(correlationId));
+    if (nextCorrelationId === 0n) {
+      throw new ConnectionError(
+        "Correlation IDs exhausted; reconnect before sending another request",
+        { state },
+      );
+    }
+    const correlationId = nextCorrelationId;
+    nextCorrelationId = correlationId === 0xffffffffffffffffn ? 0n : correlationId + 1n;
     return correlationId;
   };
 

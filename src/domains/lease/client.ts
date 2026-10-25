@@ -338,7 +338,11 @@ export function createLeaseClient(connection: LeaseConnectionPort): LeaseClient 
         throw error;
       }
 
-      if (decoded.responseType === 2 || decoded.responseType === 3) {
+      if (decoded.responseType === 3) {
+        throw new LeaseError("ACQUIRE request is already queued", "ALREADY_QUEUED");
+      }
+
+      if (decoded.responseType === 2) {
         if (!queuedResponse) {
           throw new LeaseError("ACQUIRE queued without a wait request", "INVALID_RESPONSE");
         }

@@ -262,6 +262,15 @@ describe("lease acquisition", () => {
     ).toBe(12);
   });
 
+  it("returns a typed terminal outcome when ACQUIRE is already queued", async () => {
+    const connection = new FakeLeaseConnection([acquireResponse(3, 0n)]);
+    const client = createLeaseClient(connection as unknown as Connection);
+
+    await expect(
+      client.acquire("lease://realm/area/resource", { ttlSeconds: 30, waitSeconds: 12 }),
+    ).rejects.toMatchObject({ code: "LEASE_ALREADY_QUEUED" });
+  });
+
   it("serializes acquisition lifecycles until deferred completion arrives", async () => {
     const connection = new FakeLeaseConnection([acquireResponse(2, 0n), acquireResponse(0, 99n)]);
     const client = createLeaseClient(connection as unknown as Connection);

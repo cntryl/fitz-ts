@@ -552,7 +552,7 @@ describe("Multiplexer", () => {
       200,
     );
 
-    multiplexer.dispatch(903, new Uint8Array([0xbb]), 2n);
+    multiplexer.dispatch(903, new Uint8Array([0xbb]), 1n);
     await expect(second).resolves.toEqual(new Uint8Array([0xbb]));
   });
 });

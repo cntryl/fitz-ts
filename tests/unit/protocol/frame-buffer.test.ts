@@ -7,7 +7,7 @@ import {
   writeU64BENumberAt,
 } from "../../../src/core/buffer";
 import { CodecError } from "../../../src/core/errors";
-import { FrameCodec, createFrameParser } from "../../../src/frame/codec";
+import { FLAG_RESPONSE_FINAL, FrameCodec, createFrameParser } from "../../../src/frame/codec";
 import {
   MSG_CONNECT,
   MSG_KV_BEGIN,
@@ -70,6 +70,20 @@ describe("protocol primitives", () => {
     expect(decoded).toEqual({ flags: 0, correlation: 0n, messageType: MSG_CONNECT, payload });
   });
 
+  it("accepts RESPONSE_FINAL on a correlated response", () => {
+    const payload = new Uint8Array([0x6f, 0x6b]);
+    const encoded = FrameCodec.encodeFrame(104, payload, {
+      flags: FLAG_RESPONSE_FINAL,
+      correlation: 1n,
+    });
+    expect(FrameCodec.decodeFrame(encoded)).toEqual({
+      flags: FLAG_RESPONSE_FINAL,
+      correlation: 1n,
+      messageType: 104,
+      payload,
+    });
+  });
+
   it("encodes and decodes escaped message-type frames", () => {
     const payload = new Uint8Array([9, 8, 7]);
 
@@ -87,7 +101,7 @@ describe("protocol primitives", () => {
 
   it("should reject truncated values given incomplete TLV bytes when decoding", () => {
     expect(() =>
-      FrameCodec.decodeFrame(new Uint8Array([MSG_CONNECT, 0x00, 0x02, 0x01])),
+      FrameCodec.decodeFrame(new Uint8Array([MSG_CONNECT, 0x00, 0x04, 0x01])),
     ).toThrowError(CodecError);
   });
 
