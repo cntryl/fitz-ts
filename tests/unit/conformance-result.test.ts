@@ -24,6 +24,9 @@ describe("conformance result accounting", () => {
     const aggregate = collector.aggregate(opts);
 
     expect(aggregate.overall_status).toBe("fail");
+    expect([aggregate.p0_pass, aggregate.p0_total, aggregate.p1_pass, aggregate.p1_total]).toEqual([
+      10, 11, 13, 13,
+    ]);
     expect(aggregate.p0_pass_rate).toBe(10 / 11);
     expect(aggregate.missing_scenarios).toEqual(["CS-020"]);
   });

@@ -26,6 +26,10 @@ export interface AggregateResult {
   client: string;
   transport: string;
   auth_mode: string;
+  p0_pass: number;
+  p0_total: number;
+  p1_pass: number;
+  p1_total: number;
   p0_pass_rate: number;
   p1_pass_rate: number;
   overall_status: "pass" | "fail" | "partial";
@@ -52,11 +56,12 @@ export class ResultCollector {
     const byId = new Map(this.results.map((result) => [result.scenario_id, result]));
     const p0 = REQUIRED_SCENARIO_IDS.filter((id) => p0Ids.has(id));
     const p1 = REQUIRED_SCENARIO_IDS.filter((id) => !p0Ids.has(id));
-    const rate = (ids: string[]) =>
-      ids.filter((id) => byId.get(id)?.verdict === "pass").length / ids.length;
+    const passed = (ids: string[]) => ids.filter((id) => byId.get(id)?.verdict === "pass").length;
+    const p0Pass = passed(p0);
+    const p1Pass = passed(p1);
 
-    const p0Rate = rate(p0);
-    const p1Rate = rate(p1);
+    const p0Rate = p0Pass / p0.length;
+    const p1Rate = p1Pass / p1.length;
     const anyP0Fail = p0Rate < 1;
     const anyP1Warn = p1Rate < 1;
 
@@ -76,6 +81,10 @@ export class ResultCollector {
       client: opts.client,
       transport: opts.transport,
       auth_mode: opts.auth_mode,
+      p0_pass: p0Pass,
+      p0_total: p0.length,
+      p1_pass: p1Pass,
+      p1_total: p1.length,
       p0_pass_rate: p0Rate,
       p1_pass_rate: p1Rate,
       overall_status,
