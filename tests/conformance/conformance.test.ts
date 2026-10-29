@@ -494,7 +494,9 @@ describe(`Fitz conformance — fitz-ts [transport=${TRANSPORT}, auth=${AUTH_MODE
         await callerClient.connect();
 
         const route = uniqueRoute("rpc");
+        let workerStarted = false;
         const sub = await workerClient.rpc.registerWorker(route, async () => {
+          workerStarted = true;
           await new Promise<void>((resolve) => setTimeout(resolve, 2000));
         });
 
@@ -507,6 +509,7 @@ describe(`Fitz conformance — fitz-ts [transport=${TRANSPORT}, auth=${AUTH_MODE
 
         expect(caught).toBeInstanceOf(RpcError);
         expect(caught).toMatchObject({ code: "RPC_TIMEOUT", domainCode: ErrCodeRpcTimeout });
+        expect(workerStarted).toBe(true);
         evidence.push("error is an RPC timeout, distinguishable from cancellation");
 
         // Connection still healthy
@@ -553,9 +556,11 @@ describe(`Fitz conformance — fitz-ts [transport=${TRANSPORT}, auth=${AUTH_MODE
         await callerClient.connect();
 
         const route = uniqueRoute("rpc");
+        let workerStarted = false;
         const sub = await workerClient.rpc.registerWorker(
           route,
           async (_req: InboundRequest, writer: ResponseWriter) => {
+            workerStarted = true;
             await new Promise<void>((resolve) => setTimeout(resolve, 2000));
             await writer.end({ body: b("late") });
           },
@@ -571,7 +576,7 @@ describe(`Fitz conformance — fitz-ts [transport=${TRANSPORT}, auth=${AUTH_MODE
         const nextPromise = iterator.next();
         // Prevent vitest unhandled rejection warnings before explicit await below.
         nextPromise.catch(() => undefined);
-        await new Promise<void>((resolve) => setTimeout(resolve, 100));
+        await waitFor(() => workerStarted, { timeoutMs: 5000 });
         controller.abort();
 
         let caught: unknown;
