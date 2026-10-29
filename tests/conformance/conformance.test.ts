@@ -25,8 +25,12 @@ import type { ClientConfig } from "../../src/core/types.js";
 import {
   AuthenticationError,
   ConnectionError,
+  ErrCodeRpcRouteNotRegistered,
   ErrCodeRpcTimeout,
+  KvError,
   RpcError,
+  ScheduleError,
+  isRetryable,
 } from "../../src/core/errors.js";
 import type { InboundRequest, ResponseWriter } from "../../src/domains/rpc/types.js";
 import type { StreamReadBatch, StreamRecord } from "../../src/domains/stream/types.js";
@@ -366,6 +370,8 @@ describe(`Fitz conformance — fitz-ts [transport=${TRANSPORT}, auth=${AUTH_MODE
         const noWorkerRoute = uniqueRoute("rpc");
         const iterator = client.rpc.call(noWorkerRoute, { body: b("ping"), timeoutMs: 500 });
         const caught = await expectRpcIteratorFailure(iterator);
+        expect(caught).toBeInstanceOf(RpcError);
+        expect(caught).toMatchObject({ domainCode: ErrCodeRpcRouteNotRegistered });
         evidence.push(`rpc to unregistered route threw: ${(caught as Error).constructor.name}`);
 
         // Client must still be usable
@@ -383,38 +389,24 @@ describe(`Fitz conformance — fitz-ts [transport=${TRANSPORT}, auth=${AUTH_MODE
     expect(result.verdict).toBe("pass");
   });
 
-  // CS-005 ─ invalid payload (duplicate insert → domain error, client stays healthy)
+  // CS-005 ─ invalid payload
   it("CS-005 invalid payload", async () => {
     const result = await runScenario("CS-005", "invalid payload", "P0", async () => {
       const evidence: string[] = [];
 
       await withClient({}, async (client) => {
-        const route = uniqueRoute("kv");
-
-        // Write key once
-        const tx1 = await client.kv.begin(route, {});
-        await tx1.insert({ key: b("dup-key"), value: b("first") });
-        await tx1.commit({ durability: "Sync" });
-        evidence.push("first insert succeeded");
-
-        // Attempting insert on an existing key is a server-rejected operation
-        const tx2 = await client.kv.begin(route, {});
-        let caught: unknown;
-        try {
-          await tx2.insert({ key: b("dup-key"), value: b("second") });
-        } catch (err) {
-          caught = err;
-        }
-        await tx2.rollback().catch(() => undefined);
-
-        expect(caught).toBeTruthy();
-        evidence.push(`duplicate insert threw: ${(caught as Error).constructor.name}`);
-
-        // Client must remain usable
-        const rtx = await client.kv.begin(route, { mode: "ReadOnly" });
-        const val = await rtx.get({ key: b("dup-key") });
-        expect(val.type).toBe("found");
-        evidence.push("client remains usable after server-rejected operation");
+        await expect(
+          client.schedule.create(uniqueRoute("schedule"), {
+            cron: "not a cron",
+            deliveryMode: "Broadcast",
+            payload: b("payload"),
+          }),
+        ).rejects.toBeInstanceOf(ScheduleError);
+        evidence.push("invalid cron produced a Schedule domain error");
+        const tx = await client.kv.begin(uniqueRoute("kv"), {});
+        await tx.put({ key: b("after-invalid"), value: b("ok") });
+        await tx.commit({ durability: "Sync" });
+        evidence.push("client remains usable after the rejected operation");
       });
 
       return { verdict: "pass", evidence };
@@ -436,6 +428,9 @@ describe(`Fitz conformance — fitz-ts [transport=${TRANSPORT}, auth=${AUTH_MODE
         // domain error, code should be accessible on the thrown error)
         const iterator = client.rpc.call(route, { body: b("ping"), timeoutMs: 500 });
         const caught = await expectRpcIteratorFailure(iterator);
+        expect(caught).toBeInstanceOf(RpcError);
+        expect(caught).toMatchObject({ domainCode: ErrCodeRpcRouteNotRegistered, effect: 0 });
+        expect(isRetryable(caught)).toBe(true);
         const err = caught as Error & { code?: string; domainCode?: number };
         evidence.push(`error class: ${err.constructor.name}`);
         evidence.push(`error.code: ${err.code ?? "n/a"}`);
@@ -461,6 +456,8 @@ describe(`Fitz conformance — fitz-ts [transport=${TRANSPORT}, auth=${AUTH_MODE
         await tx2.rollback().catch(() => undefined);
 
         expect(kvErr).toBeTruthy();
+        expect(kvErr).toBeInstanceOf(KvError);
+        expect(isRetryable(kvErr)).toBe(false);
         const ke = kvErr as Error & { code?: string; domainCode?: number };
         evidence.push(`kv conflict error class: ${ke.constructor.name}`);
         evidence.push(`kv conflict domainCode: ${ke.domainCode ?? "n/a"}`);
@@ -775,16 +772,14 @@ describe(`Fitz conformance — fitz-ts [transport=${TRANSPORT}, auth=${AUTH_MODE
           const records = await collectStreamRecords(
             client.stream.read(route, { fromOffset: 0n, mode: "replay", batchSize: 10 }),
           );
-          if (records.length < 3) {
+          if (records.length !== 3) {
             verdict = "partial";
-            evidence.push(`expected >=3 stream records, got ${records.length}`);
+            evidence.push(`expected 3 stream records, got ${records.length}`);
           }
-          for (let i = 1; i < records.length; i++) {
-            if (records[i].offset <= records[i - 1].offset) {
+          for (let i = 0; i < records.length; i++) {
+            if (records[i].offset !== BigInt(i)) {
               verdict = "partial";
-              evidence.push(
-                `out-of-order offsets at ${i}: ${records[i].offset} <= ${records[i - 1].offset}`,
-              );
+              evidence.push(`expected offset ${i}, got ${records[i].offset}`);
               break;
             }
           }
@@ -877,11 +872,12 @@ describe(`Fitz conformance — fitz-ts [transport=${TRANSPORT}, auth=${AUTH_MODE
         evidence.push("client still usable after stream error");
       });
 
-      return { verdict: "pass", evidence };
+      evidence.push("an error during an active streaming read was not exercised");
+      return { verdict: "partial", evidence };
     });
 
     collector.record(result);
-    expect(result.verdict).toBe("pass");
+    expect(result.verdict).toBe("partial");
   });
 
   // CS-014 ─ concurrent in-flight requests
@@ -917,11 +913,12 @@ describe(`Fitz conformance — fitz-ts [transport=${TRANSPORT}, auth=${AUTH_MODE
         evidence.push("all responses correlated to correct request contexts");
       });
 
-      return { verdict: "pass", evidence };
+      evidence.push("cross-domain concurrency and within-domain ordering were not exercised");
+      return { verdict: "partial", evidence };
     });
 
     collector.record(result);
-    expect(result.verdict).toBe("pass");
+    expect(result.verdict).toBe("partial");
   });
 
   // CS-015 ─ shutdown during active work
@@ -974,11 +971,14 @@ describe(`Fitz conformance — fitz-ts [transport=${TRANSPORT}, auth=${AUTH_MODE
         await client.close().catch(() => undefined);
       }
 
-      return { verdict: "pass", evidence };
+      evidence.push(
+        "the KV request may have completed before close; active-work interruption was not established",
+      );
+      return { verdict: "partial", evidence };
     });
 
     collector.record(result);
-    expect(result.verdict).toBe("pass");
+    expect(result.verdict).toBe("partial");
   });
 
   // CS-016 - filtered stream replay
