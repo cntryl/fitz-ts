@@ -32,6 +32,7 @@ import type { InboundRequest, ResponseWriter } from "../../src/domains/rpc/types
 import type { StreamReadBatch, StreamRecord } from "../../src/domains/stream/types.js";
 
 import { ResultCollector, type ScenarioResult, type Verdict } from "./result.js";
+import { exerciseGlobalFilteredReplay } from "./global-replay.js";
 import type { TransportType } from "../integration/fixture/transport.js";
 import { brokerAddrFor, type AuthMode } from "../integration/fixture/fixture.js";
 import { createTransportProxy } from "../integration/fixture/transport-proxy.js";
@@ -1037,85 +1038,94 @@ describe(`Fitz conformance — fitz-ts [transport=${TRANSPORT}, auth=${AUTH_MODE
     expect(result.verdict).toBe("pass");
   });
 
-  // CS-017 - bounded concurrency under burst load
-  it("CS-017 bounded concurrency under burst load", async () => {
+  // CS-017 - global filtered multi-page replay
+  it("CS-017 global filtered multi-page replay", async () => {
     const result = await runScenario(
       "CS-017",
-      "bounded concurrency under burst load",
+      "global filtered multi-page replay",
       "P1",
       async () => {
-        const evidence: string[] = [];
-
-        const pause = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
-
-        await withClient({ timeout: 750, maxInFlightRequests: 16 }, async (client) => {
-          const route = uniqueRoute("rpc");
-
-          const workerClient = createClient({
-            url: BROKER_ADDR,
-            transport: TRANSPORT,
-            tokenProvider: tokenProvider(),
-            timeout: 10000,
-          });
-
-          try {
-            await workerClient.connect();
-            const sub = await workerClient.rpc.registerWorker(route, async (req, writer) => {
-              await pause(500);
-              await writer.end({ body: req.body });
-            });
-
-            const responseTimeoutMs = 1500;
-            const firstIterator = client.rpc.call(route, {
-              body: b("first"),
-              timeoutMs: responseTimeoutMs,
-            });
-            const secondIterator = client.rpc.call(route, {
-              body: b("second"),
-              timeoutMs: responseTimeoutMs,
-            });
-            const firstNext = firstIterator.next();
-            firstNext.catch(() => undefined);
-            const secondNext = secondIterator.next();
-            secondNext.catch(() => undefined);
-
-            const secondState = await Promise.race([
-              secondNext.then(
-                () => "settled",
-                () => "settled",
-              ),
-              pause(100).then(() => "pending"),
-            ]);
-
-            expect(secondState).toBe("pending");
-            evidence.push("second RPC call remained pending while first was in flight");
-            evidence.push("configured maxInFlightRequests=16 and burst size=2");
-
-            const [firstFrame, secondFrame] = await Promise.all([firstNext, secondNext]);
-            expect(firstFrame.done).toBe(false);
-            expect(secondFrame.done).toBe(false);
-            expect(Buffer.from(firstFrame.value?.body ?? new Uint8Array()).toString()).toBe(
-              "first",
-            );
-            expect(Buffer.from(secondFrame.value?.body ?? new Uint8Array()).toString()).toBe(
-              "second",
-            );
-
-            await expect(firstIterator.next()).resolves.toMatchObject({ done: true });
-            await expect(secondIterator.next()).resolves.toMatchObject({ done: true });
-            evidence.push("both burst RPC calls completed with correlated responses");
-
-            await sub.unsubscribe();
-          } finally {
-            await workerClient.close().catch(() => undefined);
-          }
-        });
-
+        const evidence = await withClient({}, async (client) =>
+          exerciseGlobalFilteredReplay(client, uniqueRoute("stream")),
+        );
         return { verdict: "pass", evidence };
       },
     );
 
     collector.record(result);
+    expect(result.verdict).toBe("pass");
+  });
+
+  it("RPC burst smoke", async () => {
+    const result = await runScenario("TS-RPC-BURST", "RPC burst smoke", "P1", async () => {
+      const evidence: string[] = [];
+
+      const pause = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+      await withClient({ timeout: 750, maxInFlightRequests: 16 }, async (client) => {
+        const route = uniqueRoute("rpc");
+
+        const workerClient = createClient({
+          url: BROKER_ADDR,
+          transport: TRANSPORT,
+          tokenProvider: tokenProvider(),
+          timeout: 10000,
+        });
+
+        try {
+          await workerClient.connect();
+          const sub = await workerClient.rpc.registerWorker(route, async (req, writer) => {
+            await pause(500);
+            await writer.end({ body: req.body });
+          });
+
+          const responseTimeoutMs = 1500;
+          const firstIterator = client.rpc.call(route, {
+            body: b("first"),
+            timeoutMs: responseTimeoutMs,
+          });
+          const secondIterator = client.rpc.call(route, {
+            body: b("second"),
+            timeoutMs: responseTimeoutMs,
+          });
+          const firstNext = firstIterator.next();
+          firstNext.catch(() => undefined);
+          const secondNext = secondIterator.next();
+          secondNext.catch(() => undefined);
+
+          const secondState = await Promise.race([
+            secondNext.then(
+              () => "settled",
+              () => "settled",
+            ),
+            pause(100).then(() => "pending"),
+          ]);
+
+          expect(secondState).toBe("pending");
+          evidence.push("second RPC call remained pending while first was in flight");
+          evidence.push("configured maxInFlightRequests=16 and burst size=2");
+
+          const [firstFrame, secondFrame] = await Promise.all([firstNext, secondNext]);
+          expect(firstFrame.done).toBe(false);
+          expect(secondFrame.done).toBe(false);
+          expect(Buffer.from(firstFrame.value?.body ?? new Uint8Array()).toString()).toBe("first");
+          expect(Buffer.from(secondFrame.value?.body ?? new Uint8Array()).toString()).toBe(
+            "second",
+          );
+
+          await expect(firstIterator.next()).resolves.toMatchObject({ done: true });
+          await expect(secondIterator.next()).resolves.toMatchObject({ done: true });
+          evidence.push("both burst RPC calls completed with correlated responses");
+
+          await sub.unsubscribe();
+        } finally {
+          await workerClient.close().catch(() => undefined);
+        }
+      });
+
+      return { verdict: "pass", evidence };
+    });
+
     expect(result.verdict).toBe("pass");
   });
 
