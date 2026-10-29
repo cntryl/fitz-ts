@@ -1233,10 +1233,7 @@ describe(`Fitz conformance — fitz-ts [transport=${TRANSPORT}, auth=${AUTH_MODE
     } catch (err) {
       throw new Error("Failed to write conformance results", { cause: err });
     }
-    if (
-      aggregate.scenarios.length >= IMPLEMENTED_SCENARIO_IDS.length &&
-      aggregate.overall_status === "fail"
-    ) {
+    if (aggregate.scenarios.length > 0 && aggregate.overall_status === "fail") {
       throw new Error(
         `Conformance P0 gate failed; missing scenarios: ${aggregate.missing_scenarios.join(", ")}`,
       );
