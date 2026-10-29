@@ -938,7 +938,12 @@ export function createConnection(
                 ? new AuthenticationError(rejected.message || "Authentication rejected", {
                     code: rejected.code,
                   })
-                : new ProtocolError(rejected.message || "CONNECT rejected", rejected.code);
+                : new ProtocolError(
+                    rejected.code === 50
+                      ? `Wire version mismatch (50): ${rejected.message}`
+                      : rejected.message || "CONNECT rejected",
+                    rejected.code,
+                  );
             if (rejected.code === 1) authRejected = true;
             authOutcome?.reject(failure);
             continue;

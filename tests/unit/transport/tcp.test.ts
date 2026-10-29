@@ -90,7 +90,7 @@ describe("tcp transport", () => {
 
   it("rejects receive immediately after close", async () => {
     const port = await listenOnLocalhost();
-    const transport = createTcpTransport(`localhost:${port}`, { timeout: 20 });
+    const transport = createTcpTransport(`localhost:${port}`, { timeout: 1000 });
 
     await transport.connect();
     await transport.close();

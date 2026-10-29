@@ -1,5 +1,5 @@
 import { ConnectionState } from "../../core/types";
-import { AuthenticationError } from "../../core/errors";
+import { AuthenticationError, ProtocolError } from "../../core/errors";
 import { isAbortError, sleepWithAbort } from "./async";
 import { jitteredBackoffMs } from "./backoff";
 
@@ -51,6 +51,11 @@ export function createReconnectScheduler(options: ReconnectSchedulerOptions) {
         if (error instanceof AuthenticationError) {
           options.setState(ConnectionState.Closed);
           return "closed";
+        }
+        if (error instanceof ProtocolError && error.domainCode === 50) {
+          options.setState(ConnectionState.Disconnected);
+          options.emitLifecycleEvent("reconnect_exhausted", error, attempts);
+          return "exhausted";
         }
         options.logRetry(attempts, actualDelayMs, delayMs, error);
         delayMs = Math.min(delayMs * 2, options.maxBackoffMs);
