@@ -29,8 +29,17 @@ export interface AggregateResult {
   p0_pass_rate: number;
   p1_pass_rate: number;
   overall_status: "pass" | "fail" | "partial";
+  missing_scenarios: string[];
   scenarios: ScenarioResult[];
 }
+
+export const REQUIRED_SCENARIO_IDS = Array.from(
+  { length: 24 },
+  (_, index) => `CS-${String(index + 1).padStart(3, "0")}`,
+);
+const p0Ids = new Set(
+  [1, 2, 3, 4, 5, 6, 7, 8, 19, 20, 24].map((id) => `CS-${String(id).padStart(3, "0")}`),
+);
 
 export class ResultCollector {
   private results: ScenarioResult[] = [];
@@ -40,15 +49,16 @@ export class ResultCollector {
   }
 
   aggregate(opts: { client: string; transport: string; auth_mode: string }): AggregateResult {
-    const p0 = this.results.filter((r) => r.priority === "P0");
-    const p1 = this.results.filter((r) => r.priority === "P1");
-    const rate = (arr: ScenarioResult[]) =>
-      arr.length === 0 ? 1 : arr.filter((r) => r.verdict === "pass").length / arr.length;
+    const byId = new Map(this.results.map((result) => [result.scenario_id, result]));
+    const p0 = REQUIRED_SCENARIO_IDS.filter((id) => p0Ids.has(id));
+    const p1 = REQUIRED_SCENARIO_IDS.filter((id) => !p0Ids.has(id));
+    const rate = (ids: string[]) =>
+      ids.filter((id) => byId.get(id)?.verdict === "pass").length / ids.length;
 
     const p0Rate = rate(p0);
     const p1Rate = rate(p1);
-    const anyP0Fail = p0.some((r) => r.verdict !== "pass");
-    const anyP1Warn = p1.some((r) => r.verdict === "fail" || r.verdict === "partial");
+    const anyP0Fail = p0Rate < 1;
+    const anyP1Warn = p1Rate < 1;
 
     let overall_status: "pass" | "fail" | "partial";
     if (anyP0Fail) {
@@ -69,6 +79,7 @@ export class ResultCollector {
       p0_pass_rate: p0Rate,
       p1_pass_rate: p1Rate,
       overall_status,
+      missing_scenarios: REQUIRED_SCENARIO_IDS.filter((id) => !byId.has(id)),
       scenarios: this.results,
     };
   }

@@ -1,7 +1,7 @@
 /**
  * Fitz cross-language conformance harness — TypeScript / fitz-ts
  *
- * Implements the shared CS-001..CS-017 scenarios for:
+ * Runs the implemented shared scenarios and reports the remaining cases as missing:
  *   fitz/docs/clients/cross-language-conformance-suite.yaml
  *
  * Configuration via environment variables:
@@ -31,11 +31,17 @@ import {
 import type { InboundRequest, ResponseWriter } from "../../src/domains/rpc/types.js";
 import type { StreamReadBatch, StreamRecord } from "../../src/domains/stream/types.js";
 
-import { ResultCollector, type ScenarioResult, type Verdict } from "./result.js";
+import {
+  REQUIRED_SCENARIO_IDS,
+  ResultCollector,
+  type ScenarioResult,
+  type Verdict,
+} from "./result.js";
 import { exerciseGlobalFilteredReplay } from "./global-replay.js";
 import type { TransportType } from "../integration/fixture/transport.js";
 import { brokerAddrFor, type AuthMode } from "../integration/fixture/fixture.js";
 import { createTransportProxy } from "../integration/fixture/transport-proxy.js";
+import { exerciseStreamBoundary } from "../integration/fixture/stream-boundary.js";
 import { waitFor } from "../integration/helpers.js";
 import {
   generateValidTestJwt,
@@ -187,6 +193,8 @@ const IMPLEMENTED_SCENARIO_IDS = [
   "CS-015",
   "CS-016",
   "CS-017",
+  "CS-019",
+  "CS-024",
 ];
 
 function loadSharedSuiteScenarioIds(): string[] {
@@ -203,8 +211,10 @@ function loadSharedSuiteScenarioIds(): string[] {
 // ---------------------------------------------------------------------------
 
 describe(`Fitz conformance — fitz-ts [transport=${TRANSPORT}, auth=${AUTH_MODE}]`, () => {
-  it("implements every shared conformance scenario id", () => {
-    expect(IMPLEMENTED_SCENARIO_IDS).toEqual(loadSharedSuiteScenarioIds());
+  it("accounts for every shared conformance scenario id", () => {
+    expect(loadSharedSuiteScenarioIds()).toEqual(REQUIRED_SCENARIO_IDS);
+    expect(new Set(IMPLEMENTED_SCENARIO_IDS).size).toBe(IMPLEMENTED_SCENARIO_IDS.length);
+    expect(REQUIRED_SCENARIO_IDS).toEqual(expect.arrayContaining(IMPLEMENTED_SCENARIO_IDS));
   });
 
   // CS-001 ─ connect success
@@ -1056,6 +1066,76 @@ describe(`Fitz conformance — fitz-ts [transport=${TRANSPORT}, auth=${AUTH_MODE
     expect(result.verdict).toBe("pass");
   });
 
+  it("CS-019 concurrent same-message-type requests", async () => {
+    const result = await runScenario(
+      "CS-019",
+      "concurrent same-message-type requests",
+      "P0",
+      async () => {
+        await withClient({}, async (client) => {
+          const parkedRoute = uniqueRoute("queue");
+          const readyRoute = uniqueRoute("queue");
+          await client.queue.enqueue(readyRoute, { body: b("second") });
+          let parkedSettled = false;
+          const parked = client.queue
+            .reserve(parkedRoute, {
+              leaseSeconds: 30,
+              batchSize: 1,
+              waitSeconds: 5,
+            })
+            .finally(() => {
+              parkedSettled = true;
+            });
+          parked.catch(() => undefined);
+          await new Promise<void>((resolve) => setTimeout(resolve, 100));
+          expect(parkedSettled).toBe(false);
+          const second = await Promise.race([
+            client.queue.reserve(readyRoute, { leaseSeconds: 30, batchSize: 1, waitSeconds: 0 }),
+            new Promise<never>((_, reject) =>
+              setTimeout(() => reject(new Error("second reserve timed out")), 2000),
+            ),
+          ]);
+          expect(Buffer.from(second[0].body).toString()).toBe("second");
+          expect(parkedSettled).toBe(false);
+          await client.queue.enqueue(parkedRoute, { body: b("first") });
+          const first = await parked;
+          expect(Buffer.from(first[0].body).toString()).toBe("first");
+        });
+        return {
+          verdict: "pass",
+          evidence: [
+            "second reserve resolved first with its own payload",
+            "parked first reserve resolved with its own payload",
+          ],
+        };
+      },
+    );
+    collector.record(result);
+    expect(result.verdict).toBe("pass");
+  });
+
+  it("CS-024 Stream event boundary and replay", async () => {
+    const result = await runScenario(
+      "CS-024",
+      "400 KiB Stream event boundary and replay",
+      "P0",
+      async () => {
+        await withClient({}, async (client) =>
+          exerciseStreamBoundary(client, uniqueRoute("stream")),
+        );
+        return {
+          verdict: "pass",
+          evidence: [
+            "409600 combined bytes accepted; 409601 rejected with BAD_REQUEST/NOT_APPLIED",
+            "three complete events replayed on a 4096-byte route across multiple pages",
+          ],
+        };
+      },
+    );
+    collector.record(result);
+    expect(result.verdict).toBe("pass");
+  });
+
   it("RPC burst smoke", async () => {
     const result = await runScenario("TS-RPC-BURST", "RPC burst smoke", "P1", async () => {
       const evidence: string[] = [];
@@ -1151,7 +1231,15 @@ describe(`Fitz conformance — fitz-ts [transport=${TRANSPORT}, auth=${AUTH_MODE
           `P1: ${Math.round(aggregate.p1_pass_rate * 100)}%`,
       );
     } catch (err) {
-      console.error("Failed to write conformance results:", err);
+      throw new Error("Failed to write conformance results", { cause: err });
+    }
+    if (
+      aggregate.scenarios.length >= IMPLEMENTED_SCENARIO_IDS.length &&
+      aggregate.overall_status === "fail"
+    ) {
+      throw new Error(
+        `Conformance P0 gate failed; missing scenarios: ${aggregate.missing_scenarios.join(", ")}`,
+      );
     }
   });
 });
