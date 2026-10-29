@@ -128,7 +128,7 @@ export const StreamCodec = {
     metadata?: Uint8Array,
     discriminator?: StreamDiscriminator,
   ): Uint8Array {
-    const hasMetadata = metadata !== undefined && metadata.length > 0;
+    const hasMetadata = metadata !== undefined;
     const hasDiscriminator = discriminator !== undefined && discriminator.length > 0;
     const discriminatorBytes = hasDiscriminator ? utf8Encoder.encode(discriminator) : undefined;
     const buffer = new Uint8Array(

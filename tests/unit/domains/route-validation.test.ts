@@ -21,7 +21,11 @@ import { createRpcClient } from "../../../src/domains/rpc/client";
 import { createScheduleClient } from "../../../src/domains/schedule/client";
 import { ScheduleError } from "../../../src/core/errors";
 import { createStreamClient } from "../../../src/domains/stream/client";
-import { isRegistrationPatternShape, routeMatchesPattern } from "../../../src/domains/_routes";
+import {
+  classifyStreamSelectorScope,
+  isRegistrationPatternShape,
+  routeMatchesPattern,
+} from "../../../src/domains/_routes";
 
 class FakeConnection {
   public lastRequest: { messageType: number; payload: Uint8Array } | null = null;
@@ -309,6 +313,15 @@ describe("route validation", () => {
       client.read("stream://example/*/*", { fromOffset: 0n, mode: "replay" }).next(),
     ).resolves.toMatchObject({ done: false });
     expect(connection.lastRequest?.messageType).toBe(MSG_STREAM_READ);
+  });
+
+  it("uses the broker's UTF-8 byte limit for stream read selectors", () => {
+    const prefix = "stream://realm/area/";
+    const route = `${prefix}${"é".repeat((4096 - prefix.length) / 2)}`;
+
+    expect(new TextEncoder().encode(route)).toHaveLength(4096);
+    expect(classifyStreamSelectorScope(route)).toBe("resource");
+    expect(classifyStreamSelectorScope(`${route}a`)).toBeUndefined();
   });
 
   it("accepts a whole-segment wildcard lease subscription route", async () => {

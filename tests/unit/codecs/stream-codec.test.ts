@@ -424,6 +424,19 @@ describe("StreamCodec", () => {
       expect(reader.readString()).toBe("proj.alpha");
       expect(reader.isEOF()).toBe(true);
     });
+
+    it("preserves explicitly empty event metadata", () => {
+      const encoded = StreamCodec.encodeAppend(456n, 0n, new Uint8Array(), new Uint8Array());
+      const reader = createBufferReader(encoded);
+
+      reader.readU64BE();
+      reader.readU64BE();
+      expect(reader.readU32BE()).toBe(0);
+      expect(reader.readU8()).toBe(1);
+      expect(reader.readU32BE()).toBe(0);
+      expect(reader.readU8()).toBe(0);
+      expect(reader.isEOF()).toBe(true);
+    });
   });
 
   describe("COMMIT encoding", () => {

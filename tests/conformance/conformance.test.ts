@@ -22,13 +22,20 @@ import { dirname, resolve } from "node:path";
 
 import { createClient, type Client } from "../../src/client/client.js";
 import type { ClientConfig } from "../../src/core/types.js";
-import { AuthenticationError, TimeoutError } from "../../src/core/errors.js";
+import {
+  AuthenticationError,
+  ConnectionError,
+  ErrCodeRpcTimeout,
+  RpcError,
+} from "../../src/core/errors.js";
 import type { InboundRequest, ResponseWriter } from "../../src/domains/rpc/types.js";
 import type { StreamReadBatch, StreamRecord } from "../../src/domains/stream/types.js";
 
 import { ResultCollector, type ScenarioResult, type Verdict } from "./result.js";
 import type { TransportType } from "../integration/fixture/transport.js";
 import { brokerAddrFor, type AuthMode } from "../integration/fixture/fixture.js";
+import { createTransportProxy } from "../integration/fixture/transport-proxy.js";
+import { waitFor } from "../integration/helpers.js";
 import {
   generateValidTestJwt,
   generateInvalidSignatureTestJwt,
@@ -490,13 +497,9 @@ describe(`Fitz conformance — fitz-ts [transport=${TRANSPORT}, auth=${AUTH_MODE
         evidence.push(`rpc threw after ~${elapsed}ms`);
         evidence.push(`error class: ${(caught as Error).constructor.name}`);
 
-        if (caught instanceof TimeoutError) {
-          evidence.push("error is typed TimeoutError (ideal)");
-        }
-
-        // Must NOT be AbortError
-        expect((caught as Error).name).not.toBe("AbortError");
-        evidence.push("error is not AbortError (timeout ≠ cancellation)");
+        expect(caught).toBeInstanceOf(RpcError);
+        expect(caught).toMatchObject({ code: "RPC_TIMEOUT", domainCode: ErrCodeRpcTimeout });
+        evidence.push("error is an RPC timeout, distinguishable from cancellation");
 
         // Connection still healthy
         const kvRoute = uniqueRoute("kv");
@@ -607,11 +610,13 @@ describe(`Fitz conformance — fitz-ts [transport=${TRANSPORT}, auth=${AUTH_MODE
         timeout: 10000,
       });
 
+      const proxy = await createTransportProxy(TRANSPORT, BROKER_ADDR);
       const callerClient = createClient({
-        url: BROKER_ADDR,
+        url: proxy.url,
         transport: TRANSPORT,
         tokenProvider: tokenProvider(),
         timeout: 10000,
+        reconnect: { enabled: false },
       });
 
       try {
@@ -619,29 +624,27 @@ describe(`Fitz conformance — fitz-ts [transport=${TRANSPORT}, auth=${AUTH_MODE
         await callerClient.connect();
 
         const route = uniqueRoute("rpc");
+        let workerStarted = false;
         await workerClient.rpc.registerWorker(
           route,
           async (_req: InboundRequest, writer: ResponseWriter) => {
+            workerStarted = true;
             await new Promise<void>((resolve) => setTimeout(resolve, 3000));
             await writer.end({ body: b("late") });
           },
         );
 
-        const controller = new AbortController();
         const iterator = callerClient.rpc.call(route, {
           body: b("block"),
           timeoutMs: 30000,
-          signal: controller.signal,
         });
 
         const nextPromise = iterator.next();
         // Prevent vitest unhandled rejection warnings before explicit await below.
         nextPromise.catch(() => undefined);
 
-        // Simulate disconnect by closing the caller
-        await new Promise<void>((resolve) => setTimeout(resolve, 100));
-        controller.abort();
-        await callerClient.close().catch(() => undefined);
+        await waitFor(() => workerStarted, { timeoutMs: 5000 });
+        await proxy.goDown();
 
         let caught: unknown;
         try {
@@ -650,12 +653,13 @@ describe(`Fitz conformance — fitz-ts [transport=${TRANSPORT}, auth=${AUTH_MODE
           caught = err;
         }
 
-        expect(caught).toBeTruthy();
+        expect(caught).toBeInstanceOf(ConnectionError);
         evidence.push(`in-flight request threw: ${(caught as Error).constructor.name}`);
-        evidence.push("in-flight request failed promptly on disconnect (correct)");
+        evidence.push("in-flight request failed after actual transport loss");
       } finally {
         await workerClient.close().catch(() => undefined);
         await callerClient.close().catch(() => undefined);
+        await proxy.close();
       }
 
       return { verdict: "pass", evidence };
@@ -670,51 +674,70 @@ describe(`Fitz conformance — fitz-ts [transport=${TRANSPORT}, auth=${AUTH_MODE
     const result = await runScenario("CS-010", "reconnect and retry behavior", "P1", async () => {
       const evidence: string[] = [];
 
-      // Verify reconnect API is accessible
+      const proxy = await createTransportProxy(TRANSPORT, BROKER_ADDR);
+      const events: string[] = [];
       const client = createClient({
+        url: proxy.url,
+        transport: TRANSPORT,
+        tokenProvider: tokenProvider(),
+        timeout: 10000,
+        reconnect: { enabled: true, maxAttempts: 20, backoffMs: 50, maxBackoffMs: 100 },
+        observability: { onLifecycleEvent: (event) => events.push(event.event) },
+      });
+      const peer = createClient({
         url: BROKER_ADDR,
         transport: TRANSPORT,
         tokenProvider: tokenProvider(),
         timeout: 10000,
-        reconnect: { enabled: true, maxAttempts: 3, backoffMs: 100 },
       });
 
       try {
         await client.connect();
-        evidence.push("client connected with reconnect enabled");
-
-        // Close and reconnect manually (simulate application-level reconnect)
-        await client.close();
-        evidence.push("client closed ok");
-
-        const client2 = createClient({
-          url: BROKER_ADDR,
-          transport: TRANSPORT,
-          tokenProvider: tokenProvider(),
-          timeout: 10000,
+        await peer.connect();
+        const noticeRoute = uniqueRoute("notice");
+        const rpcRoute = uniqueRoute("rpc");
+        const received: string[] = [];
+        await client.notice.subscribe(noticeRoute, async (message) => {
+          received.push(Buffer.from(message.body).toString());
         });
-        await client2.connect();
+        await client.rpc.registerWorker(rpcRoute, async (_request, writer) => {
+          await writer.end({ body: b("worker-restored") });
+        });
+        const staleTransaction = await client.kv.begin(uniqueRoute("kv"), {});
+
+        await proxy.goDown();
+        await waitFor(() => events.includes("connection_lost"), { timeoutMs: 5000 });
+        await proxy.goUp();
+        await waitFor(() => events.includes("reconnect_succeeded"), { timeoutMs: 10000 });
+        expect(client.isConnected()).toBe(true);
+        expect(staleTransaction.isOpen()).toBe(false);
+        await expect(staleTransaction.get({ key: b("stale") })).rejects.toBeTruthy();
+        evidence.push(
+          "same client reconnected after transport loss and invalidated its transaction",
+        );
+
+        await peer.notice.publish(noticeRoute, { body: b("notice-restored") });
+        await waitFor(() => received.includes("notice-restored"), { timeoutMs: 5000 });
+        const response = peer.rpc.call(rpcRoute, { body: b("request"), timeoutMs: 5000 });
+        const first = await response.next();
+        expect(first.done).toBe(false);
+        expect(Buffer.from(first.value?.body ?? new Uint8Array()).toString()).toBe(
+          "worker-restored",
+        );
+        await expect(response.next()).resolves.toMatchObject({ done: true });
+        evidence.push("Notice subscription and RPC worker resumed on the reconnected client");
+
         const route = uniqueRoute("kv");
-        const tx = await client2.kv.begin(route, {});
+        const tx = await client.kv.begin(route, {});
         await tx.put({ key: b("after-reconnect"), value: b("ok") });
         await tx.commit({ durability: "Sync" });
-        evidence.push("new requests succeed after reconnect (new client)");
-        await client2.close().catch(() => undefined);
+        evidence.push("new request succeeded on the same reconnected client");
 
         return { verdict: "pass", evidence };
-      } catch (err) {
-        // If reconnect config is not supported, record as partial
-        const message = err instanceof Error ? err.message : String(err);
-        if (message.includes("reconnect") || message.includes("Unknown config")) {
-          evidence.push(`reconnect config not accepted: ${message}`);
-          evidence.push(
-            "NOTE: reconnect config key may differ from 'reconnect' — check ClientConfig",
-          );
-          return { verdict: "partial", evidence };
-        }
-        throw err;
       } finally {
         await client.close().catch(() => undefined);
+        await peer.close().catch(() => undefined);
+        await proxy.close();
       }
     });
 

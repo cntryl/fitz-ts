@@ -61,7 +61,7 @@ export function isStreamSelectorShape(route: string): boolean {
 export function classifyStreamSelectorScope(route: string): StreamSelectorScope | undefined {
   const start = pathStart(route, "stream", false);
   if (start < 0) return undefined;
-  if (new TextEncoder().encode(route).length > 512) return undefined;
+  if (new TextEncoder().encode(route).length > 4096) return undefined;
   if (route === "stream://**") return "global";
   const segments = route.slice(start).split("/");
   if (

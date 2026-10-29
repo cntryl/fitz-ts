@@ -63,7 +63,7 @@ export function createStreamSession(
       sessionId,
       options.expectedOffset,
       options.body,
-      undefined,
+      options.metadata,
       options.discriminator,
     );
     const response = await connection.request(MSG_STREAM_APPEND, payload, options.signal);
