@@ -1,3 +1,5 @@
+import { errorPayload } from "../helpers/wire-errors";
+import { writeErrorCode } from "../helpers/wire-errors";
 import { describe, expect, it } from "vite-plus/test";
 
 import { createBufferReader, createBufferWriter } from "../../../src/core/buffer";
@@ -309,7 +311,7 @@ describe("KvClient", () => {
     const connection = new FakeKvConnection();
     const writer = createBufferWriter();
     writer.writeU8(1);
-    writer.writeU32BE(1012);
+    writeErrorCode(writer, 1012);
     writer.writeString("invalid pattern");
     connection.respond(MSG_KV_SUBSCRIBE, writer.getBuffer());
     const client = createKvClient(connection);
@@ -411,10 +413,10 @@ describe("KvClient", () => {
 
     const tx = await client.begin("kv://realm/area/resource", {});
     // status=2 (LeaseExpired), no trailing error-message bytes.
-    connection.respond(MSG_KV_PUT, new Uint8Array([2]));
+    connection.respond(MSG_KV_PUT, errorPayload(1054, "read-only transaction"));
 
     await expect(tx.put({ key: new Uint8Array([1]), value: new Uint8Array([2]) })).rejects.toThrow(
-      "PUT failed: LeaseExpired",
+      "PUT failed: read-only transaction",
     );
   });
 
@@ -475,18 +477,17 @@ describe("KvClient", () => {
     ).resolves.toEqual({ entries: [], hasMore: false });
   });
 
-  it("refuses exclusive scan resume unless the broker advertises support", async () => {
+  it("uses exclusive scan resume with zero optional capability bits", async () => {
     const connection = new FakeKvConnection();
     connection.capabilities = CAP_SESSION_METADATA;
     const client = createKvClient(connection);
     const tx = await client.begin("kv://realm/area/resource", {});
 
+    connection.respond(MSG_KV_SCAN, encodeScanResponse([], false));
     await expect(
       tx.scan({ startKey: new Uint8Array([0x10]), startExclusive: true }),
-    ).rejects.toMatchObject({
-      code: "KV_UNSUPPORTED_CAPABILITY",
-    });
-    expect(connection.lastRequest?.messageType).toBe(MSG_KV_BEGIN);
+    ).resolves.toEqual({ entries: [], hasMore: false });
+    expect(connection.lastRequest?.messageType).toBe(MSG_KV_SCAN);
   });
 
   it("encodes exclusive scan resume only after the broker advertises support", async () => {
@@ -499,10 +500,10 @@ describe("KvClient", () => {
     await tx.scan({ startKey: new Uint8Array([0x10]), startExclusive: true });
 
     expect(connection.lastRequest?.messageType).toBe(MSG_KV_SCAN);
-    expect(connection.lastRequest?.payload.at(-1)).toBe(1);
+    expect(connection.lastRequest?.payload.at(-1)).toBe(2);
   });
 
-  it("paginates forward with the legacy immediate-successor fallback", async () => {
+  it("paginates forward with the base exclusive continuation", async () => {
     const connection = new FakeKvConnection();
     const client = createKvClient(connection);
     const tx = await client.begin("kv://realm/area/resource", {});
@@ -517,11 +518,11 @@ describe("KvClient", () => {
     reader.readU64BE();
     reader.readRoute();
     expect(reader.readU8()).toBe(1);
-    expect(reader.readBytes(reader.readU32BE())).toEqual(new Uint8Array([0x10, 0]));
+    expect(reader.readBytes(reader.readU32BE())).toEqual(new Uint8Array([0x10]));
     expect(reader.readU8()).toBe(0); // end key
     expect(reader.readU8()).toBe(0); // no limit
-    expect(reader.readU8()).toBe(0); // forward
-    expect(reader.isEOF()).toBe(true); // legacy shape, no exclusive byte
+    expect(reader.readU8()).toBe(2); // exclusive forward
+    expect(reader.isEOF()).toBe(true);
   });
 
   it("paginates reverse scans with the advertised exclusive-resume capability", async () => {
@@ -536,7 +537,7 @@ describe("KvClient", () => {
     for await (const entry of tx.scanAll({ reverse: true })) entries.push(entry);
 
     expect(entries.map(({ key }) => Array.from(key))).toEqual([[0x7a], [0x79]]);
-    expect(connection.lastRequest?.payload.at(-1)).toBe(1);
+    expect(connection.lastRequest?.payload.at(-1)).toBe(3);
   });
 
   it("closes a transaction after a failed commit without rolling back during disposal", async () => {
@@ -544,7 +545,7 @@ describe("KvClient", () => {
     const client = createKvClient(connection);
 
     const tx = await client.begin("kv://realm/area/resource", {});
-    connection.respond(MSG_KV_COMMIT, new Uint8Array([3]));
+    connection.respond(MSG_KV_COMMIT, errorPayload(1053, "conflict"));
 
     await expect(tx.commit({ durability: "Sync" })).rejects.toMatchObject({
       code: "KV_COMMIT",

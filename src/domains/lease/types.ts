@@ -177,6 +177,8 @@ export interface QueryResponse {
   status: number;
   errorMessage?: string;
   errorCode?: number;
+  errorClass?: number;
+  effect?: number;
   isHeld?: boolean;
   owner?: string;
   token?: bigint;

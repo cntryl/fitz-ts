@@ -12,7 +12,7 @@ import {
   StreamStatus,
   StreamStatusNames,
 } from "./types";
-import { StreamError } from "../../core/errors";
+import { attachErrorDisposition, StreamError } from "../../core/errors";
 import { MSG_STREAM_APPEND, MSG_STREAM_COMMIT, MSG_STREAM_ROLLBACK } from "../../frame/types";
 import { formatStatusName } from "../internal/status";
 
@@ -35,7 +35,13 @@ export function createStreamSession(
   };
 
   const checkStatus = (
-    response: { status: number; errorCode?: number; errorMessage?: string },
+    response: {
+      status: number;
+      errorCode?: number;
+      errorMessage?: string;
+      errorClass?: number;
+      effect?: number;
+    },
     operation: string,
   ): void => {
     if (response.status === StreamStatus.Ok) {
@@ -44,7 +50,11 @@ export function createStreamSession(
 
     const code = response.errorCode ?? response.status;
     const statusName = response.errorMessage ?? formatStatusName(code, StreamStatusNames);
-    throw new StreamError(`${operation} failed: ${statusName}`, operation, code);
+    throw attachErrorDisposition(
+      new StreamError(`${operation} failed: ${statusName}`, operation, code),
+      response.errorClass,
+      response.effect,
+    );
   };
 
   const append = async (options: StreamAppendOptions): Promise<bigint> => {
@@ -53,7 +63,7 @@ export function createStreamSession(
       sessionId,
       options.expectedOffset,
       options.body,
-      undefined,
+      options.metadata,
       options.discriminator,
     );
     const response = await connection.request(MSG_STREAM_APPEND, payload, options.signal);

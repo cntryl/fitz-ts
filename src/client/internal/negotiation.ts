@@ -1,8 +1,8 @@
 import { ConnectionError } from "../../core/errors";
 import { waitForSharedPromise } from "./async";
 
-/** A capability advertisement must arrive before the first domain command. */
-export async function waitForServerHello(
+/** The negotiated HELLO must arrive before the first domain command. */
+export async function waitForHello(
   hello: Promise<void>,
   timeoutMs: number,
   signal?: AbortSignal,
@@ -10,7 +10,7 @@ export async function waitForServerHello(
   let timer: ReturnType<typeof setTimeout> | undefined;
   const expired = new Promise<never>((_resolve, reject) => {
     timer = setTimeout(
-      () => reject(new ConnectionError("Timed out waiting for SERVER_HELLO negotiation")),
+      () => reject(new ConnectionError("Timed out waiting for HELLO negotiation")),
       timeoutMs,
     );
   });

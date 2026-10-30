@@ -1,7 +1,8 @@
+import { FrameCodec } from "../../../src/frame/codec";
 import { describe, expect, it, vi } from "vite-plus/test";
 
 import { createMultiplexer } from "../../../src/client/multiplexer";
-import { ConnectionError, TimeoutError } from "../../../src/core/errors";
+import { ConnectionError, ProtocolError, TimeoutError } from "../../../src/core/errors";
 import { CAP_CORRELATION, MSG_RPC_REQUEST, MSG_RPC_RESPONSE } from "../../../src/frame/types";
 import { RpcCodec } from "../../../src/domains/rpc/codec";
 import type { FitzMeter, FitzSpan, FitzTracer } from "../../../src/core/types";
@@ -103,9 +104,14 @@ describe("Multiplexer", () => {
     const meter = new FakeMeter();
     const multiplexer = createMultiplexer({ tracer, meter });
     multiplexer.setConnected();
-    multiplexer.setCapabilities(1, CAP_CORRELATION);
+    multiplexer.setCapabilities(2, CAP_CORRELATION);
 
-    const request = multiplexer.request(77, new Uint8Array([1]), async () => undefined, 100);
+    const request = multiplexer.request(
+      77,
+      FrameCodec.encodeFrame(77, new Uint8Array([1])),
+      async () => undefined,
+      100,
+    );
 
     multiplexer.dispatch(77, new Uint8Array([2]), 1n);
 
@@ -123,16 +129,31 @@ describe("Multiplexer", () => {
     expect(meter.histograms).toContain("fitz.request.duration");
   });
 
-  it("routes a later phase normally after its correlation already completed", () => {
+  it("rejects an unmatched nonzero correlation instead of routing by message type", () => {
     const multiplexer = createMultiplexer();
     multiplexer.setConnected();
     const handler = vi.fn();
     multiplexer.registerNotificationHandler(400, handler);
 
-    multiplexer.dispatch(400, new Uint8Array([7]), 999n);
+    expect(() => multiplexer.dispatch(400, new Uint8Array([7]), 999n)).toThrow(ProtocolError);
+    expect(handler).not.toHaveBeenCalled();
+  });
 
-    expect(handler).toHaveBeenCalledWith(new Uint8Array([7]));
-    expect(multiplexer.getMetrics().responsesDropped).toBe(0);
+  it("keeps a correlated request pending until its final response phase", async () => {
+    const multiplexer = createMultiplexer();
+    multiplexer.setConnected();
+    multiplexer.setCapabilities(2, CAP_CORRELATION);
+    const request = multiplexer.request(
+      400,
+      FrameCodec.encodeFrame(400, new Uint8Array([1])),
+      async () => undefined,
+      1000,
+    );
+
+    multiplexer.dispatch(400, new Uint8Array([0, 2]), 1n, false);
+    multiplexer.dispatch(400, new Uint8Array([0, 0, 0, 9]), 1n, true);
+
+    await expect(request).resolves.toEqual(new Uint8Array([0, 0, 0, 9]));
   });
 
   it("records timeout failures once and closes the span", async () => {
@@ -141,9 +162,14 @@ describe("Multiplexer", () => {
     const meter = new FakeMeter();
     const multiplexer = createMultiplexer({ tracer, meter });
     multiplexer.setConnected();
-    multiplexer.setCapabilities(1, CAP_CORRELATION);
+    multiplexer.setCapabilities(2, CAP_CORRELATION);
 
-    const request = multiplexer.request(88, new Uint8Array([1]), async () => undefined, 10);
+    const request = multiplexer.request(
+      88,
+      FrameCodec.encodeFrame(88, new Uint8Array([1])),
+      async () => undefined,
+      10,
+    );
 
     const assertion = expect(request).rejects.toThrow(/Request timeout/);
 
@@ -164,11 +190,11 @@ describe("Multiplexer", () => {
     const controller = new AbortController();
     const removeAbortListener = vi.spyOn(controller.signal, "removeEventListener");
     multiplexer.setConnected();
-    multiplexer.setCapabilities(1, CAP_CORRELATION);
+    multiplexer.setCapabilities(2, CAP_CORRELATION);
 
     const request = multiplexer.request(
       88,
-      new Uint8Array([1]),
+      FrameCodec.encodeFrame(88, new Uint8Array([1])),
       async () => undefined,
       1000,
       controller.signal,
@@ -190,17 +216,27 @@ describe("Multiplexer", () => {
     const multiplexer = createMultiplexer();
     const controller = new AbortController();
     multiplexer.setConnected();
-    multiplexer.setCapabilities(1, CAP_CORRELATION);
+    multiplexer.setCapabilities(2, CAP_CORRELATION);
 
-    const first = multiplexer.request(77, new Uint8Array([1]), async () => undefined, 1000);
+    const first = multiplexer.request(
+      77,
+      FrameCodec.encodeFrame(77, new Uint8Array([1])),
+      async () => undefined,
+      1000,
+    );
     const second = multiplexer.request(
       77,
-      new Uint8Array([2]),
+      FrameCodec.encodeFrame(77, new Uint8Array([2])),
       async () => undefined,
       1000,
       controller.signal,
     );
-    const third = multiplexer.request(77, new Uint8Array([3]), async () => undefined, 1000);
+    const third = multiplexer.request(
+      77,
+      FrameCodec.encodeFrame(77, new Uint8Array([3])),
+      async () => undefined,
+      1000,
+    );
     void first.catch(() => undefined);
     void second.catch(() => undefined);
     void third.catch(() => undefined);
@@ -232,7 +268,7 @@ describe("Multiplexer", () => {
 
       const request = multiplexer.request(
         77,
-        new Uint8Array([1]),
+        FrameCodec.encodeFrame(77, new Uint8Array([1])),
         async () => {
           await sendBlocked;
         },
@@ -262,7 +298,7 @@ describe("Multiplexer", () => {
 
     const request = multiplexer.request(
       77,
-      new Uint8Array([1]),
+      FrameCodec.encodeFrame(77, new Uint8Array([1])),
       async () => {
         await sendBlocked;
       },
@@ -302,7 +338,7 @@ describe("Multiplexer", () => {
 
     const pending = multiplexer.request(
       MSG_RPC_REQUEST,
-      new Uint8Array([9]),
+      FrameCodec.encodeFrame(MSG_RPC_REQUEST, new Uint8Array([9])),
       async () => {
         await sendBlocked;
       },
@@ -314,7 +350,7 @@ describe("Multiplexer", () => {
 
     releaseSend();
     await Promise.resolve();
-    multiplexer.dispatch(MSG_RPC_REQUEST, new Uint8Array([0]));
+    multiplexer.dispatch(MSG_RPC_REQUEST, new Uint8Array([0]), 1n);
 
     await expect(pending).resolves.toEqual(new Uint8Array([0]));
   });
@@ -341,7 +377,7 @@ describe("Multiplexer", () => {
 
     const pending = multiplexer.request(
       MSG_RPC_RESPONSE,
-      new Uint8Array([9]),
+      FrameCodec.encodeFrame(MSG_RPC_RESPONSE, new Uint8Array([9])),
       async () => {
         await sendBlocked;
       },
@@ -353,7 +389,7 @@ describe("Multiplexer", () => {
 
     releaseSend();
     await Promise.resolve();
-    multiplexer.dispatch(MSG_RPC_RESPONSE, new Uint8Array([0]));
+    multiplexer.dispatch(MSG_RPC_RESPONSE, new Uint8Array([0]), 1n);
 
     await expect(pending).resolves.toEqual(new Uint8Array([0]));
   });
@@ -364,11 +400,16 @@ describe("Multiplexer", () => {
     const response = new Uint8Array([7]);
 
     multiplexer.setConnected();
-    multiplexer.setCapabilities(1, CAP_CORRELATION);
+    multiplexer.setCapabilities(2, CAP_CORRELATION);
     multiplexer.registerNotificationHandler(901, handler);
     multiplexer.registerPushFrameClassifier(901, () => false);
 
-    const pending = multiplexer.request(901, new Uint8Array([1]), async () => undefined, 1000);
+    const pending = multiplexer.request(
+      901,
+      FrameCodec.encodeFrame(901, new Uint8Array([1])),
+      async () => undefined,
+      1000,
+    );
 
     multiplexer.dispatch(901, response, 1n);
 
@@ -379,10 +420,20 @@ describe("Multiplexer", () => {
   it("does not cross same-type responses when dispatch order matches request order", async () => {
     const multiplexer = createMultiplexer();
     multiplexer.setConnected();
-    multiplexer.setCapabilities(1, CAP_CORRELATION);
+    multiplexer.setCapabilities(2, CAP_CORRELATION);
 
-    const first = multiplexer.request(901, new Uint8Array([1]), async () => undefined, 100);
-    const second = multiplexer.request(901, new Uint8Array([2]), async () => undefined, 100);
+    const first = multiplexer.request(
+      901,
+      FrameCodec.encodeFrame(901, new Uint8Array([1])),
+      async () => undefined,
+      100,
+    );
+    const second = multiplexer.request(
+      901,
+      FrameCodec.encodeFrame(901, new Uint8Array([2])),
+      async () => undefined,
+      100,
+    );
 
     multiplexer.dispatch(901, new Uint8Array([0xaa]), 1n);
     multiplexer.dispatch(901, new Uint8Array([0xbb]), 2n);
@@ -394,10 +445,20 @@ describe("Multiplexer", () => {
   it("does not cross same-type responses when dispatch order differs from request order", async () => {
     const multiplexer = createMultiplexer();
     multiplexer.setConnected();
-    multiplexer.setCapabilities(1, CAP_CORRELATION);
+    multiplexer.setCapabilities(2, CAP_CORRELATION);
 
-    const first = multiplexer.request(901, new Uint8Array([1]), async () => undefined, 100);
-    const second = multiplexer.request(901, new Uint8Array([2]), async () => undefined, 100);
+    const first = multiplexer.request(
+      901,
+      FrameCodec.encodeFrame(901, new Uint8Array([1])),
+      async () => undefined,
+      100,
+    );
+    const second = multiplexer.request(
+      901,
+      FrameCodec.encodeFrame(901, new Uint8Array([2])),
+      async () => undefined,
+      100,
+    );
 
     multiplexer.dispatch(901, new Uint8Array([0xbb]), 2n);
     multiplexer.dispatch(901, new Uint8Array([0xaa]), 1n);
@@ -409,12 +470,22 @@ describe("Multiplexer", () => {
   it("does not consume stale response after timeout for the earlier request", async () => {
     const multiplexer = createMultiplexer();
     multiplexer.setConnected();
-    multiplexer.setCapabilities(1, CAP_CORRELATION);
+    multiplexer.setCapabilities(2, CAP_CORRELATION);
 
-    const first = multiplexer.request(902, new Uint8Array([1]), async () => undefined, 20);
+    const first = multiplexer.request(
+      902,
+      FrameCodec.encodeFrame(902, new Uint8Array([1])),
+      async () => undefined,
+      20,
+    );
     await expect(first).rejects.toBeInstanceOf(TimeoutError);
 
-    const second = multiplexer.request(902, new Uint8Array([2]), async () => undefined, 200);
+    const second = multiplexer.request(
+      902,
+      FrameCodec.encodeFrame(902, new Uint8Array([2])),
+      async () => undefined,
+      200,
+    );
 
     multiplexer.dispatch(902, new Uint8Array([0xaa]), 1n);
     multiplexer.dispatch(902, new Uint8Array([0xbb]), 2n);
@@ -425,7 +496,7 @@ describe("Multiplexer", () => {
   it("keeps a timed-out request's tombstone in place when its send() later rejects, instead of misdelivering a delayed response to the next caller", async () => {
     const multiplexer = createMultiplexer();
     multiplexer.setConnected();
-    multiplexer.setCapabilities(1, CAP_CORRELATION);
+    multiplexer.setCapabilities(2, CAP_CORRELATION);
 
     let rejectSend: (error: Error) => void = () => undefined;
     const sendFailure = new Promise<void>((_resolve, reject) => {
@@ -436,7 +507,12 @@ describe("Multiplexer", () => {
     // still observes and handles the same rejection normally.
     sendFailure.catch(() => undefined);
 
-    const first = multiplexer.request(904, new Uint8Array([1]), () => sendFailure, 20);
+    const first = multiplexer.request(
+      904,
+      FrameCodec.encodeFrame(904, new Uint8Array([1])),
+      () => sendFailure,
+      20,
+    );
     await expect(first).rejects.toBeInstanceOf(TimeoutError);
 
     // The timed-out request's send() finally settles — but with a
@@ -451,7 +527,12 @@ describe("Multiplexer", () => {
     await Promise.resolve();
     await Promise.resolve();
 
-    const second = multiplexer.request(904, new Uint8Array([2]), async () => undefined, 200);
+    const second = multiplexer.request(
+      904,
+      FrameCodec.encodeFrame(904, new Uint8Array([2])),
+      async () => undefined,
+      200,
+    );
 
     // This frame is consumed and discarded by `first`'s still-in-place
     // tombstone, not delivered to `second`.
@@ -464,19 +545,29 @@ describe("Multiplexer", () => {
   it("does not leak stale response across disconnect/connect cycles", async () => {
     const multiplexer = createMultiplexer();
     multiplexer.setConnected();
-    multiplexer.setCapabilities(1, CAP_CORRELATION);
+    multiplexer.setCapabilities(2, CAP_CORRELATION);
 
-    const first = multiplexer.request(903, new Uint8Array([1]), async () => undefined, 20);
+    const first = multiplexer.request(
+      903,
+      FrameCodec.encodeFrame(903, new Uint8Array([1])),
+      async () => undefined,
+      20,
+    );
     await expect(first).rejects.toBeInstanceOf(TimeoutError);
 
     multiplexer.setDisconnected();
     multiplexer.dispatch(903, new Uint8Array([0xaa]));
 
     multiplexer.setConnected();
-    multiplexer.setCapabilities(1, CAP_CORRELATION);
-    const second = multiplexer.request(903, new Uint8Array([2]), async () => undefined, 200);
+    multiplexer.setCapabilities(2, CAP_CORRELATION);
+    const second = multiplexer.request(
+      903,
+      FrameCodec.encodeFrame(903, new Uint8Array([2])),
+      async () => undefined,
+      200,
+    );
 
-    multiplexer.dispatch(903, new Uint8Array([0xbb]), 2n);
+    multiplexer.dispatch(903, new Uint8Array([0xbb]), 1n);
     await expect(second).resolves.toEqual(new Uint8Array([0xbb]));
   });
 });

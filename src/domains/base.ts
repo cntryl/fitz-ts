@@ -18,6 +18,15 @@ export interface RequestPort {
   request(messageType: number, payload: Uint8Array, signal?: AbortSignal): Promise<Uint8Array>;
 }
 
+export interface RequestFlagsPort {
+  requestWithFlags?(
+    messageType: number,
+    payload: Uint8Array,
+    flags: number,
+    signal?: AbortSignal,
+  ): Promise<Uint8Array>;
+}
+
 export interface ServerCapabilitiesPort {
   getServerCapabilities?(): { protocolVersion: number; capabilities: number };
 }
@@ -32,6 +41,10 @@ export interface ReconnectRestoreRequestPort {
 
 export interface SendPort {
   send(messageType: number, payload: Uint8Array, signal?: AbortSignal): Promise<void>;
+}
+
+export interface SendCorrelatedPort {
+  sendCorrelated?(messageType: number, payload: Uint8Array, signal?: AbortSignal): Promise<void>;
 }
 
 export interface FireAndForgetPort {

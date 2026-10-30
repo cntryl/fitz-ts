@@ -23,7 +23,7 @@ import {
   MSG_KV_SUBSCRIBE,
   MSG_KV_UNSUBSCRIBE,
 } from "../../frame/types";
-import { KvError } from "../../core/errors";
+import { attachErrorDisposition, KvError } from "../../core/errors";
 import { isRegistrationPatternShape, isRouteShape } from "../_routes";
 import { parseStandardResponse } from "../../protocol/response";
 import { createBufferReader } from "../../core/buffer";
@@ -137,7 +137,11 @@ export function createKvClient(connection: KvConnectionPort): KvClient {
     const decoded = KvCodec.decodeBeginResponse(response);
 
     if (decoded.status !== KvStatus.Ok || decoded.txId === undefined) {
-      throw new KvError("BEGIN failed", "BEGIN_FAILED", decoded.status);
+      throw attachErrorDisposition(
+        new KvError("BEGIN failed", "BEGIN_FAILED", decoded.status),
+        decoded.errorClass,
+        decoded.effect,
+      );
     }
 
     return createKvTransaction(connection, route, decoded.txId);
@@ -148,10 +152,14 @@ export function createKvClient(connection: KvConnectionPort): KvClient {
       await request(MSG_KV_SUBSCRIBE, KvCodec.encodeSubscribe(pattern)),
     );
     if (!parsed.success) {
-      throw new KvError(
-        `KV SUBSCRIBE failed: ${parsed.error ?? "unknown error"}`,
-        "SUBSCRIBE_FAILED",
-        parsed.errorCode,
+      throw attachErrorDisposition(
+        new KvError(
+          `KV SUBSCRIBE failed: ${parsed.error ?? "unknown error"}`,
+          "SUBSCRIBE_FAILED",
+          parsed.errorCode,
+        ),
+        parsed.errorClass,
+        parsed.effect,
       );
     }
     const reader = createBufferReader(parsed.data);
@@ -171,10 +179,14 @@ export function createKvClient(connection: KvConnectionPort): KvClient {
         await requestFrame(MSG_KV_UNSUBSCRIBE, KvCodec.encodeUnsubscribe(pattern)),
       );
       if (!parsed.success) {
-        throw new KvError(
-          `KV UNSUBSCRIBE failed: ${parsed.error ?? "unknown error"}`,
-          "UNSUBSCRIBE_FAILED",
-          parsed.errorCode,
+        throw attachErrorDisposition(
+          new KvError(
+            `KV UNSUBSCRIBE failed: ${parsed.error ?? "unknown error"}`,
+            "UNSUBSCRIBE_FAILED",
+            parsed.errorCode,
+          ),
+          parsed.errorClass,
+          parsed.effect,
         );
       }
     })();

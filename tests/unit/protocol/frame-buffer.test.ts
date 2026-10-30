@@ -7,7 +7,7 @@ import {
   writeU64BENumberAt,
 } from "../../../src/core/buffer";
 import { CodecError } from "../../../src/core/errors";
-import { FrameCodec, createFrameParser } from "../../../src/frame/codec";
+import { FLAG_RESPONSE_FINAL, FrameCodec, createFrameParser } from "../../../src/frame/codec";
 import {
   MSG_CONNECT,
   MSG_KV_BEGIN,
@@ -67,22 +67,41 @@ describe("protocol primitives", () => {
     const encoded = FrameCodec.encodeFrame(MSG_CONNECT, payload);
     const decoded = FrameCodec.decodeFrame(encoded);
 
-    expect(decoded).toEqual({ messageType: MSG_CONNECT, payload });
+    expect(decoded).toEqual({ flags: 0, correlation: 0n, messageType: MSG_CONNECT, payload });
+  });
+
+  it("accepts RESPONSE_FINAL on a correlated response", () => {
+    const payload = new Uint8Array([0x6f, 0x6b]);
+    const encoded = FrameCodec.encodeFrame(104, payload, {
+      flags: FLAG_RESPONSE_FINAL,
+      correlation: 1n,
+    });
+    expect(FrameCodec.decodeFrame(encoded)).toEqual({
+      flags: FLAG_RESPONSE_FINAL,
+      correlation: 1n,
+      messageType: 104,
+      payload,
+    });
   });
 
   it("encodes and decodes escaped message-type frames", () => {
     const payload = new Uint8Array([9, 8, 7]);
 
     const encoded = FrameCodec.encodeFrame(MSG_SCHEDULE_NOTIFY, payload);
-    expect(encoded[0]).toBe(0xff);
+    expect(new DataView(encoded.buffer).getUint16(0, false)).toBe(MSG_SCHEDULE_NOTIFY);
 
     const decoded = FrameCodec.decodeFrame(encoded);
-    expect(decoded).toEqual({ messageType: MSG_SCHEDULE_NOTIFY, payload });
+    expect(decoded).toEqual({
+      flags: 0,
+      correlation: 0n,
+      messageType: MSG_SCHEDULE_NOTIFY,
+      payload,
+    });
   });
 
   it("should reject truncated values given incomplete TLV bytes when decoding", () => {
     expect(() =>
-      FrameCodec.decodeFrame(new Uint8Array([MSG_CONNECT, 0x00, 0x02, 0x01])),
+      FrameCodec.decodeFrame(new Uint8Array([MSG_CONNECT, 0x00, 0x04, 0x01])),
     ).toThrowError(CodecError);
   });
 
@@ -96,42 +115,33 @@ describe("protocol primitives", () => {
     const frame = FrameCodec.encodeFrame(MSG_CONNECT, new Uint8Array([1]));
     const malformed = new Uint8Array([...frame, MSG_KV_BEGIN, 0, 0]);
 
-    expect(() => FrameCodec.decodeFrame(malformed)).toThrowError(/trailing data/);
+    expect(() => FrameCodec.decodeFrame(malformed)).toThrowError(/length mismatch/);
   });
 
-  it("should reject duplicate tags given repeated TLV tags when decoding", () => {
+  it("should reject multiple messages given one transport frame when decoding", () => {
     const frame = FrameCodec.encodeFrame(MSG_CONNECT, new Uint8Array([1]));
     const duplicate = new Uint8Array([...frame, ...frame]);
 
-    expect(() => FrameCodec.decodeFrame(duplicate)).toThrowError(/Duplicate TLV tag/);
+    expect(() => FrameCodec.decodeFrame(duplicate)).toThrowError(/length mismatch/);
   });
 
   it("should reject oversized payloads given data above the frame limit when encoding", () => {
-    expect(() => FrameCodec.encodeFrame(MSG_CONNECT, new Uint8Array(65536))).toThrowError(
-      CodecError,
-    );
+    expect(() =>
+      FrameCodec.encodeFrame(MSG_CONNECT, new Uint8Array(1024 * 1024 - 15 + 1)),
+    ).toThrowError(CodecError);
   });
 
   it("rejects message types larger than the escaped u16 field", () => {
     expect(() => FrameCodec.encodeFrame(65536, new Uint8Array())).toThrowError(CodecError);
   });
 
-  it("parses streamed frames across chunk boundaries", () => {
+  it("parses individual transport messages across chunk boundaries", () => {
     const parser = createFrameParser();
     const first = FrameCodec.encodeFrame(MSG_KV_BEGIN, new Uint8Array([1, 2]));
     const second = FrameCodec.encodeFrame(MSG_QUEUE_NOTIFY, new Uint8Array([3, 4, 5]));
-    const combined = new Uint8Array(first.length + second.length);
-    combined.set(first);
-    combined.set(second, first.length);
-
-    const chunkA = combined.slice(0, 4);
-    const chunkB = combined.slice(4);
-
-    expect(parser.parseFrames(chunkA)).toEqual([]);
-    expect(parser.parseFrames(chunkB)).toEqual([
-      { messageType: MSG_KV_BEGIN, payload: new Uint8Array([1, 2]) },
-      { messageType: MSG_QUEUE_NOTIFY, payload: new Uint8Array([3, 4, 5]) },
-    ]);
+    expect(parser.parseFrames(first.slice(0, 4))).toEqual([]);
+    expect(parser.parseFrames(first.slice(4))).toEqual([FrameCodec.decodeFrame(first)]);
+    expect(parser.parseFrames(second)).toEqual([FrameCodec.decodeFrame(second)]);
   });
 
   it("parses frames with message type 0", () => {
@@ -139,7 +149,9 @@ describe("protocol primitives", () => {
     const encoded = FrameCodec.encodeFrame(0, new Uint8Array([7, 8, 9]));
     const parsed = parser.parseFrames(encoded);
 
-    expect(parsed).toEqual([{ messageType: 0, payload: new Uint8Array([7, 8, 9]) }]);
+    expect(parsed).toEqual([
+      { flags: 0, correlation: 0n, messageType: 0, payload: new Uint8Array([7, 8, 9]) },
+    ]);
   });
 
   it("parses escaped message type when header arrives one byte at a time", () => {
@@ -152,7 +164,7 @@ describe("protocol primitives", () => {
     }
 
     expect(parser.parseFrames(encoded.slice(encoded.length - 1))).toEqual([
-      { messageType: MSG_SCHEDULE_NOTIFY, payload },
+      { flags: 0, correlation: 0n, messageType: MSG_SCHEDULE_NOTIFY, payload },
     ]);
   });
 
@@ -160,18 +172,18 @@ describe("protocol primitives", () => {
     const parser = createFrameParser();
     const encoded = FrameCodec.encodeFrame(MSG_KV_BEGIN, new Uint8Array([1, 2, 3]));
 
-    expect(parser.parseFrames(encoded.slice(0, 4))).toEqual([]);
+    expect(parser.parseFrames(encoded.slice(0, 16))).toEqual([]);
     expect(parser.getPendingFrameInfo()).toMatchObject({
       hasPending: true,
-      bufferedBytes: 1,
+      bufferedBytes: 16,
       state: "payload",
       messageType: MSG_KV_BEGIN,
       payloadLength: 3,
       payloadBytesRemaining: 2,
     });
 
-    expect(parser.parseFrames(encoded.slice(4))).toEqual([
-      { messageType: MSG_KV_BEGIN, payload: new Uint8Array([1, 2, 3]) },
+    expect(parser.parseFrames(encoded.slice(16))).toEqual([
+      { flags: 0, correlation: 0n, messageType: MSG_KV_BEGIN, payload: new Uint8Array([1, 2, 3]) },
     ]);
     expect(parser.getPendingFrameInfo()).toMatchObject({
       hasPending: false,

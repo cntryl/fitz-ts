@@ -1,3 +1,4 @@
+import { writeErrorCode } from "../helpers/wire-errors";
 import { describe, it, expect } from "vite-plus/test";
 import { createQueueItem } from "../../../src/domains/queue/types";
 import { isRetryable, QueueError, TimeoutError } from "../../../src/core/errors";
@@ -15,12 +16,18 @@ describe("Queue ingress errors", () => {
       // Arrange
       const writer = createBufferWriter(100);
       writer.writeU8(1);
-      writer.writeU32BE(4005);
+      writeErrorCode(writer, 4005);
       writer.writeString("not accepted");
       // Act
       const response = QueueCodec[operation](writer.getBuffer());
       // Assert
-      expect(response).toEqual({ status: 1, errorCode: 4005, errorMessage: "not accepted" });
+      expect(response).toEqual({
+        status: 1,
+        errorCode: 4005,
+        errorClass: 5,
+        effect: 0,
+        errorMessage: "not accepted",
+      });
     });
   }
 });
@@ -33,7 +40,7 @@ for (const [code, retryable] of [
     // Arrange
     const writer = createBufferWriter(100);
     writer.writeU8(1);
-    writer.writeU32BE(code);
+    writeErrorCode(writer, code);
     writer.writeString("broker rejection");
     let calls = 0;
     const item = createQueueItem(7n, 11n, new Uint8Array(), "queue://prod/app/jobs", {
@@ -81,7 +88,7 @@ it("should retain reservation after rejected completion until an explicit succes
   // Arrange
   const writer = createBufferWriter(100);
   writer.writeU8(1);
-  writer.writeU32BE(4005);
+  writeErrorCode(writer, 4005);
   writer.writeString("not accepted");
   const payloads: Uint8Array[] = [];
   const item = createQueueItem(7n, 11n, new Uint8Array(), "queue://prod/app/jobs", {

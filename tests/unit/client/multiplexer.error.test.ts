@@ -1,3 +1,4 @@
+import { FrameCodec } from "../../../src/frame/codec";
 import { describe, expect, it } from "vite-plus/test";
 
 import { createMultiplexer } from "../../../src/client/multiplexer";
@@ -8,7 +9,12 @@ describe("Multiplexer shutdown errors", () => {
     const multiplexer = createMultiplexer();
     multiplexer.setConnected();
 
-    const pending = multiplexer.request(77, new Uint8Array([1]), async () => undefined, 1000);
+    const pending = multiplexer.request(
+      77,
+      FrameCodec.encodeFrame(77, new Uint8Array([1])),
+      async () => undefined,
+      1000,
+    );
     void pending.catch(() => undefined);
     const pendingExpectation = expect(pending).rejects.toBeInstanceOf(ConnectionError);
 

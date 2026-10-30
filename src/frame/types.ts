@@ -1,36 +1,16 @@
-/**
- * Fitz message type constants
- * Per CLIENT_SPEC.md and fitz-go/internal/protocol/message_types.go
- *
- * Format: [MessageType (variable 1-3 bytes)][Length (u16 BE)][Payload]
- * MessageType 0-254: single byte
- * MessageType 255+: escape byte 0xFF + u16 BE
- *
- * Key Pattern: Single MessageType per operation (request AND response use same type)
- *
- * Responses are matched by correlation identifier when the broker advertises
- * CAP_CORRELATION, and by one-in-flight-per-message-type FIFO otherwise.
- */
+/** Fitz wire message identifiers. The header is the fixed wire format 2 header. */
 
 // Control messages (0-99)
 export const MSG_CONNECT = 1;
-/** Labels the record that immediately follows it, in the same transport frame. */
-export const MSG_CORRELATE = 2;
-/** Echoes a request's correlation onto the response that follows it. */
-export const MSG_CORRELATED = 3;
-/** Unsolicited capability advertisement, sent once per session on CONNECT success. */
-export const MSG_SERVER_HELLO = 4;
-/** Reports the friendly name for the client session after capability negotiation. */
-export const MSG_SESSION_METADATA = 5;
+export const MSG_HELLO = 2;
+export const MSG_CONNECT_REJECTED = 3;
+export const MSG_GOAWAY = 4;
 
-/** Broker accepts CORRELATE and echoes CORRELATED. */
-export const CAP_CORRELATION = 1 << 0;
-/** Broker accepts a client-reported service name in SESSION_METADATA. */
-export const CAP_SESSION_METADATA = 1 << 1;
-/** Broker accepts the trailing start_exclusive byte on KV SCAN requests. */
-export const CAP_KV_SCAN_EXCLUSIVE = 1 << 2;
-/** Broker negotiates RPC cancellation and remaining request budgets. */
-export const CAP_RPC_CANCELLATION = 1 << 3;
+// No optional capability bits are defined by wire version 2.
+export const CAP_CORRELATION = 0;
+export const CAP_SESSION_METADATA = 0;
+export const CAP_KV_SCAN_EXCLUSIVE = 0;
+export const CAP_RPC_CANCELLATION = 0;
 
 // KV Domain (100-199)
 export const MSG_KV_BEGIN = 100;
@@ -46,15 +26,14 @@ export const MSG_KV_SUBSCRIBE = 109;
 export const MSG_KV_UNSUBSCRIBE = 110;
 export const MSG_KV_NOTIFY = 111;
 
-// Queue Domain (200-299)
-// Note: 201 = ENQUEUE_BATCH is reserved per CLIENT_SPEC; do not use
+// Queue Domain (200-299); 201 is retired and must not be reused.
 export const MSG_QUEUE_ENQUEUE = 200;
 export const MSG_QUEUE_RESERVE = 202;
 export const MSG_QUEUE_EXTEND = 203;
 export const MSG_QUEUE_COMPLETE = 204;
 export const MSG_QUEUE_SUBSCRIBE = 207;
 export const MSG_QUEUE_UNSUBSCRIBE = 208;
-export const MSG_QUEUE_NOTIFY = 209; // Server -> Client only
+export const MSG_QUEUE_NOTIFY = 209;
 
 // RPC Domain (300-399)
 export const MSG_RPC_SUBSCRIBE_WORKER = 300;
@@ -71,7 +50,7 @@ export const MSG_LEASE_RELEASE = 402;
 export const MSG_LEASE_QUERY = 403;
 export const MSG_LEASE_SUBSCRIBE = 407;
 export const MSG_LEASE_UNSUBSCRIBE = 408;
-export const MSG_LEASE_NOTIFY = 409; // Server -> Client only
+export const MSG_LEASE_NOTIFY = 409;
 export const MSG_LEASE_LIST = 410;
 
 // Notice Domain (500-599)
@@ -79,7 +58,7 @@ export const MSG_NOTICE_PUBLISH = 500;
 export const MSG_NOTICE_SUBSCRIBE = 501;
 export const MSG_NOTICE_UNSUBSCRIBE = 502;
 export const MSG_NOTICE_UNSUBSCRIBE_ALL = 503;
-export const MSG_NOTICE_NOTIFY = 504; // Server -> Client only
+export const MSG_NOTICE_NOTIFY = 504;
 
 // Stream Domain (600-699)
 export const MSG_STREAM_BEGIN = 600;
@@ -91,23 +70,18 @@ export const MSG_STREAM_LAST = 605;
 export const MSG_STREAM_GET_METADATA = 606;
 export const MSG_STREAM_SUBSCRIBE = 607;
 export const MSG_STREAM_UNSUBSCRIBE = 608;
-export const MSG_STREAM_NOTIFY = 609; // Server -> Client only
+export const MSG_STREAM_NOTIFY = 609;
 
-// Schedule Domain (700-799)
+// Schedule Domain (700-799). LIST (702) is the cursor form; 707 is retired.
 export const MSG_SCHEDULE_CREATE = 700;
 export const MSG_SCHEDULE_CANCEL = 701;
-// Schedule LIST 702 remains the canonical cross-client pagination operation.
-export const MSG_SCHEDULE_LIST_PAGE = 702;
+export const MSG_SCHEDULE_LIST = 702;
+export const MSG_SCHEDULE_LIST_PAGE = MSG_SCHEDULE_LIST;
 export const MSG_SCHEDULE_SUBSCRIBE = 703;
 export const MSG_SCHEDULE_UNSUBSCRIBE = 704;
-export const MSG_SCHEDULE_NOTIFY = 705; // Server -> Client only
+export const MSG_SCHEDULE_NOTIFY = 705;
 export const MSG_SCHEDULE_CREATE_BATCH = 706;
-export const MSG_SCHEDULE_LIST_V2 = 707;
 
-/**
- * Returns the domain name for a given MessageType
- * Used for routing frames to domain handlers
- */
 export function routeDomain(msgType: number): string {
   if (msgType >= 100 && msgType <= 199) return "kv";
   if (msgType >= 200 && msgType <= 299) return "queue";
@@ -119,9 +93,6 @@ export function routeDomain(msgType: number): string {
   return "unknown";
 }
 
-/**
- * Notification message types (server -> client push)
- */
 export const NOTIFICATION_TYPES = new Set([
   MSG_KV_NOTIFY,
   MSG_QUEUE_NOTIFY,

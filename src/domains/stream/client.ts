@@ -34,7 +34,7 @@ import {
   StreamSubscription,
 } from "./types";
 import { createStreamSession } from "./session";
-import { StreamError, StreamReadStalledError } from "../../core/errors";
+import { attachErrorDisposition, StreamError, StreamReadStalledError } from "../../core/errors";
 import { createWakeGate } from "../../core/wake-gate";
 import {
   MSG_STREAM_BEGIN,
@@ -553,7 +553,13 @@ export function createStreamClient(connection: StreamConnectionPort): StreamClie
   };
 
   const checkStatus = (
-    response: { status: number; errorCode?: number; errorMessage?: string },
+    response: {
+      status: number;
+      errorCode?: number;
+      errorMessage?: string;
+      errorClass?: number;
+      effect?: number;
+    },
     operation: string,
   ): void => {
     if (response.status === StreamStatus.Ok) {
@@ -561,7 +567,11 @@ export function createStreamClient(connection: StreamConnectionPort): StreamClie
     }
     const code = response.errorCode ?? response.status;
     const reason = response.errorMessage ?? formatStatusName(code, StreamStatusNames);
-    throw new StreamError(`${operation} failed: ${reason}`, operation, code);
+    throw attachErrorDisposition(
+      new StreamError(`${operation} failed: ${reason}`, operation, code),
+      response.errorClass,
+      response.effect,
+    );
   };
 
   return {
@@ -575,14 +585,24 @@ export function createStreamClient(connection: StreamConnectionPort): StreamClie
 }
 
 function assertStreamResponseSuccess(
-  response: { status: number; errorCode?: number; errorMessage?: string },
+  response: {
+    status: number;
+    errorCode?: number;
+    errorMessage?: string;
+    errorClass?: number;
+    effect?: number;
+  },
   operation: string,
 ): void {
   if (response.status === StreamStatus.Ok) return;
-  throw new StreamError(
-    `${operation} failed: ${response.errorMessage ?? "unknown error"}`,
-    `${operation}_FAILED`,
-    response.errorCode,
+  throw attachErrorDisposition(
+    new StreamError(
+      `${operation} failed: ${response.errorMessage ?? "unknown error"}`,
+      `${operation}_FAILED`,
+      response.errorCode,
+    ),
+    response.errorClass,
+    response.effect,
   );
 }
 

@@ -1,3 +1,4 @@
+import { errorPayload } from "../helpers/wire-errors";
 /**
  * KV Codec unit tests
  * Tests encoding and decoding of all KV protocol messages
@@ -76,15 +77,18 @@ describe("KvCodec", () => {
     it("should_decode_begin_response_with_error_status", () => {
       // Arrange
       const writer = createBufferWriter(16);
-      writer.writeU8(5); // status = OperationNotAllowed
-      writer.writeU64BE(0n); // Still need tx_id field
+      writer.writeU8(1);
+      writer.writeU16BE(1008);
+      writer.writeU8(8);
+      writer.writeU8(0);
+      writer.writeString("operation not allowed");
       const response = writer.getBuffer();
 
       // Act
       const decoded = KvCodec.decodeBeginResponse(response);
 
       // Assert
-      expect(decoded.status).toBe(5);
+      expect(decoded.status).toBe(1008);
     });
   });
 
@@ -150,13 +154,13 @@ describe("KvCodec", () => {
 
     it("should_decode_put_response_error", () => {
       // Arrange
-      const response = new Uint8Array([1, 0]); // error status, found = 0
+      const response = errorPayload(1057, "transaction aborted");
 
       // Act
       const decoded = KvCodec.decodePutResponse(response);
 
       // Assert
-      expect(decoded.status).toBe(1);
+      expect(decoded.status).toBe(1057);
     });
   });
 
@@ -209,13 +213,13 @@ describe("KvCodec", () => {
 
     it("should_decode_get_response_error", () => {
       // Arrange
-      const response = new Uint8Array([4, 0]); // status = KeyNotFound, found = 0
+      const response = errorPayload(1009, "key not found");
 
       // Act
       const decoded = KvCodec.decodeGetResponse(response);
 
       // Assert
-      expect(decoded.status).toBe(4);
+      expect(decoded.status).toBe(1009);
     });
   });
 

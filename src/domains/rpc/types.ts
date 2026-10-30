@@ -49,7 +49,7 @@ export interface ResponseWriter {
 export interface RpcHandlerContext {
   /** Aborted when the caller disconnects, cancels, or the inherited deadline expires. */
   signal: AbortSignal;
-  /** Current remaining budget in milliseconds, or undefined for a legacy request. */
+  /** Current remaining budget in milliseconds, or undefined when no deadline was supplied. */
   remainingTimeMs(): number | undefined;
 }
 

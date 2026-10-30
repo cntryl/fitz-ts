@@ -34,7 +34,7 @@ describe("RPC integration", () => {
           collectResponses(
             caller.client().rpc.call(route, { body: b("request"), timeoutMs: 5000 }),
           ),
-        ).rejects.toMatchObject({ domainCode: 6010 });
+        ).rejects.toMatchObject({ domainCode: 6006 });
       } finally {
         await sub.unsubscribe();
       }

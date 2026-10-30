@@ -27,7 +27,7 @@ export interface StreamRecord {
   realmOffset?: bigint;
   /** Globally ordered offset when returned by a global selector. */
   globalOffset?: bigint;
-  /** Optional ingest metadata attached when the write session began. */
+  /** Optional per-record metadata supplied during append. */
   metadata?: Uint8Array;
 }
 
@@ -78,6 +78,8 @@ export interface StreamAppendOptions {
   expectedOffset: bigint;
   /** Record payload. */
   body: Uint8Array;
+  /** Optional opaque metadata for this record. */
+  metadata?: Uint8Array;
   /** Optional value used by server-side filters. */
   discriminator?: StreamDiscriminator;
   /** Cancels waiting for the append response; an ambiguous post-send result must be resolved before retry. */

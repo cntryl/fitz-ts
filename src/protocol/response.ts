@@ -1,13 +1,4 @@
-/**
- * Standard response parsing utilities
- * Per CLIENT_SPEC.md and fitz-go/internal/core/connection/connection.go
- *
- * Standard Response Format:
- * [u8 status][payload...]
- *
- * status=0: success, remaining payload follows
- * status=1: error, followed by [u32 code][u32 len][UTF-8 error message]
- */
+/** Shared wire format 2 response envelope. */
 
 import { createBufferReader } from "../core/buffer";
 import { ProtocolError } from "../core/errors";
@@ -17,48 +8,11 @@ export interface ParsedResponse {
   data: Uint8Array;
   error?: string;
   errorCode?: number;
+  errorClass?: number;
+  effect?: number;
 }
 
-/**
- * Parse standard response format
- * Returns {success: true, data: remaining} on status=0
- * Returns {success: false, error: message} on status=1
- */
 export function parseStandardResponse(payload: Uint8Array): ParsedResponse {
-  if (payload.length === 0) {
-    throw new ProtocolError("Response payload is empty", undefined, {
-      payloadLength: 0,
-    });
-  }
-
-  const reader = createBufferReader(payload);
-  const status = reader.readU8();
-
-  if (status === 0) {
-    // Success - return remaining payload
-    const remaining = reader.remaining();
-    return { success: true, data: remaining };
-  }
-
-  if (status === 1) {
-    // Error codes are intentionally not validated here. A newer broker may
-    // allocate a code before this client knows its symbolic name.
-    const errorCode = reader.readU32BE();
-    const errorMsg = reader.readString();
-    if (!reader.isEOF()) {
-      throw new ProtocolError("Error response has trailing data", errorCode);
-    }
-    return { success: false, data: new Uint8Array(0), error: errorMsg, errorCode };
-  }
-
-  // Unknown status code
-  throw new ProtocolError(`Unknown response status: ${status}`, status, {
-    status,
-  });
-}
-
-/** Parse legacy plain errors and coded ingress rejections, rejecting ambiguous envelopes. */
-export function parsePlainResponse(payload: Uint8Array): ParsedResponse {
   if (payload.length === 0) {
     throw new ProtocolError("Response payload is empty", undefined, { payloadLength: 0 });
   }
@@ -72,23 +26,25 @@ export function parsePlainResponse(payload: Uint8Array): ParsedResponse {
     throw new ProtocolError(`Unknown response status: ${status}`, status, { status });
   }
 
-  const view = new DataView(payload.buffer, payload.byteOffset, payload.byteLength);
-  const plain = payload.length >= 5 && view.getUint32(1) === payload.length - 5;
-  const coded = payload.length >= 9 && view.getUint32(5) === payload.length - 9;
-  if (plain === coded) throw new ProtocolError("Malformed or ambiguous error response");
-  if (coded) return parseStandardResponse(payload);
-
+  const errorCode = reader.readU16BE();
+  const errorClass = reader.readU8();
+  const effect = reader.readU8();
   const error = reader.readString();
-  if (!reader.isEOF()) {
-    throw new ProtocolError("Error response has trailing data", status);
+  if (errorClass > 10) {
+    throw new ProtocolError(`Unknown error class: ${errorClass}`, errorCode);
   }
-  return { success: false, data: new Uint8Array(0), error };
+  if (effect > 2) {
+    throw new ProtocolError(`Unknown error effect: ${effect}`, errorCode);
+  }
+  if (!reader.isEOF()) {
+    throw new ProtocolError("Error response has trailing data", errorCode);
+  }
+  return { success: false, data: new Uint8Array(0), error, errorCode, errorClass, effect };
 }
 
-/**
- * Check if response is success, throw error if not
- * Returns remaining data on success
- */
+/** All domain errors now use the same envelope. Kept as a compatibility name. */
+export const parsePlainResponse = parseStandardResponse;
+
 export function assertSuccess(payload: Uint8Array, operation: string): Uint8Array {
   const result = parseStandardResponse(payload);
   if (!result.success) {
@@ -99,19 +55,12 @@ export function assertSuccess(payload: Uint8Array, operation: string): Uint8Arra
         operation,
         error: result.error || "Unknown error",
         errorCode: result.errorCode,
+        errorClass: result.errorClass,
+        effect: result.effect,
       },
     );
   }
   return result.data;
 }
 
-export function assertPlainSuccess(payload: Uint8Array, operation: string): Uint8Array {
-  const result = parsePlainResponse(payload);
-  if (!result.success) {
-    throw new ProtocolError(`${operation} failed: ${result.error || "Unknown error"}`, undefined, {
-      operation,
-      error: result.error || "Unknown error",
-    });
-  }
-  return result.data;
-}
+export const assertPlainSuccess = assertSuccess;

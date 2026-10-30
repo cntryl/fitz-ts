@@ -75,15 +75,18 @@ export interface ScheduleCreateResponse {
 
 export type ScheduleCancelResponse = Record<string, never>;
 
-/** Decoded schedule page metadata used by the public entries iterator. */
+/**
+ * Legacy count-based LIST response shape; Wire 2 uses ScheduleCursorPage.
+ * @deprecated Use ScheduleCursorPage for Wire-2 Schedule LIST (702).
+ */
 export interface ScheduleListPage {
   /** Schedules in this page. */
   entries: readonly ScheduleEntry[];
-  /** Total schedules matching the selector at listing time. */
+  /** Total schedules matching the selector at listing time in the legacy response shape. */
   totalCount: bigint;
 }
 
-/** One page from the broker's optional cursor-based Schedule LIST_V2 extension. */
+/** One page from cursor-based Schedule LIST (702). */
 export interface ScheduleCursorPage {
   entries: readonly ScheduleEntry[];
   hasMore: boolean;

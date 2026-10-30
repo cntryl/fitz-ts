@@ -8,7 +8,7 @@ import type {
   FitzSpan,
   FitzTracer,
 } from "../../../src/core/types";
-import { createBufferWriter } from "../../../src/core/buffer";
+import { createBufferReader, createBufferWriter } from "../../../src/core/buffer";
 import {
   AuthenticationError,
   ConnectionError,
@@ -16,15 +16,10 @@ import {
   TransportError,
 } from "../../../src/core/errors";
 import { createNoticeClient } from "../../../src/domains/notice/client";
-import { FrameCodec } from "../../../src/frame/codec";
-import {
-  MSG_CONNECT,
-  MSG_NOTICE_NOTIFY,
-  MSG_NOTICE_SUBSCRIBE,
-  MSG_SERVER_HELLO,
-  MSG_SESSION_METADATA,
-} from "../../../src/frame/types";
+import { FLAG_RESPONSE_FINAL, FrameCodec } from "../../../src/frame/codec";
+import { MSG_CONNECT, MSG_NOTICE_NOTIFY, MSG_NOTICE_SUBSCRIBE } from "../../../src/frame/types";
 import type { Transport } from "../../../src/transport/types";
+import { wire2HelloFrame } from "./wire-fixtures";
 
 class FakeTransport implements Transport {
   public sent: Uint8Array[] = [];
@@ -70,7 +65,7 @@ class FakeTransport implements Transport {
       FrameCodec.decodeFrame(data).messageType === MSG_CONNECT &&
       this.reads.length === 0
     ) {
-      this.pushRead(FrameCodec.encodeFrame(MSG_SERVER_HELLO, new Uint8Array([0, 1, 0, 0, 0, 0])));
+      this.pushRead(wire2HelloFrame());
     }
     if (this.sendGate && this.sent.length > this.gateAfterSends) {
       await this.sendGate;
@@ -134,6 +129,28 @@ class FakeTransport implements Transport {
   }
 
   pushRead(data: Uint8Array): void {
+    try {
+      const response = FrameCodec.decodeFrame(data);
+      if (response.correlation === 0n) {
+        const request = this.sent
+          .map((frame) => FrameCodec.decodeFrame(frame))
+          .reverse()
+          .find((frame) => frame.messageType === response.messageType && frame.correlation !== 0n);
+        if (request)
+          data = FrameCodec.encodeFrame(response.messageType, response.payload, {
+            flags:
+              response.flags |
+              (response.messageType === 400 &&
+              response.payload[0] === 0 &&
+              response.payload[1] === 2
+                ? 0
+                : FLAG_RESPONSE_FINAL),
+            correlation: request.correlation,
+          });
+      }
+    } catch {
+      /* Preserve deliberately malformed input. */
+    }
     if (this.pendingRead) {
       this.pendingRead.resolve(data);
       this.pendingRead = null;
@@ -273,7 +290,7 @@ describe("Connection", () => {
     expect(connection.isConnected()).toBe(true);
     expect(tokenProvider).toHaveBeenCalledTimes(1);
     expect(transport.sent).toHaveLength(1);
-    expect(transport.sent[0][0]).toBe(MSG_CONNECT);
+    expect(FrameCodec.decodeFrame(transport.sent[0]).messageType).toBe(MSG_CONNECT);
 
     await connection.close();
   });
@@ -296,8 +313,8 @@ describe("Connection", () => {
     await connection.close();
   });
 
-  it("reports the configured service name after the broker advertises metadata support", async () => {
-    const hello = FrameCodec.encodeFrame(MSG_SERVER_HELLO, new Uint8Array([0, 1, 0, 0, 0, 2]));
+  it("includes the configured service name in the Wire-2 CONNECT payload", async () => {
+    const hello = wire2HelloFrame();
     const transport = new FakeTransport([hello]);
     const connection = createConnection(
       () => transport,
@@ -310,19 +327,22 @@ describe("Connection", () => {
 
     await connection.connect();
 
-    const metadata = FrameCodec.decodeFrame(transport.sent[1]!);
-    expect(metadata.messageType).toBe(MSG_SESSION_METADATA);
-    expect(metadata.payload).toEqual(
-      new Uint8Array([0, 0, 0, 13, ...new TextEncoder().encode("orders-worker")]),
-    );
+    const connect = FrameCodec.decodeFrame(transport.sent[0]!);
+    expect(connect.messageType).toBe(MSG_CONNECT);
+    const reader = createBufferReader(connect.payload);
+    expect(reader.readU16BE()).toBe(2);
+    expect(reader.readU16BE()).toBe(2);
+    expect(reader.readU32BE()).toBe(0);
+    expect(reader.readString()).toBe("jwt-token");
+    expect(reader.readString()).toBe("orders-worker");
+    expect(reader.readString()).toBe("fitz-ts/2.0.0");
+    expect(reader.isEOF()).toBe(true);
 
     await connection.close();
   });
 
   it("accepts the 128-byte UTF-8 service-name boundary", async () => {
-    const transport = new FakeTransport([
-      FrameCodec.encodeFrame(MSG_SERVER_HELLO, new Uint8Array([0, 1, 0, 0, 0, 2])),
-    ]);
+    const transport = new FakeTransport([wire2HelloFrame()]);
     const connection = createConnection(
       () => transport,
       async () => "",
@@ -332,16 +352,19 @@ describe("Connection", () => {
       },
     );
     await connection.connect();
-    const metadata = FrameCodec.decodeFrame(transport.sent[1]!);
-    expect(metadata.payload).toHaveLength(132);
+    const connect = FrameCodec.decodeFrame(transport.sent[0]!);
+    const reader = createBufferReader(connect.payload);
+    reader.readU16BE();
+    reader.readU16BE();
+    reader.readU32BE();
+    reader.readString();
+    expect(new TextEncoder().encode(reader.readString())).toHaveLength(128);
     await connection.close();
   });
 
   it("trims the service name before checking the UTF-8 limit and encoding it", async () => {
     const serviceName = "é".repeat(64);
-    const transport = new FakeTransport([
-      FrameCodec.encodeFrame(MSG_SERVER_HELLO, new Uint8Array([0, 1, 0, 0, 0, 2])),
-    ]);
+    const transport = new FakeTransport([wire2HelloFrame()]);
     const connection = createConnection(
       () => transport,
       async () => "",
@@ -350,10 +373,13 @@ describe("Connection", () => {
 
     await connection.connect();
 
-    const metadata = FrameCodec.decodeFrame(transport.sent[1]!);
-    expect(metadata.payload).toEqual(
-      new Uint8Array([0, 0, 0, 128, ...new TextEncoder().encode(serviceName)]),
-    );
+    const connect = FrameCodec.decodeFrame(transport.sent[0]!);
+    const reader = createBufferReader(connect.payload);
+    reader.readU16BE();
+    reader.readU16BE();
+    reader.readU32BE();
+    reader.readString();
+    expect(reader.readString()).toBe(serviceName);
     await connection.close();
   });
 
@@ -1327,7 +1353,7 @@ describe("Connection", () => {
     await vi.waitFor(() => {
       expect(transport.sent).toHaveLength(2);
     });
-    connection.getMultiplexer().dispatch(77, new Uint8Array([9]));
+    connection.getMultiplexer().dispatch(77, new Uint8Array([9]), 1n);
 
     await expect(pending).resolves.toEqual(new Uint8Array([9]));
     expect(tracer.spans).toHaveLength(1);

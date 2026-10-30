@@ -1,7 +1,7 @@
 /**
  * Fitz cross-language conformance harness — TypeScript / fitz-ts
  *
- * Implements the shared CS-001..CS-017 scenarios for:
+ * Runs the implemented shared scenarios and reports the remaining cases as missing:
  *   fitz/docs/clients/cross-language-conformance-suite.yaml
  *
  * Configuration via environment variables:
@@ -22,13 +22,31 @@ import { dirname, resolve } from "node:path";
 
 import { createClient, type Client } from "../../src/client/client.js";
 import type { ClientConfig } from "../../src/core/types.js";
-import { AuthenticationError, TimeoutError } from "../../src/core/errors.js";
+import {
+  AuthenticationError,
+  ConnectionError,
+  ErrCodeRpcRouteNotRegistered,
+  ErrCodeRpcTimeout,
+  KvError,
+  RpcError,
+  ScheduleError,
+  isRetryable,
+} from "../../src/core/errors.js";
 import type { InboundRequest, ResponseWriter } from "../../src/domains/rpc/types.js";
 import type { StreamReadBatch, StreamRecord } from "../../src/domains/stream/types.js";
 
-import { ResultCollector, type ScenarioResult, type Verdict } from "./result.js";
+import {
+  REQUIRED_SCENARIO_IDS,
+  ResultCollector,
+  type ScenarioResult,
+  type Verdict,
+} from "./result.js";
+import { exerciseGlobalFilteredReplay } from "./global-replay.js";
 import type { TransportType } from "../integration/fixture/transport.js";
 import { brokerAddrFor, type AuthMode } from "../integration/fixture/fixture.js";
+import { createTransportProxy } from "../integration/fixture/transport-proxy.js";
+import { exerciseStreamBoundary } from "../integration/fixture/stream-boundary.js";
+import { waitFor } from "../integration/helpers.js";
 import {
   generateValidTestJwt,
   generateInvalidSignatureTestJwt,
@@ -179,6 +197,9 @@ const IMPLEMENTED_SCENARIO_IDS = [
   "CS-015",
   "CS-016",
   "CS-017",
+  "CS-019",
+  "CS-020",
+  "CS-024",
 ];
 
 function loadSharedSuiteScenarioIds(): string[] {
@@ -195,8 +216,10 @@ function loadSharedSuiteScenarioIds(): string[] {
 // ---------------------------------------------------------------------------
 
 describe(`Fitz conformance — fitz-ts [transport=${TRANSPORT}, auth=${AUTH_MODE}]`, () => {
-  it("implements every shared conformance scenario id", () => {
-    expect(IMPLEMENTED_SCENARIO_IDS).toEqual(loadSharedSuiteScenarioIds());
+  it("accounts for every shared conformance scenario id", () => {
+    expect(loadSharedSuiteScenarioIds()).toEqual(REQUIRED_SCENARIO_IDS);
+    expect(new Set(IMPLEMENTED_SCENARIO_IDS).size).toBe(IMPLEMENTED_SCENARIO_IDS.length);
+    expect(REQUIRED_SCENARIO_IDS).toEqual(expect.arrayContaining(IMPLEMENTED_SCENARIO_IDS));
   });
 
   // CS-001 ─ connect success
@@ -348,6 +371,8 @@ describe(`Fitz conformance — fitz-ts [transport=${TRANSPORT}, auth=${AUTH_MODE
         const noWorkerRoute = uniqueRoute("rpc");
         const iterator = client.rpc.call(noWorkerRoute, { body: b("ping"), timeoutMs: 500 });
         const caught = await expectRpcIteratorFailure(iterator);
+        expect(caught).toBeInstanceOf(RpcError);
+        expect(caught).toMatchObject({ domainCode: ErrCodeRpcRouteNotRegistered });
         evidence.push(`rpc to unregistered route threw: ${(caught as Error).constructor.name}`);
 
         // Client must still be usable
@@ -365,38 +390,24 @@ describe(`Fitz conformance — fitz-ts [transport=${TRANSPORT}, auth=${AUTH_MODE
     expect(result.verdict).toBe("pass");
   });
 
-  // CS-005 ─ invalid payload (duplicate insert → domain error, client stays healthy)
+  // CS-005 ─ invalid payload
   it("CS-005 invalid payload", async () => {
     const result = await runScenario("CS-005", "invalid payload", "P0", async () => {
       const evidence: string[] = [];
 
       await withClient({}, async (client) => {
-        const route = uniqueRoute("kv");
-
-        // Write key once
-        const tx1 = await client.kv.begin(route, {});
-        await tx1.insert({ key: b("dup-key"), value: b("first") });
-        await tx1.commit({ durability: "Sync" });
-        evidence.push("first insert succeeded");
-
-        // Attempting insert on an existing key is a server-rejected operation
-        const tx2 = await client.kv.begin(route, {});
-        let caught: unknown;
-        try {
-          await tx2.insert({ key: b("dup-key"), value: b("second") });
-        } catch (err) {
-          caught = err;
-        }
-        await tx2.rollback().catch(() => undefined);
-
-        expect(caught).toBeTruthy();
-        evidence.push(`duplicate insert threw: ${(caught as Error).constructor.name}`);
-
-        // Client must remain usable
-        const rtx = await client.kv.begin(route, { mode: "ReadOnly" });
-        const val = await rtx.get({ key: b("dup-key") });
-        expect(val.type).toBe("found");
-        evidence.push("client remains usable after server-rejected operation");
+        await expect(
+          client.schedule.create(uniqueRoute("schedule"), {
+            cron: "not a cron",
+            deliveryMode: "Broadcast",
+            payload: b("payload"),
+          }),
+        ).rejects.toBeInstanceOf(ScheduleError);
+        evidence.push("invalid cron produced a Schedule domain error");
+        const tx = await client.kv.begin(uniqueRoute("kv"), {});
+        await tx.put({ key: b("after-invalid"), value: b("ok") });
+        await tx.commit({ durability: "Sync" });
+        evidence.push("client remains usable after the rejected operation");
       });
 
       return { verdict: "pass", evidence };
@@ -418,6 +429,9 @@ describe(`Fitz conformance — fitz-ts [transport=${TRANSPORT}, auth=${AUTH_MODE
         // domain error, code should be accessible on the thrown error)
         const iterator = client.rpc.call(route, { body: b("ping"), timeoutMs: 500 });
         const caught = await expectRpcIteratorFailure(iterator);
+        expect(caught).toBeInstanceOf(RpcError);
+        expect(caught).toMatchObject({ domainCode: ErrCodeRpcRouteNotRegistered, effect: 0 });
+        expect(isRetryable(caught)).toBe(true);
         const err = caught as Error & { code?: string; domainCode?: number };
         evidence.push(`error class: ${err.constructor.name}`);
         evidence.push(`error.code: ${err.code ?? "n/a"}`);
@@ -443,6 +457,8 @@ describe(`Fitz conformance — fitz-ts [transport=${TRANSPORT}, auth=${AUTH_MODE
         await tx2.rollback().catch(() => undefined);
 
         expect(kvErr).toBeTruthy();
+        expect(kvErr).toBeInstanceOf(KvError);
+        expect(isRetryable(kvErr)).toBe(false);
         const ke = kvErr as Error & { code?: string; domainCode?: number };
         evidence.push(`kv conflict error class: ${ke.constructor.name}`);
         evidence.push(`kv conflict domainCode: ${ke.domainCode ?? "n/a"}`);
@@ -479,7 +495,9 @@ describe(`Fitz conformance — fitz-ts [transport=${TRANSPORT}, auth=${AUTH_MODE
         await callerClient.connect();
 
         const route = uniqueRoute("rpc");
+        let workerStarted = false;
         const sub = await workerClient.rpc.registerWorker(route, async () => {
+          workerStarted = true;
           await new Promise<void>((resolve) => setTimeout(resolve, 2000));
         });
 
@@ -490,13 +508,10 @@ describe(`Fitz conformance — fitz-ts [transport=${TRANSPORT}, auth=${AUTH_MODE
         evidence.push(`rpc threw after ~${elapsed}ms`);
         evidence.push(`error class: ${(caught as Error).constructor.name}`);
 
-        if (caught instanceof TimeoutError) {
-          evidence.push("error is typed TimeoutError (ideal)");
-        }
-
-        // Must NOT be AbortError
-        expect((caught as Error).name).not.toBe("AbortError");
-        evidence.push("error is not AbortError (timeout ≠ cancellation)");
+        expect(caught).toBeInstanceOf(RpcError);
+        expect(caught).toMatchObject({ code: "RPC_TIMEOUT", domainCode: ErrCodeRpcTimeout });
+        expect(workerStarted).toBe(true);
+        evidence.push("error is an RPC timeout, distinguishable from cancellation");
 
         // Connection still healthy
         const kvRoute = uniqueRoute("kv");
@@ -542,9 +557,11 @@ describe(`Fitz conformance — fitz-ts [transport=${TRANSPORT}, auth=${AUTH_MODE
         await callerClient.connect();
 
         const route = uniqueRoute("rpc");
+        let workerStarted = false;
         const sub = await workerClient.rpc.registerWorker(
           route,
           async (_req: InboundRequest, writer: ResponseWriter) => {
+            workerStarted = true;
             await new Promise<void>((resolve) => setTimeout(resolve, 2000));
             await writer.end({ body: b("late") });
           },
@@ -560,7 +577,7 @@ describe(`Fitz conformance — fitz-ts [transport=${TRANSPORT}, auth=${AUTH_MODE
         const nextPromise = iterator.next();
         // Prevent vitest unhandled rejection warnings before explicit await below.
         nextPromise.catch(() => undefined);
-        await new Promise<void>((resolve) => setTimeout(resolve, 100));
+        await waitFor(() => workerStarted, { timeoutMs: 5000 });
         controller.abort();
 
         let caught: unknown;
@@ -607,11 +624,13 @@ describe(`Fitz conformance — fitz-ts [transport=${TRANSPORT}, auth=${AUTH_MODE
         timeout: 10000,
       });
 
+      const proxy = await createTransportProxy(TRANSPORT, BROKER_ADDR);
       const callerClient = createClient({
-        url: BROKER_ADDR,
+        url: proxy.url,
         transport: TRANSPORT,
         tokenProvider: tokenProvider(),
         timeout: 10000,
+        reconnect: { enabled: false },
       });
 
       try {
@@ -619,29 +638,27 @@ describe(`Fitz conformance — fitz-ts [transport=${TRANSPORT}, auth=${AUTH_MODE
         await callerClient.connect();
 
         const route = uniqueRoute("rpc");
+        let workerStarted = false;
         await workerClient.rpc.registerWorker(
           route,
           async (_req: InboundRequest, writer: ResponseWriter) => {
+            workerStarted = true;
             await new Promise<void>((resolve) => setTimeout(resolve, 3000));
             await writer.end({ body: b("late") });
           },
         );
 
-        const controller = new AbortController();
         const iterator = callerClient.rpc.call(route, {
           body: b("block"),
           timeoutMs: 30000,
-          signal: controller.signal,
         });
 
         const nextPromise = iterator.next();
         // Prevent vitest unhandled rejection warnings before explicit await below.
         nextPromise.catch(() => undefined);
 
-        // Simulate disconnect by closing the caller
-        await new Promise<void>((resolve) => setTimeout(resolve, 100));
-        controller.abort();
-        await callerClient.close().catch(() => undefined);
+        await waitFor(() => workerStarted, { timeoutMs: 5000 });
+        await proxy.goDown();
 
         let caught: unknown;
         try {
@@ -650,12 +667,13 @@ describe(`Fitz conformance — fitz-ts [transport=${TRANSPORT}, auth=${AUTH_MODE
           caught = err;
         }
 
-        expect(caught).toBeTruthy();
+        expect(caught).toBeInstanceOf(ConnectionError);
         evidence.push(`in-flight request threw: ${(caught as Error).constructor.name}`);
-        evidence.push("in-flight request failed promptly on disconnect (correct)");
+        evidence.push("in-flight request failed after actual transport loss");
       } finally {
         await workerClient.close().catch(() => undefined);
         await callerClient.close().catch(() => undefined);
+        await proxy.close();
       }
 
       return { verdict: "pass", evidence };
@@ -670,51 +688,70 @@ describe(`Fitz conformance — fitz-ts [transport=${TRANSPORT}, auth=${AUTH_MODE
     const result = await runScenario("CS-010", "reconnect and retry behavior", "P1", async () => {
       const evidence: string[] = [];
 
-      // Verify reconnect API is accessible
+      const proxy = await createTransportProxy(TRANSPORT, BROKER_ADDR);
+      const events: string[] = [];
       const client = createClient({
+        url: proxy.url,
+        transport: TRANSPORT,
+        tokenProvider: tokenProvider(),
+        timeout: 10000,
+        reconnect: { enabled: true, maxAttempts: 20, backoffMs: 50, maxBackoffMs: 100 },
+        observability: { onLifecycleEvent: (event) => events.push(event.event) },
+      });
+      const peer = createClient({
         url: BROKER_ADDR,
         transport: TRANSPORT,
         tokenProvider: tokenProvider(),
         timeout: 10000,
-        reconnect: { enabled: true, maxAttempts: 3, backoffMs: 100 },
       });
 
       try {
         await client.connect();
-        evidence.push("client connected with reconnect enabled");
-
-        // Close and reconnect manually (simulate application-level reconnect)
-        await client.close();
-        evidence.push("client closed ok");
-
-        const client2 = createClient({
-          url: BROKER_ADDR,
-          transport: TRANSPORT,
-          tokenProvider: tokenProvider(),
-          timeout: 10000,
+        await peer.connect();
+        const noticeRoute = uniqueRoute("notice");
+        const rpcRoute = uniqueRoute("rpc");
+        const received: string[] = [];
+        await client.notice.subscribe(noticeRoute, async (message) => {
+          received.push(Buffer.from(message.body).toString());
         });
-        await client2.connect();
+        await client.rpc.registerWorker(rpcRoute, async (_request, writer) => {
+          await writer.end({ body: b("worker-restored") });
+        });
+        const staleTransaction = await client.kv.begin(uniqueRoute("kv"), {});
+
+        await proxy.goDown();
+        await waitFor(() => events.includes("connection_lost"), { timeoutMs: 5000 });
+        await proxy.goUp();
+        await waitFor(() => events.includes("reconnect_succeeded"), { timeoutMs: 10000 });
+        expect(client.isConnected()).toBe(true);
+        expect(staleTransaction.isOpen()).toBe(false);
+        await expect(staleTransaction.get({ key: b("stale") })).rejects.toBeTruthy();
+        evidence.push(
+          "same client reconnected after transport loss and invalidated its transaction",
+        );
+
+        await peer.notice.publish(noticeRoute, { body: b("notice-restored") });
+        await waitFor(() => received.includes("notice-restored"), { timeoutMs: 5000 });
+        const response = peer.rpc.call(rpcRoute, { body: b("request"), timeoutMs: 5000 });
+        const first = await response.next();
+        expect(first.done).toBe(false);
+        expect(Buffer.from(first.value?.body ?? new Uint8Array()).toString()).toBe(
+          "worker-restored",
+        );
+        await expect(response.next()).resolves.toMatchObject({ done: true });
+        evidence.push("Notice subscription and RPC worker resumed on the reconnected client");
+
         const route = uniqueRoute("kv");
-        const tx = await client2.kv.begin(route, {});
+        const tx = await client.kv.begin(route, {});
         await tx.put({ key: b("after-reconnect"), value: b("ok") });
         await tx.commit({ durability: "Sync" });
-        evidence.push("new requests succeed after reconnect (new client)");
-        await client2.close().catch(() => undefined);
+        evidence.push("new request succeeded on the same reconnected client");
 
         return { verdict: "pass", evidence };
-      } catch (err) {
-        // If reconnect config is not supported, record as partial
-        const message = err instanceof Error ? err.message : String(err);
-        if (message.includes("reconnect") || message.includes("Unknown config")) {
-          evidence.push(`reconnect config not accepted: ${message}`);
-          evidence.push(
-            "NOTE: reconnect config key may differ from 'reconnect' — check ClientConfig",
-          );
-          return { verdict: "partial", evidence };
-        }
-        throw err;
       } finally {
         await client.close().catch(() => undefined);
+        await peer.close().catch(() => undefined);
+        await proxy.close();
       }
     });
 
@@ -741,16 +778,14 @@ describe(`Fitz conformance — fitz-ts [transport=${TRANSPORT}, auth=${AUTH_MODE
           const records = await collectStreamRecords(
             client.stream.read(route, { fromOffset: 0n, mode: "replay", batchSize: 10 }),
           );
-          if (records.length < 3) {
+          if (records.length !== 3) {
             verdict = "partial";
-            evidence.push(`expected >=3 stream records, got ${records.length}`);
+            evidence.push(`expected 3 stream records, got ${records.length}`);
           }
-          for (let i = 1; i < records.length; i++) {
-            if (records[i].offset <= records[i - 1].offset) {
+          for (let i = 0; i < records.length; i++) {
+            if (records[i].offset !== BigInt(i)) {
               verdict = "partial";
-              evidence.push(
-                `out-of-order offsets at ${i}: ${records[i].offset} <= ${records[i - 1].offset}`,
-              );
+              evidence.push(`expected offset ${i}, got ${records[i].offset}`);
               break;
             }
           }
@@ -843,11 +878,12 @@ describe(`Fitz conformance — fitz-ts [transport=${TRANSPORT}, auth=${AUTH_MODE
         evidence.push("client still usable after stream error");
       });
 
-      return { verdict: "pass", evidence };
+      evidence.push("an error during an active streaming read was not exercised");
+      return { verdict: "partial", evidence };
     });
 
     collector.record(result);
-    expect(result.verdict).toBe("pass");
+    expect(result.verdict).toBe("partial");
   });
 
   // CS-014 ─ concurrent in-flight requests
@@ -883,11 +919,12 @@ describe(`Fitz conformance — fitz-ts [transport=${TRANSPORT}, auth=${AUTH_MODE
         evidence.push("all responses correlated to correct request contexts");
       });
 
-      return { verdict: "pass", evidence };
+      evidence.push("cross-domain concurrency and within-domain ordering were not exercised");
+      return { verdict: "partial", evidence };
     });
 
     collector.record(result);
-    expect(result.verdict).toBe("pass");
+    expect(result.verdict).toBe("partial");
   });
 
   // CS-015 ─ shutdown during active work
@@ -940,11 +977,14 @@ describe(`Fitz conformance — fitz-ts [transport=${TRANSPORT}, auth=${AUTH_MODE
         await client.close().catch(() => undefined);
       }
 
-      return { verdict: "pass", evidence };
+      evidence.push(
+        "the KV request may have completed before close; active-work interruption was not established",
+      );
+      return { verdict: "partial", evidence };
     });
 
     collector.record(result);
-    expect(result.verdict).toBe("pass");
+    expect(result.verdict).toBe("partial");
   });
 
   // CS-016 - filtered stream replay
@@ -1014,85 +1054,189 @@ describe(`Fitz conformance — fitz-ts [transport=${TRANSPORT}, auth=${AUTH_MODE
     expect(result.verdict).toBe("pass");
   });
 
-  // CS-017 - bounded concurrency under burst load
-  it("CS-017 bounded concurrency under burst load", async () => {
+  // CS-017 - global filtered multi-page replay
+  it("CS-017 global filtered multi-page replay", async () => {
     const result = await runScenario(
       "CS-017",
-      "bounded concurrency under burst load",
+      "global filtered multi-page replay",
       "P1",
       async () => {
-        const evidence: string[] = [];
-
-        const pause = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
-
-        await withClient({ timeout: 750, maxInFlightRequests: 16 }, async (client) => {
-          const route = uniqueRoute("rpc");
-
-          const workerClient = createClient({
-            url: BROKER_ADDR,
-            transport: TRANSPORT,
-            tokenProvider: tokenProvider(),
-            timeout: 10000,
-          });
-
-          try {
-            await workerClient.connect();
-            const sub = await workerClient.rpc.registerWorker(route, async (req, writer) => {
-              await pause(500);
-              await writer.end({ body: req.body });
-            });
-
-            const responseTimeoutMs = 1500;
-            const firstIterator = client.rpc.call(route, {
-              body: b("first"),
-              timeoutMs: responseTimeoutMs,
-            });
-            const secondIterator = client.rpc.call(route, {
-              body: b("second"),
-              timeoutMs: responseTimeoutMs,
-            });
-            const firstNext = firstIterator.next();
-            firstNext.catch(() => undefined);
-            const secondNext = secondIterator.next();
-            secondNext.catch(() => undefined);
-
-            const secondState = await Promise.race([
-              secondNext.then(
-                () => "settled",
-                () => "settled",
-              ),
-              pause(100).then(() => "pending"),
-            ]);
-
-            expect(secondState).toBe("pending");
-            evidence.push("second RPC call remained pending while first was in flight");
-            evidence.push("configured maxInFlightRequests=16 and burst size=2");
-
-            const [firstFrame, secondFrame] = await Promise.all([firstNext, secondNext]);
-            expect(firstFrame.done).toBe(false);
-            expect(secondFrame.done).toBe(false);
-            expect(Buffer.from(firstFrame.value?.body ?? new Uint8Array()).toString()).toBe(
-              "first",
-            );
-            expect(Buffer.from(secondFrame.value?.body ?? new Uint8Array()).toString()).toBe(
-              "second",
-            );
-
-            await expect(firstIterator.next()).resolves.toMatchObject({ done: true });
-            await expect(secondIterator.next()).resolves.toMatchObject({ done: true });
-            evidence.push("both burst RPC calls completed with correlated responses");
-
-            await sub.unsubscribe();
-          } finally {
-            await workerClient.close().catch(() => undefined);
-          }
-        });
-
+        const evidence = await withClient({}, async (client) =>
+          exerciseGlobalFilteredReplay(client, uniqueRoute("stream")),
+        );
         return { verdict: "pass", evidence };
       },
     );
 
     collector.record(result);
+    expect(result.verdict).toBe("pass");
+  });
+
+  it("CS-019 concurrent same-message-type requests", async () => {
+    const result = await runScenario(
+      "CS-019",
+      "concurrent same-message-type requests",
+      "P0",
+      async () => {
+        await withClient({}, async (client) => {
+          const parkedRoute = uniqueRoute("queue");
+          const readyRoute = uniqueRoute("queue");
+          await client.queue.enqueue(readyRoute, { body: b("second") });
+          let parkedSettled = false;
+          const parked = client.queue
+            .reserve(parkedRoute, {
+              leaseSeconds: 30,
+              batchSize: 1,
+              waitSeconds: 5,
+            })
+            .finally(() => {
+              parkedSettled = true;
+            });
+          parked.catch(() => undefined);
+          await new Promise<void>((resolve) => setTimeout(resolve, 100));
+          expect(parkedSettled).toBe(false);
+          const second = await Promise.race([
+            client.queue.reserve(readyRoute, { leaseSeconds: 30, batchSize: 1, waitSeconds: 0 }),
+            new Promise<never>((_, reject) =>
+              setTimeout(() => reject(new Error("second reserve timed out")), 2000),
+            ),
+          ]);
+          expect(Buffer.from(second[0].body).toString()).toBe("second");
+          expect(parkedSettled).toBe(false);
+          await client.queue.enqueue(parkedRoute, { body: b("first") });
+          const first = await parked;
+          expect(Buffer.from(first[0].body).toString()).toBe("first");
+        });
+        return {
+          verdict: "pass",
+          evidence: [
+            "second reserve resolved first with its own payload",
+            "parked first reserve resolved with its own payload",
+          ],
+        };
+      },
+    );
+    collector.record(result);
+    expect(result.verdict).toBe("pass");
+  });
+
+  it("CS-020 handshake negotiation", async () => {
+    const result = await runScenario("CS-020", "handshake negotiation", "P0", async () => {
+      let negotiated: ReturnType<Client["getServerCapabilities"]> | undefined;
+      await withClient({}, async (client) => {
+        negotiated = client.getServerCapabilities();
+      });
+      expect(negotiated).toBeDefined();
+      expect(negotiated?.protocolVersion).toBe(2);
+      expect(negotiated?.capabilities).toBe(0);
+      expect(negotiated?.maxMessageBytes).toBeGreaterThan(0);
+      expect(negotiated?.maxInFlight).toBeGreaterThan(0);
+      return {
+        verdict: "pass",
+        evidence: [
+          `protocol_version=${negotiated?.protocolVersion}`,
+          `broker_caps=${negotiated?.capabilities}`,
+          `max_message_bytes=${negotiated?.maxMessageBytes}`,
+          `max_in_flight=${negotiated?.maxInFlight}`,
+        ],
+      };
+    });
+    collector.record(result);
+    expect(result.verdict).toBe("pass");
+  });
+
+  it("CS-024 Stream event boundary and replay", async () => {
+    const result = await runScenario(
+      "CS-024",
+      "400 KiB Stream event boundary and replay",
+      "P0",
+      async () => {
+        await withClient({}, async (client) =>
+          exerciseStreamBoundary(client, uniqueRoute("stream")),
+        );
+        return {
+          verdict: "pass",
+          evidence: [
+            "409600 combined bytes accepted; 409601 rejected with BAD_REQUEST/NOT_APPLIED",
+            "three complete events replayed on a 4096-byte route across multiple pages",
+          ],
+        };
+      },
+    );
+    collector.record(result);
+    expect(result.verdict).toBe("pass");
+  });
+
+  it("RPC burst smoke", async () => {
+    const result = await runScenario("TS-RPC-BURST", "RPC burst smoke", "P1", async () => {
+      const evidence: string[] = [];
+
+      const pause = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+      await withClient({ timeout: 750, maxInFlightRequests: 16 }, async (client) => {
+        const route = uniqueRoute("rpc");
+
+        const workerClient = createClient({
+          url: BROKER_ADDR,
+          transport: TRANSPORT,
+          tokenProvider: tokenProvider(),
+          timeout: 10000,
+        });
+
+        try {
+          await workerClient.connect();
+          const sub = await workerClient.rpc.registerWorker(route, async (req, writer) => {
+            await pause(500);
+            await writer.end({ body: req.body });
+          });
+
+          const responseTimeoutMs = 1500;
+          const firstIterator = client.rpc.call(route, {
+            body: b("first"),
+            timeoutMs: responseTimeoutMs,
+          });
+          const secondIterator = client.rpc.call(route, {
+            body: b("second"),
+            timeoutMs: responseTimeoutMs,
+          });
+          const firstNext = firstIterator.next();
+          firstNext.catch(() => undefined);
+          const secondNext = secondIterator.next();
+          secondNext.catch(() => undefined);
+
+          const secondState = await Promise.race([
+            secondNext.then(
+              () => "settled",
+              () => "settled",
+            ),
+            pause(100).then(() => "pending"),
+          ]);
+
+          expect(secondState).toBe("pending");
+          evidence.push("second RPC call remained pending while first was in flight");
+          evidence.push("configured maxInFlightRequests=16 and burst size=2");
+
+          const [firstFrame, secondFrame] = await Promise.all([firstNext, secondNext]);
+          expect(firstFrame.done).toBe(false);
+          expect(secondFrame.done).toBe(false);
+          expect(Buffer.from(firstFrame.value?.body ?? new Uint8Array()).toString()).toBe("first");
+          expect(Buffer.from(secondFrame.value?.body ?? new Uint8Array()).toString()).toBe(
+            "second",
+          );
+
+          await expect(firstIterator.next()).resolves.toMatchObject({ done: true });
+          await expect(secondIterator.next()).resolves.toMatchObject({ done: true });
+          evidence.push("both burst RPC calls completed with correlated responses");
+
+          await sub.unsubscribe();
+        } finally {
+          await workerClient.close().catch(() => undefined);
+        }
+      });
+
+      return { verdict: "pass", evidence };
+    });
+
     expect(result.verdict).toBe("pass");
   });
 
@@ -1118,7 +1262,12 @@ describe(`Fitz conformance — fitz-ts [transport=${TRANSPORT}, auth=${AUTH_MODE
           `P1: ${Math.round(aggregate.p1_pass_rate * 100)}%`,
       );
     } catch (err) {
-      console.error("Failed to write conformance results:", err);
+      throw new Error("Failed to write conformance results", { cause: err });
+    }
+    if (aggregate.scenarios.length > 0 && aggregate.overall_status === "fail") {
+      throw new Error(
+        `Conformance P0 gate failed; missing scenarios: ${aggregate.missing_scenarios.join(", ")}`,
+      );
     }
   });
 });

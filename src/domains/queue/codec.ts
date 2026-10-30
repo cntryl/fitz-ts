@@ -25,7 +25,7 @@ import {
 
 type ParsedQueueResponse =
   | { status: 0; reader: BufferReader }
-  | { status: 1; errorCode?: number; errorMessage?: string };
+  | { status: 1; errorCode?: number; errorMessage?: string; errorClass?: number; effect?: number };
 
 function parseQueueResponse(payload: Uint8Array): ParsedQueueResponse {
   const parsed = parseStandardResponse(payload);
@@ -34,6 +34,8 @@ function parseQueueResponse(payload: Uint8Array): ParsedQueueResponse {
       status: 1,
       errorCode: parsed.errorCode,
       errorMessage: parsed.error,
+      errorClass: parsed.errorClass,
+      effect: parsed.effect,
     };
   }
 
@@ -43,7 +45,13 @@ function parseQueueResponse(payload: Uint8Array): ParsedQueueResponse {
 function parsePlainQueueResponse(payload: Uint8Array): ParsedQueueResponse {
   const parsed = parsePlainResponse(payload);
   if (!parsed.success) {
-    return { status: 1, errorCode: parsed.errorCode, errorMessage: parsed.error };
+    return {
+      status: 1,
+      errorCode: parsed.errorCode,
+      errorMessage: parsed.error,
+      errorClass: parsed.errorClass,
+      effect: parsed.effect,
+    };
   }
   return { status: 0, reader: createBufferReader(parsed.data) };
 }

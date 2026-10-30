@@ -16,8 +16,7 @@ import {
   MSG_SCHEDULE_CANCEL,
   MSG_SCHEDULE_CREATE,
   MSG_SCHEDULE_CREATE_BATCH,
-  MSG_SCHEDULE_LIST_PAGE,
-  MSG_SCHEDULE_LIST_V2,
+  MSG_SCHEDULE_LIST,
   MSG_SCHEDULE_NOTIFY,
   MSG_SCHEDULE_SUBSCRIBE,
   MSG_SCHEDULE_UNSUBSCRIBE,
@@ -30,11 +29,10 @@ import {
   ScheduleHandler,
   ScheduleNotification,
   ScheduleSubscription,
-  ScheduleListPage,
   ScheduleCursorPage,
   ScheduleStatusNames,
 } from "./types";
-import { ScheduleError } from "../../core/errors";
+import { attachErrorDisposition, ScheduleError } from "../../core/errors";
 import { formatStatusName } from "../internal/status";
 import { isRegistrationPatternShape, isRouteShape } from "../_routes";
 import { restoreMapEntriesAtomically } from "../internal/restore";
@@ -95,9 +93,9 @@ export interface ScheduleClient {
       signal?: AbortSignal;
     },
   ): Promise<void>;
-  /** Submits multiple schedule definitions using broker extension 706. */
+  /** Submits multiple schedule definitions with Schedule CREATE_BATCH (706). */
   createBatch(entries: readonly ScheduleEntry[], options?: { signal?: AbortSignal }): Promise<void>;
-  /** Reads one cursor page using broker extension 707; canonical LIST remains 702. */
+  /** Reads one cursor page using Schedule LIST (702). */
   listV2(options?: {
     cursor?: string;
     limit?: bigint;
@@ -241,11 +239,11 @@ export function createScheduleClient(connection: ScheduleConnectionPort): Schedu
     options: { cursor?: string; limit?: bigint; signal?: AbortSignal } = {},
   ): Promise<ScheduleCursorPage> => {
     const response = await requestFrame(
-      MSG_SCHEDULE_LIST_V2,
+      MSG_SCHEDULE_LIST,
       ScheduleCodec.encodeListV2(options.cursor, options.limit),
       options.signal,
     );
-    return ScheduleCodec.decodeListV2(assertExtensionSuccess(response, "LIST_V2"));
+    return ScheduleCodec.decodeListV2(assertSuccess(response, "LIST"));
   };
 
   const cancel = async (route: string, options: { signal?: AbortSignal } = {}): Promise<void> => {
@@ -259,34 +257,26 @@ export function createScheduleClient(connection: ScheduleConnectionPort): Schedu
     ScheduleCodec.decodeCancelResponse(assertPlainSuccess(response, "CANCEL"));
   };
 
-  const listPage = async (options: {
-    offset?: bigint;
-    limit?: bigint;
-    signal?: AbortSignal;
-  }): Promise<ScheduleListPage> => {
-    const response = await requestFrame(
-      MSG_SCHEDULE_LIST_PAGE,
-      ScheduleCodec.encodeListPage(options.offset, options.limit),
-      options.signal,
-    );
-    return ScheduleCodec.decodeListPage(assertSuccess(response, "LIST_PAGE"));
-  };
-
   const entries = async function* (
     selector: string,
     options: { pageSize?: bigint; signal?: AbortSignal } = {},
   ): AsyncIterableIterator<readonly ScheduleEntry[]> {
     if (!isScheduleSelector(selector))
       throw new ScheduleError("invalid schedule selector", "INVALID_ROUTE");
-    let offset = 0n;
-    let complete = false;
-    while (!complete) {
-      const page = await listPage({ offset, limit: options.pageSize, signal: options.signal });
+    let cursor: string | undefined;
+    while (true) {
+      const page = await listV2({ cursor, limit: options.pageSize, signal: options.signal });
       yield Object.freeze(
         page.entries.filter((entry) => routeMatchesSchedule(entry.route, selector)),
       );
-      offset += BigInt(page.entries.length);
-      complete = offset >= page.totalCount || page.entries.length === 0;
+      if (!page.hasMore) return;
+      if (page.continuation === undefined) {
+        throw new ScheduleError(
+          "LIST response omitted its continuation cursor",
+          "INVALID_RESPONSE",
+        );
+      }
+      cursor = page.continuation;
     }
   };
 
@@ -430,20 +420,28 @@ export function createScheduleClient(connection: ScheduleConnectionPort): Schedu
         ? formatStatusName(result.errorCode, ScheduleStatusNames)
         : mapErrorCode(result.error);
 
-    throw new ScheduleError(
-      `${operation} failed: ${result.error ?? "Unknown error"}`,
-      code,
-      result.errorCode,
+    throw attachErrorDisposition(
+      new ScheduleError(
+        `${operation} failed: ${result.error ?? "Unknown error"}`,
+        code,
+        result.errorCode,
+      ),
+      result.errorClass,
+      result.effect,
     );
   };
 
   const assertPlainSuccess = (payload: Uint8Array, operation: string): Uint8Array => {
     const result = parsePlainResponse(payload);
     if (!result.success) {
-      throw new ScheduleError(
-        `${operation} failed: ${result.error ?? "unknown error"}`,
-        `${operation}_FAILED`,
-        result.errorCode,
+      throw attachErrorDisposition(
+        new ScheduleError(
+          `${operation} failed: ${result.error ?? "unknown error"}`,
+          `${operation}_FAILED`,
+          result.errorCode,
+        ),
+        result.errorClass,
+        result.effect,
       );
     }
     return result.data;

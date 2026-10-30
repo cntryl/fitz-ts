@@ -13,6 +13,7 @@ import type {
   ReconnectRestoreRequestPort,
   RequestPort,
   ServerCapabilitiesPort,
+  SendCorrelatedPort,
   SendPort,
   StateReadPort,
 } from "../base";
@@ -34,7 +35,6 @@ import {
   createRpcSubscription,
 } from "./types";
 import {
-  CAP_RPC_CANCELLATION,
   MSG_RPC_REQUEST,
   MSG_RPC_RESPONSE,
   MSG_RPC_CANCELLATION,
@@ -44,6 +44,7 @@ import {
 } from "../../frame/types";
 import {
   ConnectionError,
+  attachErrorDisposition,
   ErrCodeRpcBackpressure,
   ErrCodeRpcBackendError,
   ErrCodeRpcCorrelationNotFound,
@@ -71,6 +72,7 @@ type RpcConnectionPort = RequestPort &
   AsyncDispatchPort &
   StateReadPort &
   ServerCapabilitiesPort &
+  SendCorrelatedPort &
   PushClassifierPort &
   Partial<ReconnectRestoreRequestPort>;
 
@@ -246,6 +248,14 @@ export interface RpcClient {
 
 export function createRpcClient(connection: RpcConnectionPort): RpcClient {
   const { requestFrame, requestReconnectFrame } = createDomainClient(connection);
+  const sendRpcFrame = (
+    messageType: number,
+    payload: Uint8Array,
+    signal?: AbortSignal,
+  ): Promise<void> =>
+    connection.sendCorrelated
+      ? connection.sendCorrelated(messageType, payload, signal)
+      : connection.send(messageType, payload, signal);
   type PendingRpcEntry = { iterator: RpcIterator; correlationId: Uint8Array };
   const pendingRpcs = new Map<bigint, PendingRpcEntry>();
   const pendingCancellations = new Map<bigint, PendingCancellation>();
@@ -366,7 +376,7 @@ export function createRpcClient(connection: RpcConnectionPort): RpcClient {
 
     if (options.signal?.aborted) {
       const payload = RpcCodec.encodeCallRequest(correlationId, route, options.body);
-      void connection.send(MSG_RPC_REQUEST, payload, options.signal).catch(() => undefined);
+      void sendRpcFrame(MSG_RPC_REQUEST, payload, options.signal).catch(() => undefined);
       settleRequestSent(false);
       return iterator;
     }
@@ -380,7 +390,7 @@ export function createRpcClient(connection: RpcConnectionPort): RpcClient {
       options.body,
       remainingBudgetMs,
     );
-    void connection.send(MSG_RPC_REQUEST, payload).then(
+    void sendRpcFrame(MSG_RPC_REQUEST, payload).then(
       () => settleRequestSent(true),
       (error: unknown) => {
         settleRequestSent(false);
@@ -409,7 +419,7 @@ export function createRpcClient(connection: RpcConnectionPort): RpcClient {
       timeout,
     });
     try {
-      await connection.send(
+      await sendRpcFrame(
         MSG_RPC_CANCELLATION,
         RpcCodec.encodeCallerCancellation(correlationId, reason),
       );
@@ -449,10 +459,14 @@ export function createRpcClient(connection: RpcConnectionPort): RpcClient {
     );
     const parsed = parseStandardResponse(await request(MSG_RPC_SUBSCRIBE_WORKER, payload));
     if (!parsed.success) {
-      throw new RpcError(
-        `RPC SUBSCRIBE_WORKER failed: ${parsed.error ?? "unknown error"}`,
-        "SUBSCRIBE_FAILED",
-        parsed.errorCode,
+      throw attachErrorDisposition(
+        new RpcError(
+          `RPC SUBSCRIBE_WORKER failed: ${parsed.error ?? "unknown error"}`,
+          "SUBSCRIBE_FAILED",
+          parsed.errorCode,
+        ),
+        parsed.errorClass,
+        parsed.effect,
       );
     }
 
@@ -491,10 +505,14 @@ export function createRpcClient(connection: RpcConnectionPort): RpcClient {
       const payload = RpcCodec.encodeUnsubscribeWorker(route);
       const parsed = parseStandardResponse(await requestFrame(MSG_RPC_UNSUBSCRIBE_WORKER, payload));
       if (!parsed.success) {
-        throw new RpcError(
-          `RPC UNSUBSCRIBE_WORKER failed: ${parsed.error ?? "unknown error"}`,
-          "UNSUBSCRIBE_FAILED",
-          parsed.errorCode,
+        throw attachErrorDisposition(
+          new RpcError(
+            `RPC UNSUBSCRIBE_WORKER failed: ${parsed.error ?? "unknown error"}`,
+            "UNSUBSCRIBE_FAILED",
+            parsed.errorCode,
+          ),
+          parsed.errorClass,
+          parsed.effect,
         );
       }
       workers.delete(route);
@@ -585,10 +603,14 @@ export function createRpcClient(connection: RpcConnectionPort): RpcClient {
     const terminalError = streamEnd ? RpcCodec.tryDecodeTerminalErrorBody(body) : null;
     if (terminalError) {
       iterator.fail(
-        new RpcError(
-          terminalError.message || "RPC error",
-          rpcErrorCodeName(terminalError.code),
-          terminalError.code,
+        attachErrorDisposition(
+          new RpcError(
+            terminalError.message || "RPC error",
+            rpcErrorCodeName(terminalError.code),
+            terminalError.code,
+          ),
+          terminalError.errorClass,
+          terminalError.effect,
         ),
       );
       return;
@@ -768,9 +790,28 @@ export * from "./types";
 function encodeRpcErrorBody(code: number, message: string): Uint8Array {
   const writer = createBufferWriter(64);
   writer.writeU8(1);
-  writer.writeU32BE(code);
+  writer.writeU16BE(code);
+  const { errorClass, effect } = rpcErrorMetadata(code);
+  writer.writeU8(errorClass);
+  writer.writeU8(effect);
   writer.writeString(message);
   return writer.getBuffer();
+}
+
+function rpcErrorMetadata(code: number): { errorClass: number; effect: number } {
+  if (code === ErrCodeRpcBackpressure) return { errorClass: 5, effect: 0 };
+  if (code === ErrCodeRpcTimeout) return { errorClass: 7, effect: 1 };
+  if (code === ErrCodeRpcBackendError) return { errorClass: 6, effect: 1 };
+  if (code === ErrCodeRpcUnauthorized || code === ErrCodeRpcWrongWorker) {
+    return { errorClass: 1, effect: 0 };
+  }
+  if (code === ErrCodeRpcWorkerNotFound) {
+    return { errorClass: 9, effect: 1 };
+  }
+  if (code === ErrCodeRpcRouteNotRegistered || code === ErrCodeRpcCorrelationNotFound) {
+    return { errorClass: 9, effect: 0 };
+  }
+  return { errorClass: 8, effect: 0 };
 }
 
 function assertRpcRoute(route: string): void {
@@ -811,7 +852,7 @@ function normalizeRegisterWorkerOptions(
 }
 
 function hasRpcCancellationCapability(connection: ServerCapabilitiesPort): boolean {
-  return ((connection.getServerCapabilities?.().capabilities ?? 0) & CAP_RPC_CANCELLATION) !== 0;
+  return connection.getServerCapabilities?.().protocolVersion === 2;
 }
 
 function validateCallTimeout(timeoutMs: number): void {

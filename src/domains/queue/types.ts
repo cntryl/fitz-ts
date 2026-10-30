@@ -6,7 +6,7 @@
 import type { DisconnectListenerPort, RequestPort } from "../base";
 import { createSubscriptionHandle } from "../internal/subscription-handle";
 import { QueueCodec } from "./codec";
-import { QueueError } from "../../core/errors";
+import { attachErrorDisposition, QueueError } from "../../core/errors";
 import { MSG_QUEUE_EXTEND, MSG_QUEUE_COMPLETE } from "../../frame/types";
 
 /**
@@ -60,7 +60,11 @@ export function createQueueItem(
 
     if (decoded.status !== QueueStatus.Ok) {
       const reason = decoded.errorMessage ?? "EXTEND_FAILED";
-      throw new QueueError(`EXTEND failed: ${reason}`, "EXTEND_FAILED", decoded.errorCode);
+      throw attachErrorDisposition(
+        new QueueError(`EXTEND failed: ${reason}`, "EXTEND_FAILED", decoded.errorCode),
+        decoded.errorClass,
+        decoded.effect,
+      );
     }
   };
 
@@ -72,7 +76,11 @@ export function createQueueItem(
 
     if (decoded.status !== QueueStatus.Ok) {
       const reason = decoded.errorMessage ?? "COMPLETE_FAILED";
-      throw new QueueError(`COMPLETE failed: ${reason}`, "COMPLETE_FAILED", decoded.errorCode);
+      throw attachErrorDisposition(
+        new QueueError(`COMPLETE failed: ${reason}`, "COMPLETE_FAILED", decoded.errorCode),
+        decoded.errorClass,
+        decoded.effect,
+      );
     }
 
     closed = true;
@@ -163,6 +171,8 @@ export interface QueueEnqueueResponse {
   messageId?: bigint;
   errorCode?: number;
   errorMessage?: string;
+  errorClass?: number;
+  effect?: number;
 }
 
 export interface QueueReserveResponse {
@@ -176,18 +186,24 @@ export interface QueueReserveResponse {
   cursor?: Uint8Array;
   errorCode?: number;
   errorMessage?: string;
+  errorClass?: number;
+  effect?: number;
 }
 
 export interface QueueExtendResponse {
   status: number;
   errorCode?: number;
   errorMessage?: string;
+  errorClass?: number;
+  effect?: number;
 }
 
 export interface QueueCompleteResponse {
   status: number;
   errorCode?: number;
   errorMessage?: string;
+  errorClass?: number;
+  effect?: number;
 }
 
 export interface QueueSubscribeResponse {
@@ -195,10 +211,14 @@ export interface QueueSubscribeResponse {
   subId?: bigint;
   errorCode?: number;
   errorMessage?: string;
+  errorClass?: number;
+  effect?: number;
 }
 
 export interface QueueUnsubscribeResponse {
   status: number;
   errorCode?: number;
   errorMessage?: string;
+  errorClass?: number;
+  effect?: number;
 }

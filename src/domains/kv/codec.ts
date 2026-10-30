@@ -10,6 +10,7 @@ import {
   writeU64BEAt,
 } from "../../core/buffer";
 import { CodecError } from "../../core/errors";
+import { parseStandardResponse } from "../../protocol/response";
 import {
   KvBeginResponse,
   KvGetResponse,
@@ -33,10 +34,17 @@ export const KvCodec = {
   },
 
   decodeBeginResponse(payload: Uint8Array): KvBeginResponse {
-    const reader = createBufferReader(payload);
-    const status = reader.readU8();
+    const response = parseStandardResponse(payload);
+    if (!response.success)
+      return {
+        status: response.errorCode ?? 1,
+        errorClass: response.errorClass,
+        effect: response.effect,
+      };
+    const reader = createBufferReader(response.data);
     const txId = reader.isEOF() ? undefined : reader.readU64BE();
-    return { status, txId };
+    if (!reader.isEOF()) throw new CodecError("BEGIN response has trailing bytes");
+    return { status: 0, txId };
   },
 
   encodePut(txId: bigint, route: string, key: Uint8Array, value: Uint8Array): Uint8Array {
@@ -60,11 +68,15 @@ export const KvCodec = {
   },
 
   decodeStatusResponse(payload: Uint8Array): KvStatusResponse {
-    const reader = createBufferReader(payload);
-    const status = reader.readU8();
-    return status === 0 || reader.remainingBytes() < 4
-      ? { status }
-      : { status, errorMessage: reader.readString() };
+    const response = parseStandardResponse(payload);
+    return response.success
+      ? { status: 0 }
+      : {
+          status: response.errorCode ?? 1,
+          errorMessage: response.error,
+          errorClass: response.errorClass,
+          effect: response.effect,
+        };
   },
 
   decodePutResponse(payload: Uint8Array): KvStatusResponse {
@@ -85,14 +97,17 @@ export const KvCodec = {
   },
 
   decodeGetResponse(payload: Uint8Array): KvGetResponse {
-    const reader = createBufferReader(payload);
-    const status = reader.readU8();
-    if (status !== 0)
+    const response = parseStandardResponse(payload);
+    if (!response.success)
       return {
-        status,
+        status: response.errorCode ?? 1,
         found: false,
-        errorMessage: reader.remainingBytes() >= 4 ? reader.readString() : undefined,
+        errorMessage: response.error,
+        errorClass: response.errorClass,
+        effect: response.effect,
       };
+    const reader = createBufferReader(response.data);
+    const status = 0;
     const found = !reader.isEOF() && reader.readU8() === 1;
 
     if (!found || reader.isEOF()) {
@@ -175,18 +190,22 @@ export const KvCodec = {
       writer.writeU8(0);
     }
 
-    writer.writeU8(options.reverse ? 1 : 0);
-    if (options.startExclusive) {
-      writer.writeU8(1);
-    }
+    writer.writeU8((options.reverse ? 1 : 0) | (options.startExclusive ? 2 : 0));
     return writer.getBufferView();
   },
 
   decodeScanResponse(payload: Uint8Array): KvScanResponse {
-    const reader = createBufferReader(payload);
-    const status = reader.readU8();
-    if (status !== 0)
-      return { status, entries: [], hasMore: false, errorMessage: reader.readString() };
+    const response = parseStandardResponse(payload);
+    if (!response.success)
+      return {
+        status: response.errorCode ?? 1,
+        entries: [],
+        hasMore: false,
+        errorMessage: response.error,
+        errorClass: response.errorClass,
+        effect: response.effect,
+      };
+    const reader = createBufferReader(response.data);
 
     const count = reader.readU32BE();
     const entries: Array<{ key: Uint8Array; value: Uint8Array }> = [];
@@ -206,7 +225,7 @@ export const KvCodec = {
       throw new CodecError("SCAN response contains trailing bytes");
     }
 
-    return { status, entries, hasMore: hasMoreFlag === 1 };
+    return { status: 0, entries, hasMore: hasMoreFlag === 1 };
   },
 
   encodeSubscribe(pattern: string): Uint8Array {

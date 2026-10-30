@@ -1,3 +1,4 @@
+import { writeErrorCode } from "../helpers/wire-errors";
 /**
  * RPC Codec unit tests
  */
@@ -29,6 +30,7 @@ describe("RpcCodec", () => {
       expect(reader.readString()).toBe(route);
       expect(reader.readU32BE()).toBe(payload.length);
       expect(reader.readBytes(payload.length)).toEqual(payload);
+      expect(reader.readU8()).toBe(0);
       expect(reader.isEOF()).toBe(true);
     });
 
@@ -102,6 +104,7 @@ describe("RpcCodec", () => {
       const reader = createBufferReader(encoded);
       expect(reader.readString()).toBe(pattern);
       expect(reader.readU32BE()).toBe(32);
+      expect(reader.readU8()).toBe(0);
       expect(reader.isEOF()).toBe(true);
     });
   });
@@ -125,14 +128,14 @@ describe("RpcCodec", () => {
     it("should_decode_rpc_error_body", () => {
       const writer = createBufferWriter(64);
       writer.writeU8(1);
-      writer.writeU32BE(6002);
+      writeErrorCode(writer, 6002);
       writer.writeString("Worker disconnected or unregistered");
 
-      expect(RpcCodec.decodeErrorBody(writer.getBuffer())).toEqual({
+      expect(RpcCodec.decodeErrorBody(writer.getBuffer())).toMatchObject({
         code: 6002,
         message: "Worker disconnected or unregistered",
       });
-      expect(RpcCodec.tryDecodeTerminalErrorBody(writer.getBuffer())).toEqual({
+      expect(RpcCodec.tryDecodeTerminalErrorBody(writer.getBuffer())).toMatchObject({
         code: 6002,
         message: "Worker disconnected or unregistered",
       });
@@ -141,7 +144,7 @@ describe("RpcCodec", () => {
     it("does not classify malformed or unknown terminal bodies as rpc errors", () => {
       const unknownCode = createBufferWriter(64);
       unknownCode.writeU8(1);
-      unknownCode.writeU32BE(7000);
+      writeErrorCode(unknownCode, 7000);
       unknownCode.writeString("application payload");
 
       const malformed = new Uint8Array([1, 0, 0, 0, 0x17, 0xff]);
@@ -153,11 +156,11 @@ describe("RpcCodec", () => {
     it("classifies the full documented terminal error range", () => {
       const writer = createBufferWriter(64);
       writer.writeU8(1);
-      writer.writeU32BE(6013);
+      writeErrorCode(writer, 6004);
       writer.writeString("subscription limit");
 
-      expect(RpcCodec.tryDecodeTerminalErrorBody(writer.getBuffer())).toEqual({
-        code: 6013,
+      expect(RpcCodec.tryDecodeTerminalErrorBody(writer.getBuffer())).toMatchObject({
+        code: 6004,
         message: "subscription limit",
       });
     });

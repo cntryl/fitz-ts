@@ -168,7 +168,9 @@ describe("QueueCodec", () => {
       // Arrange
       const writer = createBufferWriter(32);
       writer.writeU8(1); // status = error
-      writer.writeU32BE(4); // QueueNotFound
+      writer.writeU16BE(4009);
+      writer.writeU8(9);
+      writer.writeU8(0);
       writer.writeString("Queue not found");
       const response = writer.getBuffer();
 
@@ -177,7 +179,7 @@ describe("QueueCodec", () => {
 
       // Assert
       expect(decoded.status).toBe(1);
-      expect(decoded.errorCode).toBe(4);
+      expect(decoded.errorCode).toBe(4009);
       expect(decoded.errorMessage).toBe("Queue not found");
     });
 
@@ -278,13 +280,7 @@ describe("QueueCodec", () => {
       writer.writeU8(1);
       writer.writeString(message);
 
-      // Act
-      const decoded = QueueCodec.decodeSubscribeResponse(writer.getBuffer());
-
-      // Assert
-      expect(decoded.status).toBe(1);
-      expect(decoded.errorCode).toBeUndefined();
-      expect(decoded.errorMessage).toBe(message);
+      expect(() => QueueCodec.decodeSubscribeResponse(writer.getBuffer())).toThrow();
     });
   });
 });

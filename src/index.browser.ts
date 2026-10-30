@@ -97,6 +97,7 @@ export {
   ErrCodeScheduleInvalidDeliveryMode,
   ErrCodeScheduleInvalidSubscription,
   ErrCodeScheduleSubscriptionLimit,
+  ErrCodeScheduleBusy,
   ErrCodeScheduleBackendError,
   FitzError,
   TransportError,

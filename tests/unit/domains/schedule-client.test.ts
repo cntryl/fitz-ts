@@ -1,8 +1,10 @@
+import { errorPayload } from "../helpers/wire-errors";
+import { writeErrorCode } from "../helpers/wire-errors";
 import { describe, expect, it } from "vite-plus/test";
 
 import { MSG_SCHEDULE_SUBSCRIBE } from "../../../src/frame/types";
 import { createScheduleClient } from "../../../src/domains/schedule/client";
-import { ErrCodeScheduleBackendError, ScheduleError } from "../../../src/core/errors";
+import { ScheduleError } from "../../../src/core/errors";
 import { createBufferWriter } from "../../../src/core/buffer";
 
 class FakeScheduleConnection {
@@ -121,102 +123,39 @@ describe("ScheduleClient route validation", () => {
 
 describe("ScheduleClient domain errors", () => {
   it.each(["createBatch", "listV2"] as const)(
-    "should decode coded broker and plain domain errors for %s",
+    "preserves coded errors for %s",
     async (operation) => {
-      for (const coded of [false, true]) {
-        const writer = createBufferWriter(32);
-        writer.writeU8(1);
-        if (coded) writer.writeU32BE(7010);
-        writer.writeString("busy");
-        const client = createScheduleClient(new FakeScheduleConnection(writer.getBuffer()));
-        const action = operation === "createBatch" ? client.createBatch([]) : client.listV2();
-        await expect(action).rejects.toMatchObject({ domainCode: coded ? 7010 : undefined });
-      }
+      const client = createScheduleClient(new FakeScheduleConnection(errorPayload(7005, "busy")));
+      const action = operation === "createBatch" ? client.createBatch([]) : client.listV2();
+      await expect(action).rejects.toMatchObject({ domainCode: 7005, errorClass: 5, effect: 0 });
     },
   );
-
-  it("should preserve the broker message given plain create errors when errors are mapped", async () => {
-    const response = new Uint8Array([
-      1,
-      0,
-      0,
-      0,
-      21,
-      ...new TextEncoder().encode("invalid delivery mode"),
-    ]);
-    const client = createScheduleClient(new FakeScheduleConnection(response));
-
+  it("preserves the message in a common CREATE error", async () => {
+    const client = createScheduleClient(
+      new FakeScheduleConnection(errorPayload(7054, "invalid delivery mode")),
+    );
     await expect(
       client.create("schedule://realm/area/resource/run", {
         cron: "0 0 * * *",
         deliveryMode: "Single",
       }),
-    ).rejects.toMatchObject({
-      code: "SCHEDULE_CREATE_FAILED",
-      message: "CREATE failed: invalid delivery mode",
-    });
+    ).rejects.toMatchObject({ domainCode: 7054, message: "CREATE failed: invalid delivery mode" });
   });
-
-  it("classifies listPage failures from the real numeric domain code, not by guessing from message text", async () => {
-    // A message that doesn't contain "not found" / "invalid route" / "cron"
-    // — pre-fix, mapErrorCode's substring guess falls through to the
-    // generic "REQUEST_FAILED", discarding the real errorCode (5,
-    // ScheduleStatus.InvalidTimestamp) the broker already sent.
-    const message = "timestamp out of range";
-    const messageBytes = new TextEncoder().encode(message);
-    const response = new Uint8Array(1 + 4 + 4 + messageBytes.length);
-    response[0] = 1; // status: failure
-    new DataView(response.buffer).setUint32(1, 5, false); // errorCode
-    new DataView(response.buffer).setUint32(5, messageBytes.length, false);
-    response.set(messageBytes, 9);
-
-    const client = createScheduleClient(new FakeScheduleConnection(response));
-
+  it("preserves coded backend disposition in LIST", async () => {
+    const client = createScheduleClient(
+      new FakeScheduleConnection(errorPayload(7006, "backend busy")),
+    );
     await expect(client.entries("schedule://realm/**").next()).rejects.toMatchObject({
-      code: "SCHEDULE_INVALID_TIMESTAMP",
-      domainCode: 5,
-    });
-  });
-
-  it("classifies a broker domain error code from outside the 1-5 status range, instead of falling through to Unknown(N)", async () => {
-    // Domain error codes like ErrCodeScheduleInvalidSubscription (7006)
-    // live in a different numeric namespace than the small ScheduleStatus
-    // wire enum (0-5) — pre-fix, ScheduleStatusNames only had entries for
-    // that enum, so a standard response reporting one of these fell
-    // through formatStatusName's fallback to a generic "Unknown(7006)"
-    // instead of its real symbolic name.
-    const message = "route already has an active subscription";
-    const messageBytes = new TextEncoder().encode(message);
-    const response = new Uint8Array(1 + 4 + 4 + messageBytes.length);
-    response[0] = 1; // status: failure
-    new DataView(response.buffer).setUint32(1, 7006, false); // errorCode
-    new DataView(response.buffer).setUint32(5, messageBytes.length, false);
-    response.set(messageBytes, 9);
-
-    const client = createScheduleClient(new FakeScheduleConnection(response));
-
-    await expect(client.entries("schedule://realm/**").next()).rejects.toMatchObject({
-      code: "SCHEDULE_INVALID_SUBSCRIPTION",
       domainCode: 7006,
+      errorClass: 6,
+      effect: 1,
     });
   });
-
-  it("preserves the distinct backend code given coded Schedule saturation", async () => {
-    const message = "backend busy";
-    const messageBytes = new TextEncoder().encode(message);
-    const response = new Uint8Array(1 + 4 + 4 + messageBytes.length);
-    response[0] = 1;
-    new DataView(response.buffer).setUint32(1, ErrCodeScheduleBackendError, false);
-    new DataView(response.buffer).setUint32(5, messageBytes.length, false);
-    response.set(messageBytes, 9);
-
-    const client = createScheduleClient(new FakeScheduleConnection(response));
-
-    await expect(client.entries("schedule://realm/**").next()).rejects.toMatchObject({
-      code: "SCHEDULE_BACKEND_ERROR",
-      domainCode: 7010,
-      message: "LIST_PAGE failed: backend busy",
-    });
+  it("rejects a legacy uncoded error", async () => {
+    const client = createScheduleClient(
+      new FakeScheduleConnection(new Uint8Array([1, 0, 0, 0, 4, 98, 117, 115, 121])),
+    );
+    await expect(client.createBatch([])).rejects.toThrow();
   });
 });
 
@@ -224,7 +163,7 @@ it("should preserve ingress capacity when canceling schedule", async () => {
   // Arrange
   const writer = createBufferWriter(100);
   writer.writeU8(1);
-  writer.writeU32BE(7010);
+  writeErrorCode(writer, 7010);
   writer.writeString("not accepted");
   const client = createScheduleClient(new FakeScheduleConnection(writer.getBuffer()));
   // Act

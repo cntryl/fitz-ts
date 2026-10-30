@@ -1,13 +1,15 @@
+import { errorPayload } from "../helpers/wire-errors";
 import { describe, expect, it, vi } from "vite-plus/test";
 
 import { createConnection } from "../../../src/client/connection";
 import { shouldRetryOperation } from "../../../src/client/resilience";
 import { ConnectionError, RequestQueueFullError } from "../../../src/core/errors";
-import { Frame, FrameCodec } from "../../../src/frame/codec";
-import { MSG_LEASE_QUERY, MSG_QUEUE_ENQUEUE, MSG_SERVER_HELLO } from "../../../src/frame/types";
+import { FLAG_RESPONSE_FINAL, Frame, FrameCodec } from "../../../src/frame/codec";
+import { MSG_LEASE_QUERY, MSG_QUEUE_ENQUEUE } from "../../../src/frame/types";
 import { createLeaseClient } from "../../../src/domains/lease/client";
 import { createQueueClient } from "../../../src/domains/queue/client";
 import type { Transport } from "../../../src/transport/types";
+import { wire2HelloFrame } from "./wire-fixtures";
 
 class ScriptedTransport implements Transport {
   public sent: Uint8Array[] = [];
@@ -28,7 +30,7 @@ class ScriptedTransport implements Transport {
       await this.connectGate;
     }
     this.connected = true;
-    this.pushRead(FrameCodec.encodeFrame(MSG_SERVER_HELLO, new Uint8Array([0, 1, 0, 0, 0, 0])));
+    this.pushRead(wire2HelloFrame());
   }
 
   async send(data: Uint8Array): Promise<void> {
@@ -75,6 +77,28 @@ class ScriptedTransport implements Transport {
   }
 
   pushRead(data: Uint8Array): void {
+    try {
+      const response = FrameCodec.decodeFrame(data);
+      if (response.correlation === 0n) {
+        const request = this.sent
+          .map((frame) => FrameCodec.decodeFrame(frame))
+          .reverse()
+          .find((frame) => frame.messageType === response.messageType && frame.correlation !== 0n);
+        if (request)
+          data = FrameCodec.encodeFrame(response.messageType, response.payload, {
+            flags:
+              response.flags |
+              (response.messageType === 400 &&
+              response.payload[0] === 0 &&
+              response.payload[1] === 2
+                ? 0
+                : FLAG_RESPONSE_FINAL),
+            correlation: request.correlation,
+          });
+      }
+    } catch {
+      /* Preserve deliberately malformed input. */
+    }
     if (this.pendingRead) {
       this.pendingRead.resolve(data);
       this.pendingRead = null;
@@ -118,20 +142,8 @@ function encodeQueueSuccess(messageId: bigint): Uint8Array {
   return payload;
 }
 
-function encodeQueueError(errorCode: number, message: string): Uint8Array {
-  const messageBytes = new TextEncoder().encode(message);
-  const payload = new Uint8Array(9 + messageBytes.length);
-  payload[0] = 1;
-  payload[1] = (errorCode >> 24) & 0xff;
-  payload[2] = (errorCode >> 16) & 0xff;
-  payload[3] = (errorCode >> 8) & 0xff;
-  payload[4] = errorCode & 0xff;
-  payload[5] = (messageBytes.length >> 24) & 0xff;
-  payload[6] = (messageBytes.length >> 16) & 0xff;
-  payload[7] = (messageBytes.length >> 8) & 0xff;
-  payload[8] = messageBytes.length & 0xff;
-  payload.set(messageBytes, 9);
-  return payload;
+function encodeQueueError(code: number, message: string): Uint8Array {
+  return errorPayload(code, message);
 }
 
 function encodeLeaseQueryFree(): Uint8Array {
@@ -348,7 +360,7 @@ describe("Connection resilience", () => {
           FrameCodec.encodeFrame(
             MSG_QUEUE_ENQUEUE,
             encodeQueueError(
-              4,
+              4005,
               'Failed to commit transaction: WriteStall("Memory budget exceeded")',
             ),
           ),
@@ -389,7 +401,7 @@ describe("Connection resilience", () => {
     transport.onFrame = async (frame, activeTransport) => {
       if (frame.messageType === MSG_QUEUE_ENQUEUE) {
         activeTransport.pushRead(
-          FrameCodec.encodeFrame(MSG_QUEUE_ENQUEUE, encodeQueueError(3, "invalid lease token")),
+          FrameCodec.encodeFrame(MSG_QUEUE_ENQUEUE, encodeQueueError(4050, "invalid lease token")),
         );
       }
     };
@@ -415,7 +427,7 @@ describe("Connection resilience", () => {
     await expect(
       queue.enqueue("queue://realm/area/resource", { body: new Uint8Array([1]) }),
     ).rejects.toMatchObject({
-      code: "QUEUE_InvalidToken",
+      domainCode: 4050,
     });
     expect(transport.sentCount(MSG_QUEUE_ENQUEUE)).toBe(1);
 

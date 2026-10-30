@@ -146,9 +146,9 @@ export interface ClientConfig {
   retry?: RetryOptions;
   /** Heartbeat policy. */
   heartbeat?: HeartbeatOptions;
-  /** Largest accepted complete wire frame in bytes. Defaults to 65,540. */
+  /** Largest accepted complete wire frame in bytes. Defaults to 1 MiB. */
   maxFrameSize?: number;
-  /** @deprecated Connect now waits for SERVER_HELLO within the request timeout. */
+  /** @deprecated Wire format 2 reports authentication rejection in CONNECT_REJECTED. */
   authSettleDelayMs?: number;
   /** Maximum requests concurrently awaiting responses. Defaults to 256. */
   maxInFlightRequests?: number;

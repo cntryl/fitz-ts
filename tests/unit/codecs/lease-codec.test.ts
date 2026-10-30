@@ -1,3 +1,4 @@
+import { writeErrorCode } from "../helpers/wire-errors";
 /**
  * Lease Codec unit tests
  */
@@ -36,7 +37,7 @@ describe("LeaseCodec", () => {
     it("should preserve domain code given typed error when decoding acquire", () => {
       const writer = createBufferWriter(64);
       writer.writeU8(1);
-      writer.writeU32BE(5001);
+      writeErrorCode(writer, 5050);
       writer.writeString("lease held by another owner");
 
       try {
@@ -44,7 +45,7 @@ describe("LeaseCodec", () => {
         throw new Error("expected ACQUIRE decoding to fail");
       } catch (error) {
         expect(error).toBeInstanceOf(LeaseError);
-        expect((error as LeaseError).domainCode).toBe(5001);
+        expect((error as LeaseError).domainCode).toBe(5050);
         expect((error as LeaseError).message).toContain("lease held by another owner");
       }
     });
@@ -286,7 +287,7 @@ describe("LeaseCodec", () => {
     it("throws a LeaseError carrying the domain code for ERR_INVALID_LIST_CURSOR", () => {
       const writer = createBufferWriter(64);
       writer.writeU8(1);
-      writer.writeU32BE(5011);
+      writeErrorCode(writer, 5057);
       writer.writeString("unknown cursor snapshot");
 
       try {
@@ -294,14 +295,14 @@ describe("LeaseCodec", () => {
         throw new Error("expected LIST decoding to fail");
       } catch (error) {
         expect(error).toBeInstanceOf(LeaseError);
-        expect((error as LeaseError).domainCode).toBe(5011);
+        expect((error as LeaseError).domainCode).toBe(5057);
       }
     });
 
     it("throws a LeaseError carrying the domain code for ERR_INVALID_LIST_PATTERN", () => {
       const writer = createBufferWriter(64);
       writer.writeU8(1);
-      writer.writeU32BE(5012);
+      writeErrorCode(writer, 5003);
       writer.writeString("malformed list pattern");
 
       try {
@@ -309,7 +310,7 @@ describe("LeaseCodec", () => {
         throw new Error("expected LIST decoding to fail");
       } catch (error) {
         expect(error).toBeInstanceOf(LeaseError);
-        expect((error as LeaseError).domainCode).toBe(5012);
+        expect((error as LeaseError).domainCode).toBe(5003);
       }
     });
   });

@@ -1,3 +1,4 @@
+import { writeErrorCode } from "../helpers/wire-errors";
 /// <reference types="node" />
 
 /**
@@ -33,6 +34,7 @@ import { testData } from "../helpers/test-utils";
 function encodePlainStreamError(message: string, trailingByte?: number): Uint8Array {
   const writer = createBufferWriter(64);
   writer.writeU8(1);
+  writeErrorCode(writer, 2050);
   writer.writeString(message);
   if (trailingByte !== undefined) writer.writeU8(trailingByte);
   return writer.getBuffer();
@@ -41,7 +43,7 @@ function encodePlainStreamError(message: string, trailingByte?: number): Uint8Ar
 function encodeCodedStreamError(code: number, message: string): Uint8Array {
   const writer = createBufferWriter(64);
   writer.writeU8(1);
-  writer.writeU32BE(code);
+  writeErrorCode(writer, code);
   writer.writeString(message);
   return writer.getBuffer();
 }
@@ -331,6 +333,7 @@ describe("StreamCodec", () => {
       // Arrange
       const writer = createBufferWriter(32);
       writer.writeU8(1);
+      writeErrorCode(writer, 2051);
       writer.writeString("session already active");
 
       // Act
@@ -421,6 +424,19 @@ describe("StreamCodec", () => {
       expect(reader.readString()).toBe("proj.alpha");
       expect(reader.isEOF()).toBe(true);
     });
+
+    it("preserves explicitly empty event metadata", () => {
+      const encoded = StreamCodec.encodeAppend(456n, 0n, new Uint8Array(), new Uint8Array());
+      const reader = createBufferReader(encoded);
+
+      reader.readU64BE();
+      reader.readU64BE();
+      expect(reader.readU32BE()).toBe(0);
+      expect(reader.readU8()).toBe(1);
+      expect(reader.readU32BE()).toBe(0);
+      expect(reader.readU8()).toBe(0);
+      expect(reader.isEOF()).toBe(true);
+    });
   });
 
   describe("COMMIT encoding", () => {
@@ -451,7 +467,7 @@ describe("StreamCodec", () => {
       expect(decoded).toMatchObject({
         status: 1,
         errorMessage: "backend unavailable",
-        errorCode: undefined,
+        errorCode: 2050,
       });
     });
 
@@ -474,7 +490,7 @@ describe("StreamCodec", () => {
           encodePlainStreamError("backend unavailable", 0xff),
           MSG_STREAM_COMMIT,
         ),
-      ).toThrowError(expect.objectContaining({ code: "STREAM_COMMIT_INVALID_RESPONSE" }));
+      ).toThrowError(expect.objectContaining({ code: "PROTOCOL_ERROR" }));
     });
 
     it("should_reject_a_truncated_coded_READ_error", () => {

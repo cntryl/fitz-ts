@@ -2,10 +2,8 @@
  * Multiplexer for correlating in-flight requests with responses
  * Per CLIENT_SPEC.md and fitz-go/internal/core/connection/mux.go
  *
- * Key Pattern: FIFO ordering per MessageType
- * - Responses matched to requests in order received per MessageType
- * - Matches server's sequential processing model per actor/route
- * - No correlation IDs for most operations (except RPC streaming)
+ * Every request carries a wire-header correlation and responses are matched by
+ * that identifier, independent of message type and arrival order.
  */
 
 import {
@@ -15,10 +13,9 @@ import {
   type FitzMeter,
   type FitzTracer,
 } from "../core/types";
-import { ConnectionError, TimeoutError } from "../core/errors";
+import { ConnectionError, ProtocolError, TimeoutError } from "../core/errors";
 import { abortError } from "../core/abort";
-import { encodeCorrelate } from "../frame/codec";
-import { CAP_CORRELATION } from "../frame/types";
+import { FrameCodec } from "../frame/codec";
 
 export interface MultiplexerObservability {
   meter?: FitzMeter;
@@ -27,7 +24,7 @@ export interface MultiplexerObservability {
 
 export interface PendingRequest {
   deferred: Deferred<Uint8Array>;
-  /** Set when this request was labelled; matched by id rather than by order. */
+  /** Wire-header correlation used to match the response. */
   correlationId?: bigint;
   deadline: number;
   discardResponse: boolean;
@@ -70,8 +67,8 @@ export function createMultiplexer(observability: MultiplexerObservability = {}) 
   /**
    * Correlated requests, keyed by their identifier.
    *
-   * Kept alongside `pending` rather than replacing it: the per-type FIFO is
-   * also the legacy-broker path and stays forever.
+   * Kept alongside `pending` for uncorrelated compatibility paths. Negotiated
+   * Wire-2 requests are matched here by their frame correlation.
    */
   const pendingByCorrelation: Map<bigint, PendingRequest> = new Map();
   /**
@@ -83,7 +80,7 @@ export function createMultiplexer(observability: MultiplexerObservability = {}) 
    * Each entry is the tail of a promise chain that serialises that type.
    */
   const uncorrelatedLanes: Map<number, Promise<void>> = new Map();
-  let correlationEnabled = false;
+  let correlationEnabled = true;
   let brokerProtocolVersion = 0;
   let brokerCapabilities = 0;
   let nextCorrelationId = 1n;
@@ -243,20 +240,16 @@ export function createMultiplexer(observability: MultiplexerObservability = {}) 
 
   const setConnected = (): void => {
     state = ConnectionState.Authenticated;
+    nextCorrelationId = 1n;
   };
 
   /**
-   * Record the broker's advertised capabilities.
-   *
-   * Called when SERVER_HELLO arrives. Until then - and forever, against a broker
-   * that never sends one - requests stay uncorrelated and are serialised per
-   * message type. Capability bits this client does not implement are ignored
-   * rather than rejected, so a newer broker does not break an older client.
+   * Record the negotiated version and broker capabilities from HELLO.
    */
   const setCapabilities = (protocolVersion: number, capabilities: number): void => {
     brokerProtocolVersion = protocolVersion;
     brokerCapabilities = capabilities;
-    correlationEnabled = (capabilities & CAP_CORRELATION) !== 0;
+    correlationEnabled = protocolVersion === 2;
   };
 
   const getCapabilities = (): {
@@ -268,6 +261,18 @@ export function createMultiplexer(observability: MultiplexerObservability = {}) 
     capabilities: brokerCapabilities,
     correlationEnabled,
   });
+
+  const allocateCorrelationId = (): bigint => {
+    if (nextCorrelationId === 0n) {
+      throw new ConnectionError(
+        "Correlation IDs exhausted; reconnect before sending another request",
+        { state },
+      );
+    }
+    const correlationId = nextCorrelationId;
+    nextCorrelationId = correlationId === 0xffffffffffffffffn ? 0n : correlationId + 1n;
+    return correlationId;
+  };
 
   /**
    * Run `send` with at most one request of `messageType` in flight.
@@ -303,10 +308,9 @@ export function createMultiplexer(observability: MultiplexerObservability = {}) 
   const setDisconnected = (): void => {
     state = ConnectionState.Disconnected;
     optionalResponses.clear();
-    // Capabilities belong to the session, not the client. A reconnect may land
-    // on a broker that cannot correlate, so the next session must re-learn this
-    // from its own SERVER_HELLO rather than inherit the previous one's.
-    correlationEnabled = false;
+    // Capabilities belong to the session, not the client. Each reconnect
+    // receives its own HELLO and fresh limits.
+    correlationEnabled = true;
     brokerProtocolVersion = 0;
     brokerCapabilities = 0;
     uncorrelatedLanes.clear();
@@ -387,11 +391,7 @@ export function createMultiplexer(observability: MultiplexerObservability = {}) 
   };
 
   /**
-   * Issue a request and resolve with its response.
-   *
-   * Correlated requests run immediately and are matched by identifier.
-   * Uncorrelated ones queue behind any other request of the same message type,
-   * because the broker may answer same-type requests out of receive order.
+   * Issue a request and resolve with its correlated response.
    */
   const request = (
     messageType: number,
@@ -434,19 +434,12 @@ export function createMultiplexer(observability: MultiplexerObservability = {}) 
     let settled = false;
     let onAbort: (() => void) | undefined;
 
-    // Label the request when the broker said it accepts labels. The CORRELATE
-    // record goes in the same transport frame, immediately before the request
-    // it names.
+    // Correlation is part of the fixed message header in wire format 2.
     let correlationId: bigint | undefined;
     let outboundFrame = frameData;
     if (correlationEnabled) {
-      correlationId = nextCorrelationId;
-      nextCorrelationId += 1n;
-      const label = encodeCorrelate(correlationId);
-      const combined = new Uint8Array(label.length + frameData.length);
-      combined.set(label, 0);
-      combined.set(frameData, label.length);
-      outboundFrame = combined;
+      correlationId = allocateCorrelationId();
+      outboundFrame = FrameCodec.withCorrelation(frameData, correlationId);
     }
 
     const nowMs = Date.now();
@@ -664,19 +657,28 @@ export function createMultiplexer(observability: MultiplexerObservability = {}) 
     recordRequestFinished(messageType);
   };
 
-  const dispatch = (messageType: number, payload: Uint8Array, correlationId?: bigint): void => {
-    // Resolve a live correlation before type-based routing. A correlation may
-    // produce more than one domain-defined phase, so an unknown identifier must
-    // fall through to the normal message-type path rather than be discarded.
+  const dispatch = (
+    messageType: number,
+    payload: Uint8Array,
+    correlationId?: bigint,
+    responseFinal = true,
+  ): void => {
     if (correlationId !== undefined) {
       const correlated = pendingByCorrelation.get(correlationId);
+      if (!correlated) {
+        throw new ProtocolError(`Unexpected response correlation ${correlationId}`);
+      }
+      if (correlated.discardResponse) {
+        if (responseFinal) pendingByCorrelation.delete(correlationId);
+        responsesIgnored++;
+        meter?.counter("fitz.response.ignored", 1, { messageType });
+        return;
+      }
+      if (!responseFinal) {
+        return;
+      }
       if (correlated) {
         pendingByCorrelation.delete(correlationId);
-        if (correlated.discardResponse) {
-          responsesIgnored++;
-          meter?.counter("fitz.response.ignored", 1, { messageType });
-          return;
-        }
         correlated.deadline = -1;
         recordRequestFinished(messageType);
         responsesTotal++;
@@ -824,6 +826,7 @@ export function createMultiplexer(observability: MultiplexerObservability = {}) 
     setDisconnected,
     setCapabilities,
     getCapabilities,
+    allocateCorrelationId,
     registerNotificationHandler,
     unregisterNotificationHandler,
     registerPushFrameClassifier,

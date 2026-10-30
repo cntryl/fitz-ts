@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vite-plus/test";
 import { createConnection } from "../../../src/client/connection";
+import { createBufferWriter } from "../../../src/core/buffer";
+import { ProtocolError } from "../../../src/core/errors";
 import { FrameCodec } from "../../../src/frame/codec";
-import { CAP_RPC_CANCELLATION, MSG_SERVER_HELLO } from "../../../src/frame/types";
+import { MSG_CONNECT_REJECTED } from "../../../src/frame/types";
+import { wire2HelloFrame } from "./wire-fixtures";
 import type { Transport } from "../../../src/transport/types";
 
 class NegotiationTransport implements Transport {
@@ -29,11 +32,13 @@ class NegotiationTransport implements Transport {
     return this.connected;
   }
   hello(capabilities: number) {
-    const payload = new Uint8Array(6);
-    const view = new DataView(payload.buffer);
-    view.setUint16(0, 1);
-    view.setUint32(2, capabilities);
-    this.receiveFrame?.(FrameCodec.encodeFrame(MSG_SERVER_HELLO, payload));
+    this.receiveFrame?.(wire2HelloFrame(capabilities));
+  }
+  reject(code: number, message: string) {
+    const writer = createBufferWriter();
+    writer.writeU16BE(code);
+    writer.writeString(message);
+    this.receiveFrame?.(FrameCodec.encodeFrame(MSG_CONNECT_REJECTED, writer.getBuffer()));
   }
 }
 
@@ -52,9 +57,10 @@ describe("connection negotiation readiness", () => {
     try {
       await new Promise((resolve) => setTimeout(resolve, 25));
       expect(ready).toBe(false);
-      transport.hello(CAP_RPC_CANCELLATION);
+      transport.hello(0);
       await connected;
-      expect(connection.getServerCapabilities().capabilities).toBe(CAP_RPC_CANCELLATION);
+      expect(connection.getServerCapabilities().protocolVersion).toBe(2);
+      expect(connection.getServerCapabilities().capabilities).toBe(0);
     } finally {
       await connection.close();
     }
@@ -70,5 +76,26 @@ describe("connection negotiation readiness", () => {
     await expect(connection.connect()).rejects.toThrow(/negotiation|hello|timed out/i);
     expect(transport.connected).toBe(false);
     await connection.close();
+  });
+
+  it("surfaces version mismatch with its broker code and message", async () => {
+    const transport = new NegotiationTransport();
+    const connection = createConnection(
+      () => transport,
+      () => "",
+      { timeout: 1000 },
+    );
+    const connecting = connection.connect();
+    try {
+      await new Promise<void>((resolve) => setTimeout(resolve, 25));
+      transport.reject(50, "no common wire version");
+      await expect(connecting).rejects.toMatchObject({
+        name: "ProtocolError",
+        domainCode: 50,
+        message: expect.stringContaining("no common wire version"),
+      } satisfies Partial<ProtocolError>);
+    } finally {
+      await connection.close();
+    }
   });
 });

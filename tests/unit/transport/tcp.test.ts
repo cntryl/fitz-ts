@@ -90,7 +90,7 @@ describe("tcp transport", () => {
 
   it("rejects receive immediately after close", async () => {
     const port = await listenOnLocalhost();
-    const transport = createTcpTransport(`localhost:${port}`, { timeout: 20 });
+    const transport = createTcpTransport(`localhost:${port}`, { timeout: 1000 });
 
     await transport.connect();
     await transport.close();
@@ -159,7 +159,7 @@ describe("tcp transport", () => {
     // per-send timeout. Otherwise the idle socket timeout can destroy the
     // connection between iterations and turn later assertions into
     // "TCP socket is not connected" failures.
-    const transport = createTcpTransport(`localhost:${address.port}`, {
+    const transport = createTcpTransport(`127.0.0.1:${address.port}`, {
       timeout: 20,
       receiveTimeout: false,
     });

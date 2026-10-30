@@ -44,14 +44,13 @@ import {
   ErrStreamSessionNotFound,
   KvError,
   LeaseError,
-  NoticeError,
   QueueError,
   RpcError,
   ScheduleError,
-  StreamError,
   TimeoutError,
   TransportError,
   isRetryable,
+  attachErrorDisposition,
 } from "../../../src/core/errors";
 
 describe("core errors", () => {
@@ -104,28 +103,28 @@ describe("core errors", () => {
       ErrKvConflictingWrite: 3,
       ErrKvKeyNotFound: 4,
       ErrKvOperationNotAllowed: 5,
-      ErrCodeKvIsolationConflict: 1004,
-      ErrCodeKvBackendError: 1009,
+      ErrCodeKvIsolationConflict: 1053,
+      ErrCodeKvBackendError: 1006,
       ErrQueueNotFound: 1,
       ErrQueueMessageNotFound: 2,
       ErrQueueInvalidToken: 3,
       ErrQueueFull: 4,
       ErrQueueInvalidDelay: 5,
       ErrCodeQueueFull: 4005,
-      ErrCodeRpcTimeout: 6001,
-      ErrCodeRpcWorkerNotFound: 6002,
-      ErrCodeRpcBackpressure: 6003,
-      ErrCodeRpcRouteNotRegistered: 6004,
-      ErrCodeRpcCorrelationNotFound: 6005,
-      ErrCodeRpcInvalidSequence: 6006,
-      ErrCodeRpcDuplicateCorrelation: 6007,
-      ErrCodeRpcWrongWorker: 6008,
-      ErrCodeRpcUnauthorized: 6009,
-      ErrCodeRpcBackendError: 6010,
+      ErrCodeRpcTimeout: 6007,
+      ErrCodeRpcWorkerNotFound: 6050,
+      ErrCodeRpcBackpressure: 6005,
+      ErrCodeRpcRouteNotRegistered: 6051,
+      ErrCodeRpcCorrelationNotFound: 6052,
+      ErrCodeRpcInvalidSequence: 6053,
+      ErrCodeRpcDuplicateCorrelation: 6054,
+      ErrCodeRpcWrongWorker: 6055,
+      ErrCodeRpcUnauthorized: 6001,
+      ErrCodeRpcBackendError: 6006,
       ErrLeaseHeld: 1,
       ErrLeaseNotFound: 2,
       ErrLeaseInvalidToken: 3,
-      ErrCodeLeaseHeld: 5001,
+      ErrCodeLeaseHeld: 5050,
       ErrNoticeGeneral: 1,
       ErrStreamNotFound: 1,
       ErrStreamOffsetOutOfRange: 2,
@@ -139,7 +138,7 @@ describe("core errors", () => {
       ErrScheduleInvalidCron: 3,
       ErrScheduleInvalidDelay: 4,
       ErrScheduleInvalidTimestamp: 5,
-      ErrCodeScheduleBackendError: 7010,
+      ErrCodeScheduleBackendError: 7006,
     });
   });
 
@@ -148,63 +147,26 @@ describe("core errors", () => {
     expect(isRetryable(new TransportError("connection reset"))).toBe(true);
   });
 
-  it("should classify retryable errors given representative domain codes when policy runs", () => {
-    expect(
-      isRetryable(new KvError("conflict", "CONFLICTING_WRITE", ErrCodeKvIsolationConflict)),
-    ).toBe(true);
-    expect(isRetryable(new KvError("backend", "BACKEND_ERROR", ErrCodeKvBackendError))).toBe(false);
-    for (const [error, expected] of [
-      [new KvError("busy", "BUSY", 1014), true],
-      [new StreamError("busy", "BUSY", 2014), true],
-      [new NoticeError("busy", "BUSY", 3006), true],
-      [new LeaseError("queue full", "QUEUE_FULL", 5007), true],
-      [new KvError("unauthorized", "UNAUTHORIZED", 1011), false],
-    ] as const) {
-      expect(isRetryable(error)).toBe(expected);
+  it("should classify broker rejection given explicit disposition when retry policy runs", () => {
+    const cases = [
+      [new KvError("conflict", "CONFLICT", 1053), 0, 0, true],
+      [new QueueError("busy", "BUSY", 4005), 5, 0, true],
+      [new LeaseError("held", "HELD", 5050), 0, 0, true],
+      [new RpcError("missing", "ROUTE_NOT_REGISTERED", 6051), 0, 0, true],
+      [new RpcError("timeout", "TIMEOUT", 6007), 7, 1, false],
+      [new ScheduleError("backend", "BACKEND_ERROR", 7006), 6, 1, false],
+      [new QueueError("busy", "BUSY", 4005), 5, 1, false],
+    ] as const;
+    for (const [error, category, effect, expected] of cases) {
+      expect(isRetryable(attachErrorDisposition(error, category, effect))).toBe(expected);
     }
-    expect(isRetryable(new QueueError("full", "QUEUE_FULL", ErrCodeQueueFull))).toBe(true);
-    expect(isRetryable(new LeaseError("held", "LEASE_HELD", ErrCodeLeaseHeld))).toBe(true);
-    expect(isRetryable(new RpcError("backpressure", "BACKPRESSURE", ErrCodeRpcBackpressure))).toBe(
-      true,
+  });
+  it("should reject retry given missing disposition despite transient Queue wording", () => {
+    const error = new QueueError(
+      'Failed to commit transaction: WriteStall("Memory budget exceeded")',
+      "ERROR",
     );
-    expect(
-      isRetryable(
-        new RpcError("route missing", "ROUTE_NOT_REGISTERED", ErrCodeRpcRouteNotRegistered),
-      ),
-    ).toBe(true);
-    expect(
-      isRetryable(new ScheduleError("backend busy", "BACKEND_ERROR", ErrCodeScheduleBackendError)),
-    ).toBe(true);
-    expect(
-      isRetryable(
-        new QueueError(
-          'ENQUEUE failed: Failed to commit transaction: WriteStall("Memory budget exceeded")',
-          "ERROR",
-        ),
-      ),
-    ).toBe(true);
-  });
-
-  it("should classify fatal errors given representative domain codes when policy runs", () => {
-    expect(isRetryable(new KvError("missing", "KEY_NOT_FOUND", 4))).toBe(false);
-    expect(isRetryable(new QueueError("invalid token", "INVALID_TOKEN", 3))).toBe(false);
-    expect(
-      isRetryable(
-        new QueueError("ENQUEUE failed: Failed to commit transaction: InvalidRoute", "ERROR"),
-      ),
-    ).toBe(false);
-    expect(isRetryable(new StreamError("missing", "STREAM_NOT_FOUND", 1))).toBe(false);
-    expect(isRetryable(new Error("plain error"))).toBe(false);
-  });
-
-  it("should retry only retryable failures given timeout or no-worker errors when a call is classified", () => {
-    expect(isRetryable(new RpcError("timeout", "TIMEOUT", ErrCodeRpcTimeout))).toBe(true);
-    expect(
-      isRetryable(new RpcError("worker missing", "WORKER_NOT_FOUND", ErrCodeRpcWorkerNotFound)),
-    ).toBe(true);
-    expect(
-      isRetryable(new RpcError("outcome unknown", "BACKEND_ERROR", ErrCodeRpcBackendError)),
-    ).toBe(false);
+    expect(isRetryable(error)).toBe(false);
   });
 
   it("should not retry fatal failures given an unauthorized error when a call is classified", () => {
