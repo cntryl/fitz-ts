@@ -128,6 +128,8 @@ export function createConnection(
   const serviceName = normalizeServiceName(options.serviceName);
   const onGoAway = options.onGoAway;
   let maxMessageBytes = DEFAULT_MAX_MESSAGE_BYTES;
+  let negotiatedMaxMessageBytes = DEFAULT_MAX_MESSAGE_BYTES;
+  let negotiatedMaxInFlight = maxInFlightRequests;
   const closeReceiveBudgetMs = 200;
 
   let transport: Transport | null = null;
@@ -918,6 +920,8 @@ export function createConnection(
               throw new ProtocolError("HELLO max_in_flight must be non-zero");
             }
             maxMessageBytes = hello.maxMessageBytes;
+            negotiatedMaxMessageBytes = hello.maxMessageBytes;
+            negotiatedMaxInFlight = hello.maxInFlight;
             frameParser.setMaxMessageBytes(maxMessageBytes);
             requestGate = createRequestGate(
               Math.min(maxInFlightRequests, hello.maxInFlight),
@@ -1245,7 +1249,11 @@ export function createConnection(
     getState,
     isConnected,
     getUrl,
-    getServerCapabilities: multiplexer.getCapabilities,
+    getServerCapabilities: () => ({
+      ...multiplexer.getCapabilities(),
+      maxMessageBytes: negotiatedMaxMessageBytes,
+      maxInFlight: negotiatedMaxInFlight,
+    }),
     reportBackgroundError,
   };
 }

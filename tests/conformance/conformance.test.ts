@@ -198,6 +198,7 @@ const IMPLEMENTED_SCENARIO_IDS = [
   "CS-016",
   "CS-017",
   "CS-019",
+  "CS-020",
   "CS-024",
 ];
 
@@ -1111,6 +1112,36 @@ describe(`Fitz conformance — fitz-ts [transport=${TRANSPORT}, auth=${AUTH_MODE
           evidence: [
             "second reserve resolved first with its own payload",
             "parked first reserve resolved with its own payload",
+          ],
+        };
+      },
+    );
+    collector.record(result);
+    expect(result.verdict).toBe("pass");
+  });
+
+  it("CS-020 handshake negotiation", async () => {
+    const result = await runScenario(
+      "CS-020",
+      "handshake negotiation",
+      "P0",
+      async () => {
+        let negotiated: ReturnType<Client["getServerCapabilities"]> | undefined;
+        await withClient({}, async (client) => {
+          negotiated = client.getServerCapabilities();
+        });
+        expect(negotiated).toBeDefined();
+        expect(negotiated?.protocolVersion).toBe(2);
+        expect(negotiated?.capabilities).toBe(0);
+        expect(negotiated?.maxMessageBytes).toBeGreaterThan(0);
+        expect(negotiated?.maxInFlight).toBeGreaterThan(0);
+        return {
+          verdict: "pass",
+          evidence: [
+            `protocol_version=${negotiated?.protocolVersion}`,
+            `broker_caps=${negotiated?.capabilities}`,
+            `max_message_bytes=${negotiated?.maxMessageBytes}`,
+            `max_in_flight=${negotiated?.maxInFlight}`,
           ],
         };
       },

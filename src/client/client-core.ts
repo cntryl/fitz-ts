@@ -186,6 +186,8 @@ export type Client<TConfig extends ClientConfig = ClientConfig> = {
     protocolVersion: number;
     capabilities: number;
     correlationEnabled: boolean;
+    maxMessageBytes: number;
+    maxInFlight: number;
   };
 };
 
@@ -524,6 +526,8 @@ export function createClientWithTransport<TConfig extends ClientConfig>(
       protocolVersion: 0,
       capabilities: 0,
       correlationEnabled: false,
+      maxMessageBytes: 0,
+      maxInFlight: 0,
     };
 
   return {
