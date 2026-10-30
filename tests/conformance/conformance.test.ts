@@ -1121,31 +1121,26 @@ describe(`Fitz conformance — fitz-ts [transport=${TRANSPORT}, auth=${AUTH_MODE
   });
 
   it("CS-020 handshake negotiation", async () => {
-    const result = await runScenario(
-      "CS-020",
-      "handshake negotiation",
-      "P0",
-      async () => {
-        let negotiated: ReturnType<Client["getServerCapabilities"]> | undefined;
-        await withClient({}, async (client) => {
-          negotiated = client.getServerCapabilities();
-        });
-        expect(negotiated).toBeDefined();
-        expect(negotiated?.protocolVersion).toBe(2);
-        expect(negotiated?.capabilities).toBe(0);
-        expect(negotiated?.maxMessageBytes).toBeGreaterThan(0);
-        expect(negotiated?.maxInFlight).toBeGreaterThan(0);
-        return {
-          verdict: "pass",
-          evidence: [
-            `protocol_version=${negotiated?.protocolVersion}`,
-            `broker_caps=${negotiated?.capabilities}`,
-            `max_message_bytes=${negotiated?.maxMessageBytes}`,
-            `max_in_flight=${negotiated?.maxInFlight}`,
-          ],
-        };
-      },
-    );
+    const result = await runScenario("CS-020", "handshake negotiation", "P0", async () => {
+      let negotiated: ReturnType<Client["getServerCapabilities"]> | undefined;
+      await withClient({}, async (client) => {
+        negotiated = client.getServerCapabilities();
+      });
+      expect(negotiated).toBeDefined();
+      expect(negotiated?.protocolVersion).toBe(2);
+      expect(negotiated?.capabilities).toBe(0);
+      expect(negotiated?.maxMessageBytes).toBeGreaterThan(0);
+      expect(negotiated?.maxInFlight).toBeGreaterThan(0);
+      return {
+        verdict: "pass",
+        evidence: [
+          `protocol_version=${negotiated?.protocolVersion}`,
+          `broker_caps=${negotiated?.capabilities}`,
+          `max_message_bytes=${negotiated?.maxMessageBytes}`,
+          `max_in_flight=${negotiated?.maxInFlight}`,
+        ],
+      };
+    });
     collector.record(result);
     expect(result.verdict).toBe("pass");
   });
