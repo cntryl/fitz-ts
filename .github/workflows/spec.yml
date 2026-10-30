@@ -6,8 +6,8 @@ on:
       broker_tag:
         description: Fitz broker image tag
         type: choice
-        options: [main, develop]
-        default: main
+        options: [0.3.0, main, develop]
+        default: 0.3.0
   push:
     branches: [main]
   pull_request:
@@ -23,8 +23,8 @@ concurrency:
 
 env:
   FORCE_COLOR: "1"
-  # Qualified candidate required by the existing RPC cancellation tests.
-  FITZ_BROKER_IMAGE: ghcr.io/cntryl/fitz:${{ inputs.broker_tag || 'develop' }}
+  # The published Wire 2 release is the default broker for client acceptance.
+  FITZ_BROKER_IMAGE: ghcr.io/cntryl/fitz:${{ inputs.broker_tag || '0.3.0' }}
 
 jobs:
   broker:

@@ -81,7 +81,7 @@ jobs:
 
   browser:
     env:
-      FITZ_BROKER_IMAGE: ghcr.io/cntryl/fitz:develop
+      FITZ_BROKER_IMAGE: ghcr.io/cntryl/fitz:0.3.0
     strategy:
       fail-fast: false
       matrix:
