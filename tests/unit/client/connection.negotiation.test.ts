@@ -4,7 +4,7 @@ import { createBufferWriter } from "../../../src/core/buffer";
 import { ProtocolError } from "../../../src/core/errors";
 import { FrameCodec } from "../../../src/frame/codec";
 import { MSG_CONNECT_REJECTED } from "../../../src/frame/types";
-import { wire2HelloFrame } from "./wire-fixtures";
+import { wire3HelloFrame } from "./wire-fixtures";
 import type { Transport } from "../../../src/transport/types";
 
 class NegotiationTransport implements Transport {
@@ -31,8 +31,8 @@ class NegotiationTransport implements Transport {
   isConnected() {
     return this.connected;
   }
-  hello(capabilities: number) {
-    this.receiveFrame?.(wire2HelloFrame(capabilities));
+  hello(capabilities: number, maxMessageBytes = 1024 * 1024) {
+    this.receiveFrame?.(wire3HelloFrame(capabilities, maxMessageBytes));
   }
   reject(code: number, message: string) {
     const writer = createBufferWriter();
@@ -43,6 +43,43 @@ class NegotiationTransport implements Transport {
 }
 
 describe("connection negotiation readiness", () => {
+  it("closes the session if the broker repeats HELLO", async () => {
+    const transport = new NegotiationTransport();
+    const connection = createConnection(
+      () => transport,
+      () => "",
+      { timeout: 1000 },
+    );
+    try {
+      const connected = connection.connect();
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      transport.hello(0);
+      await connected;
+      transport.hello(0);
+      await expect.poll(() => connection.isConnected(), { timeout: 300 }).toBe(false);
+    } finally {
+      await connection.close();
+    }
+  });
+
+  it("retains the local frame limit if HELLO advertises a larger limit", async () => {
+    const transport = new NegotiationTransport();
+    const connection = createConnection(
+      () => transport,
+      () => "",
+      { timeout: 1000 },
+    );
+    try {
+      const connected = connection.connect();
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      transport.hello(0, 2 * 1024 * 1024);
+      await connected;
+      expect(connection.getServerCapabilities().maxMessageBytes).toBe(1024 * 1024);
+    } finally {
+      await connection.close();
+    }
+  });
+
   it("waits for a positive hello beyond the authentication settlement window", async () => {
     const transport = new NegotiationTransport();
     const connection = createConnection(
@@ -59,7 +96,7 @@ describe("connection negotiation readiness", () => {
       expect(ready).toBe(false);
       transport.hello(0);
       await connected;
-      expect(connection.getServerCapabilities().protocolVersion).toBe(2);
+      expect(connection.getServerCapabilities().protocolVersion).toBe(3);
       expect(connection.getServerCapabilities().capabilities).toBe(0);
     } finally {
       await connection.close();

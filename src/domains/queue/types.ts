@@ -3,17 +3,20 @@
  * Per fitz-go/internal/domains/queue/queue.go
  */
 
-import type { DisconnectListenerPort, RequestPort } from "../base";
+import type { DisconnectListenerPort, RequestPort, ServerCapabilitiesPort } from "../base";
+import { CAP_QUEUE_NACK } from "../../frame/extensions";
 import { createSubscriptionHandle } from "../internal/subscription-handle";
 import { QueueCodec } from "./codec";
 import { attachErrorDisposition, QueueError } from "../../core/errors";
-import { MSG_QUEUE_EXTEND, MSG_QUEUE_COMPLETE } from "../../frame/types";
+import { MSG_QUEUE_EXTEND, MSG_QUEUE_COMPLETE, MSG_QUEUE_NACK } from "../../frame/types";
 
 /**
  * Queue item represents a reserved queue message.
  * It carries the route and token required for `extend()` and `complete()`.
  */
 export interface QueueItem {
+  /** Relinquishes this reservation, optionally delaying visibility in seconds. */
+  nack(options?: { visibilitySeconds?: number; signal?: AbortSignal }): Promise<void>;
   /** Concrete queue route from which this message was reserved. */
   readonly route: string;
   /** Message payload. Treat this buffer as immutable while processing the reservation. */
@@ -25,7 +28,7 @@ export interface QueueItem {
     /** Cancels waiting; renewal outcome may be ambiguous after send. */
     signal?: AbortSignal;
   }): Promise<void>;
-  /** Acknowledges successful processing and permanently consumes the message. */
+  /** Acknowledges processing and removes the message; Queue persistence remains best effort. */
   complete(options?: {
     /** Cancels waiting; completion outcome may be ambiguous after send. */
     signal?: AbortSignal;
@@ -37,7 +40,7 @@ export function createQueueItem(
   token: bigint,
   body: Uint8Array,
   route: string,
-  connection: RequestPort & DisconnectListenerPort,
+  connection: RequestPort & DisconnectListenerPort & ServerCapabilitiesPort,
 ) {
   let closed = false;
   let unsubscribeDisconnect: () => void = () => undefined;
@@ -87,11 +90,41 @@ export function createQueueItem(
     unsubscribeDisconnect();
   };
 
+  const nack = async (
+    options: { visibilitySeconds?: number; signal?: AbortSignal } = {},
+  ): Promise<void> => {
+    ensureOpen();
+    const seconds = options.visibilitySeconds ?? 0;
+    if (!Number.isSafeInteger(seconds) || seconds < 0)
+      throw new QueueError(
+        "visibilitySeconds must be a non-negative safe integer",
+        "INVALID_DELAY",
+      );
+    if (!connection.getServerCapabilities?.().capabilityIds?.includes(CAP_QUEUE_NACK))
+      throw new QueueError("Queue NACK capability was not negotiated", "UNSUPPORTED_CAPABILITY");
+    const payload = QueueCodec.encodeExtend(route, id, token, seconds);
+    const response = await connection.request(MSG_QUEUE_NACK, payload, options.signal);
+    const decoded = QueueCodec.decodeCompleteResponse(response);
+    if (decoded.status !== QueueStatus.Ok)
+      throw attachErrorDisposition(
+        new QueueError(
+          `NACK failed: ${decoded.errorMessage ?? "NACK_FAILED"}`,
+          "NACK_FAILED",
+          decoded.errorCode,
+        ),
+        decoded.errorClass,
+        decoded.effect,
+      );
+    closed = true;
+    unsubscribeDisconnect();
+  };
+
   return {
     route,
     body,
     extend,
     complete,
+    nack,
   };
 }
 
@@ -155,6 +188,8 @@ export enum QueueStatus {
  * Options for enqueue operations.
  */
 export interface EnqueueOptions {
+  /** Positive per-message lifetime in hours; requires negotiated Queue TTL support. */
+  ttlHours?: number;
   /** Message body copied into the enqueue request. */
   body: Uint8Array;
   /** Delay in seconds before reservation eligibility. Omit for immediate availability. */

@@ -185,6 +185,7 @@ export type Client<TConfig extends ClientConfig = ClientConfig> = {
   getServerCapabilities: () => {
     protocolVersion: number;
     capabilities: number;
+    capabilityIds: readonly number[];
     correlationEnabled: boolean;
     maxMessageBytes: number;
     maxInFlight: number;
@@ -525,6 +526,7 @@ export function createClientWithTransport<TConfig extends ClientConfig>(
     connection?.getServerCapabilities() ?? {
       protocolVersion: 0,
       capabilities: 0,
+      capabilityIds: [],
       correlationEnabled: false,
       maxMessageBytes: 0,
       maxInFlight: 0,

@@ -1,3 +1,4 @@
+import { decodeExtensions } from "../../../src/frame/extensions";
 import { describe, expect, it, vi } from "vite-plus/test";
 
 import { createConnection, type Connection } from "../../../src/client/connection";
@@ -19,7 +20,7 @@ import { createNoticeClient } from "../../../src/domains/notice/client";
 import { FLAG_RESPONSE_FINAL, FrameCodec } from "../../../src/frame/codec";
 import { MSG_CONNECT, MSG_NOTICE_NOTIFY, MSG_NOTICE_SUBSCRIBE } from "../../../src/frame/types";
 import type { Transport } from "../../../src/transport/types";
-import { wire2HelloFrame } from "./wire-fixtures";
+import { wire3HelloFrame } from "./wire-fixtures";
 
 class FakeTransport implements Transport {
   public sent: Uint8Array[] = [];
@@ -65,7 +66,7 @@ class FakeTransport implements Transport {
       FrameCodec.decodeFrame(data).messageType === MSG_CONNECT &&
       this.reads.length === 0
     ) {
-      this.pushRead(wire2HelloFrame());
+      this.pushRead(wire3HelloFrame());
     }
     if (this.sendGate && this.sent.length > this.gateAfterSends) {
       await this.sendGate;
@@ -314,7 +315,7 @@ describe("Connection", () => {
   });
 
   it("includes the configured service name in the Wire-2 CONNECT payload", async () => {
-    const hello = wire2HelloFrame();
+    const hello = wire3HelloFrame();
     const transport = new FakeTransport([hello]);
     const connection = createConnection(
       () => transport,
@@ -329,20 +330,22 @@ describe("Connection", () => {
 
     const connect = FrameCodec.decodeFrame(transport.sent[0]!);
     expect(connect.messageType).toBe(MSG_CONNECT);
-    const reader = createBufferReader(connect.payload);
-    expect(reader.readU16BE()).toBe(2);
-    expect(reader.readU16BE()).toBe(2);
+    const reader = createBufferReader(
+      decodeExtensions(connect.payload, connect.messageType, connect.flags).core,
+    );
+    expect(reader.readU16BE()).toBe(3);
+    expect(reader.readU16BE()).toBe(3);
     expect(reader.readU32BE()).toBe(0);
     expect(reader.readString()).toBe("jwt-token");
     expect(reader.readString()).toBe("orders-worker");
-    expect(reader.readString()).toBe("fitz-ts/2.0.0");
+    expect(reader.readString()).toBe("fitz-ts/4.0.0");
     expect(reader.isEOF()).toBe(true);
 
     await connection.close();
   });
 
   it("accepts the 128-byte UTF-8 service-name boundary", async () => {
-    const transport = new FakeTransport([wire2HelloFrame()]);
+    const transport = new FakeTransport([wire3HelloFrame()]);
     const connection = createConnection(
       () => transport,
       async () => "",
@@ -353,7 +356,9 @@ describe("Connection", () => {
     );
     await connection.connect();
     const connect = FrameCodec.decodeFrame(transport.sent[0]!);
-    const reader = createBufferReader(connect.payload);
+    const reader = createBufferReader(
+      decodeExtensions(connect.payload, connect.messageType, connect.flags).core,
+    );
     reader.readU16BE();
     reader.readU16BE();
     reader.readU32BE();
@@ -364,7 +369,7 @@ describe("Connection", () => {
 
   it("trims the service name before checking the UTF-8 limit and encoding it", async () => {
     const serviceName = "é".repeat(64);
-    const transport = new FakeTransport([wire2HelloFrame()]);
+    const transport = new FakeTransport([wire3HelloFrame()]);
     const connection = createConnection(
       () => transport,
       async () => "",
@@ -374,7 +379,9 @@ describe("Connection", () => {
     await connection.connect();
 
     const connect = FrameCodec.decodeFrame(transport.sent[0]!);
-    const reader = createBufferReader(connect.payload);
+    const reader = createBufferReader(
+      decodeExtensions(connect.payload, connect.messageType, connect.flags).core,
+    );
     reader.readU16BE();
     reader.readU16BE();
     reader.readU32BE();

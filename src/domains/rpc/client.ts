@@ -852,7 +852,7 @@ function normalizeRegisterWorkerOptions(
 }
 
 function hasRpcCancellationCapability(connection: ServerCapabilitiesPort): boolean {
-  return connection.getServerCapabilities?.().protocolVersion === 2;
+  return (connection.getServerCapabilities?.().protocolVersion ?? 0) >= 2;
 }
 
 function validateCallTimeout(timeoutMs: number): void {

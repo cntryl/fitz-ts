@@ -1,6 +1,6 @@
 {
   "name": "@cntryl/fitz",
-  "version": "2.0.0",
+  "version": "4.0.0",
   "description": "TypeScript client library for Fitz distributed system",
   "keywords": [
     "distributed-systems",

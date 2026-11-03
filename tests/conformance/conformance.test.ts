@@ -1127,7 +1127,7 @@ describe(`Fitz conformance — fitz-ts [transport=${TRANSPORT}, auth=${AUTH_MODE
         negotiated = client.getServerCapabilities();
       });
       expect(negotiated).toBeDefined();
-      expect(negotiated?.protocolVersion).toBe(2);
+      expect(negotiated?.protocolVersion).toBe(3);
       expect(negotiated?.capabilities).toBe(0);
       expect(negotiated?.maxMessageBytes).toBeGreaterThan(0);
       expect(negotiated?.maxInFlight).toBeGreaterThan(0);

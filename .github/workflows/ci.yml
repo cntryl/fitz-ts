@@ -81,7 +81,7 @@ jobs:
 
   browser:
     env:
-      FITZ_BROKER_IMAGE: ghcr.io/cntryl/fitz:0.3.0
+      FITZ_BROKER_IMAGE: ghcr.io/cntryl/fitz:latest
     strategy:
       fail-fast: false
       matrix:
@@ -105,7 +105,7 @@ jobs:
         run: npx playwright install --with-deps ${{ matrix.browser }}
 
       - name: Start broker stack
-        run: docker compose up -d
+        run: docker compose up -d --pull always
 
       - name: Run Playwright ${{ matrix.browser }} tests
         run: |

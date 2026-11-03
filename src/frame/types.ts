@@ -34,6 +34,7 @@ export const MSG_QUEUE_COMPLETE = 204;
 export const MSG_QUEUE_SUBSCRIBE = 207;
 export const MSG_QUEUE_UNSUBSCRIBE = 208;
 export const MSG_QUEUE_NOTIFY = 209;
+export const MSG_QUEUE_NACK = 210;
 
 // RPC Domain (300-399)
 export const MSG_RPC_SUBSCRIBE_WORKER = 300;

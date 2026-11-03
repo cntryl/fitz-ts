@@ -2,12 +2,6 @@ name: Spec
 
 on:
   workflow_dispatch:
-    inputs:
-      broker_tag:
-        description: Fitz broker image tag
-        type: choice
-        options: [0.3.0, main, develop]
-        default: 0.3.0
   push:
     branches: [main]
   pull_request:
@@ -23,8 +17,8 @@ concurrency:
 
 env:
   FORCE_COLOR: "1"
-  # The published Wire 2 release is the default broker for client acceptance.
-  FITZ_BROKER_IMAGE: ghcr.io/cntryl/fitz:${{ inputs.broker_tag || '0.3.0' }}
+  # Automatic acceptance uses the coordinated Wire 3 broker container.
+  FITZ_BROKER_IMAGE: ghcr.io/cntryl/fitz:latest
 
 jobs:
   broker:
@@ -50,7 +44,7 @@ jobs:
         run: npm ci
 
       - name: Start broker stack
-        run: docker compose up -d
+        run: docker compose up -d --pull always
 
       - name: Wait for broker
         run: |

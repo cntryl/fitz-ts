@@ -83,6 +83,7 @@ export function createMultiplexer(observability: MultiplexerObservability = {}) 
   let correlationEnabled = true;
   let brokerProtocolVersion = 0;
   let brokerCapabilities = 0;
+  let activeCapabilityIds: readonly number[] = Object.freeze([]);
   let nextCorrelationId = 1n;
   const notificationHandlers: Map<number, NotificationHandler> = new Map();
   const pushClassifiers: Map<number, PushFrameClassifier> = new Map();
@@ -246,19 +247,26 @@ export function createMultiplexer(observability: MultiplexerObservability = {}) 
   /**
    * Record the negotiated version and broker capabilities from HELLO.
    */
-  const setCapabilities = (protocolVersion: number, capabilities: number): void => {
+  const setCapabilities = (
+    protocolVersion: number,
+    capabilities: number,
+    capabilityIds: readonly number[] = [],
+  ): void => {
     brokerProtocolVersion = protocolVersion;
     brokerCapabilities = capabilities;
-    correlationEnabled = protocolVersion === 2;
+    correlationEnabled = protocolVersion >= 2;
+    activeCapabilityIds = Object.freeze(capabilityIds.filter((id) => id === 1 || id === 2));
   };
 
   const getCapabilities = (): {
     protocolVersion: number;
     capabilities: number;
+    capabilityIds: readonly number[];
     correlationEnabled: boolean;
   } => ({
     protocolVersion: brokerProtocolVersion,
     capabilities: brokerCapabilities,
+    capabilityIds: activeCapabilityIds,
     correlationEnabled,
   });
 
@@ -313,6 +321,7 @@ export function createMultiplexer(observability: MultiplexerObservability = {}) 
     correlationEnabled = true;
     brokerProtocolVersion = 0;
     brokerCapabilities = 0;
+    activeCapabilityIds = Object.freeze([]);
     uncorrelatedLanes.clear();
     cancelAll();
   };
