@@ -9,7 +9,7 @@ import { MSG_LEASE_QUERY, MSG_QUEUE_ENQUEUE } from "../../../src/frame/types";
 import { createLeaseClient } from "../../../src/domains/lease/client";
 import { createQueueClient } from "../../../src/domains/queue/client";
 import type { Transport } from "../../../src/transport/types";
-import { wire2HelloFrame } from "./wire-fixtures";
+import { wire3HelloFrame } from "./wire-fixtures";
 
 class ScriptedTransport implements Transport {
   public sent: Uint8Array[] = [];
@@ -30,7 +30,7 @@ class ScriptedTransport implements Transport {
       await this.connectGate;
     }
     this.connected = true;
-    this.pushRead(wire2HelloFrame());
+    this.pushRead(wire3HelloFrame());
   }
 
   async send(data: Uint8Array): Promise<void> {

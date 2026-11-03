@@ -83,7 +83,7 @@ export function createMultiplexer(observability: MultiplexerObservability = {}) 
   let correlationEnabled = true;
   let brokerProtocolVersion = 0;
   let brokerCapabilities = 0;
-  let activeCapabilityIds: readonly number[] = [];
+  let activeCapabilityIds: readonly number[] = Object.freeze([]);
   let nextCorrelationId = 1n;
   const notificationHandlers: Map<number, NotificationHandler> = new Map();
   const pushClassifiers: Map<number, PushFrameClassifier> = new Map();
@@ -255,7 +255,7 @@ export function createMultiplexer(observability: MultiplexerObservability = {}) 
     brokerProtocolVersion = protocolVersion;
     brokerCapabilities = capabilities;
     correlationEnabled = protocolVersion >= 2;
-    activeCapabilityIds = capabilityIds.filter((id) => id === 1 || id === 2);
+    activeCapabilityIds = Object.freeze(capabilityIds.filter((id) => id === 1 || id === 2));
   };
 
   const getCapabilities = (): {
@@ -321,7 +321,7 @@ export function createMultiplexer(observability: MultiplexerObservability = {}) 
     correlationEnabled = true;
     brokerProtocolVersion = 0;
     brokerCapabilities = 0;
-    activeCapabilityIds = [];
+    activeCapabilityIds = Object.freeze([]);
     uncorrelatedLanes.clear();
     cancelAll();
   };

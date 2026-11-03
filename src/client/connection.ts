@@ -925,6 +925,9 @@ export function createConnection(
             capabilityIds = decoded.capabilityIds;
           }
           if (frame.messageType === MSG_HELLO) {
+            if (multiplexer.getCapabilities().protocolVersion !== 0) {
+              throw new ProtocolError("Repeated HELLO cannot renegotiate an established session");
+            }
             if (frame.correlation !== 0n || frame.flags !== FLAG_EXTENSIONS_PRESENT) {
               throw new ProtocolError("HELLO must have correlation 0");
             }
@@ -941,8 +944,8 @@ export function createConnection(
             if (hello.maxInFlight === 0) {
               throw new ProtocolError("HELLO max_in_flight must be non-zero");
             }
-            maxMessageBytes = hello.maxMessageBytes;
-            negotiatedMaxMessageBytes = hello.maxMessageBytes;
+            maxMessageBytes = Math.min(DEFAULT_MAX_MESSAGE_BYTES, hello.maxMessageBytes);
+            negotiatedMaxMessageBytes = maxMessageBytes;
             negotiatedMaxInFlight = hello.maxInFlight;
             frameParser.setMaxMessageBytes(maxMessageBytes);
             requestGate = createRequestGate(

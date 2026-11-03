@@ -25,6 +25,19 @@ describe("Wire 3", () => {
     expect(encodeExtensions(core, [])).toBe(core);
     expect(decodeExtensions(core, 104, 0).core).toBe(core);
   });
+
+  it("rejects every truncated prefix of a Wire 3 HELLO envelope", () => {
+    const line = vectors.find((value) => value.startsWith("hello_wire3_queue_capabilities "))!;
+    const frame = FrameCodec.decodeFrame(Buffer.from(line.split(" ")[1]!, "hex"));
+    for (let size = 0; size < frame.payload.length; size++) {
+      expect(() => decodeExtensions(frame.payload.subarray(0, size), 2, 4)).toThrow();
+    }
+  });
+
+  it("skips repeated unknown fields in any order", () => {
+    const payload = Buffer.from("000000026869100100000000100000000000100000000000", "hex");
+    expect(Buffer.from(decodeExtensions(payload, 104, 4).core).toString()).toBe("hi");
+  });
   it.each([
     [],
     [0, 0, 0, 0],
