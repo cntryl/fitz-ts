@@ -28,7 +28,11 @@ export interface RequestFlagsPort {
 }
 
 export interface ServerCapabilitiesPort {
-  getServerCapabilities?(): { protocolVersion: number; capabilities: number };
+  getServerCapabilities?(): {
+    protocolVersion: number;
+    capabilities: number;
+    capabilityIds?: readonly number[];
+  };
 }
 
 export interface ReconnectRestoreRequestPort {

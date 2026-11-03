@@ -59,7 +59,7 @@ describe("connection negotiation readiness", () => {
       expect(ready).toBe(false);
       transport.hello(0);
       await connected;
-      expect(connection.getServerCapabilities().protocolVersion).toBe(2);
+      expect(connection.getServerCapabilities().protocolVersion).toBe(3);
       expect(connection.getServerCapabilities().capabilities).toBe(0);
     } finally {
       await connection.close();

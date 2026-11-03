@@ -14,7 +14,7 @@ The client transitions through these states:
 - `RECONNECTING`
 - `CLOSED`
 
-`connect()` opens the selected transport, sends a wire format 2 `CONNECT`, and
+`connect()` opens the selected transport, sends a Wire 3 `CONNECT`, and
 waits for `HELLO` or `CONNECT_REJECTED` within the configured request timeout.
 The negotiated version, message-size limit, in-flight limit, and broker
 capabilities are recorded before domain requests are admitted. A missing

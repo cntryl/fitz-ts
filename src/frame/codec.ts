@@ -7,7 +7,7 @@ export const HEADER_LENGTH = 15;
 export const DEFAULT_MAX_MESSAGE_BYTES = 1024 * 1024;
 export const FLAG_ACK_REQUESTED = 0x01;
 export const FLAG_RESPONSE_FINAL = 0x02;
-const RESERVED_FLAGS = 0xfc;
+const RESERVED_FLAGS = 0xf8;
 const MAX_U64 = 0xffffffffffffffffn;
 
 export interface Frame {
@@ -128,8 +128,8 @@ const encodeConnect = (input: {
   clientBuild: string;
 }): Uint8Array => {
   const writer = createBufferWriter();
-  writer.writeU16BE(2);
-  writer.writeU16BE(2);
+  writer.writeU16BE(3);
+  writer.writeU16BE(3);
   writer.writeU32BE(0);
   writer.writeString(input.jwt);
   writer.writeString(input.serviceName);
@@ -139,7 +139,7 @@ const encodeConnect = (input: {
 
 const decodeHello = (payload: Uint8Array): Hello => {
   const minimumLength = 2 + 4 + 4 + 4 + 8;
-  if (payload.length < minimumLength) {
+  if (payload.length !== minimumLength) {
     throw new CodecError(`HELLO needs at least ${minimumLength} bytes`);
   }
   const view = new DataView(payload.buffer, payload.byteOffset, payload.byteLength);

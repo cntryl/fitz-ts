@@ -5,6 +5,14 @@
  * first domain command.
  */
 
+import {
+  CLIENT_CAPABILITY_IDS,
+  FLAG_EXTENSIONS_PRESENT,
+  decodeExtensions,
+  encodeCapabilities,
+  encodeExtensions,
+} from "../frame/extensions";
+
 import { Transport } from "../transport/types";
 import {
   ConnectionState,
@@ -883,9 +891,13 @@ export function createConnection(
     const value = FrameCodec.encodeConnect({
       jwt: token,
       serviceName,
-      clientBuild: "fitz-ts/2.0.0",
+      clientBuild: "fitz-ts/4.0.0",
     });
-    const frame = FrameCodec.encodeFrame(MSG_CONNECT, value);
+    const frame = FrameCodec.encodeFrame(
+      MSG_CONNECT,
+      encodeExtensions(value, [[1, encodeCapabilities(CLIENT_CAPABILITY_IDS)]]),
+      { flags: FLAG_EXTENSIONS_PRESENT },
+    );
     await activeTransport.send(frame);
     markOutboundActivity();
   };
@@ -906,12 +918,22 @@ export function createConnection(
         }
 
         for (const frame of frames) {
+          let capabilityIds: readonly number[] | undefined;
+          if ((frame.flags & FLAG_EXTENSIONS_PRESENT) !== 0 || frame.messageType === MSG_HELLO) {
+            const decoded = decodeExtensions(frame.payload, frame.messageType, frame.flags);
+            frame.payload = decoded.core;
+            capabilityIds = decoded.capabilityIds;
+          }
           if (frame.messageType === MSG_HELLO) {
-            if (frame.correlation !== 0n) {
+            if (frame.correlation !== 0n || frame.flags !== FLAG_EXTENSIONS_PRESENT) {
               throw new ProtocolError("HELLO must have correlation 0");
             }
             const hello = FrameCodec.decodeHello(frame.payload);
-            if (hello.version !== 2) {
+            if (
+              hello.version !== 3 ||
+              hello.brokerCapabilities !== 0 ||
+              hello.maxMessageBytes < 15
+            ) {
               throw new ProtocolError(
                 `Broker negotiated unsupported wire version ${hello.version}`,
               );
@@ -927,7 +949,7 @@ export function createConnection(
               Math.min(maxInFlightRequests, hello.maxInFlight),
               maxRequestQueueSize,
             );
-            multiplexer.setCapabilities(hello.version, hello.brokerCapabilities);
+            multiplexer.setCapabilities(hello.version, hello.brokerCapabilities, capabilityIds);
             authOutcome?.resolve();
             continue;
           }

@@ -8,6 +8,28 @@ const b = (value: string) => Buffer.from(value);
 
 describe("Queue integration", () => {
   runWithBothTransports(({ transport, authMode }) => {
+    it("should relinquish a TTL-bearing message immediately through NACK", async () => {
+      const f = new TestFixture(transport, authMode);
+      await f.connectOrFail();
+      const route = f.uniqueRoute("queue");
+      await f.client().queue.enqueue(route, { body: b("wire3"), ttlHours: 1 });
+      const [first] = await f.client().queue.reserve(route, { leaseSeconds: 30 });
+      await first!.nack();
+      const [second] = await f.client().queue.reserve(route, { leaseSeconds: 30 });
+      expect(Buffer.from(second!.body).toString()).toBe("wire3");
+      await second!.complete();
+    });
+
+    it("should defer visibility after a delayed NACK", async () => {
+      const f = new TestFixture(transport, authMode);
+      await f.connectOrFail();
+      const route = f.uniqueRoute("queue");
+      await f.client().queue.enqueue(route, { body: b("delay") });
+      const [item] = await f.client().queue.reserve(route, { leaseSeconds: 30 });
+      await item!.nack({ visibilitySeconds: 60 });
+      expect(await f.client().queue.reserve(route, { leaseSeconds: 30 })).toHaveLength(0);
+    });
+
     it("should complete basic enqueue reserve complete workflow", async () => {
       const f = new TestFixture(transport, authMode);
       await f.connectOrFail();
@@ -33,7 +55,7 @@ describe("Queue integration", () => {
         timeoutMessage: "broker did not advertise correlation capability",
       });
       expect(f.client().getServerCapabilities()).toMatchObject({
-        protocolVersion: 2,
+        protocolVersion: 3,
         correlationEnabled: true,
       });
       expect(f.client().getServerCapabilities().capabilities).toBe(0);

@@ -1,5 +1,7 @@
 # fitz-ts
 
+Current release candidate: **4.0.0**, requiring Fitz **0.4.0 / Wire 3**. See [Wire 3 migration](WIRE3_MIGRATION.md) for Queue TTL, NACK, negotiation, and coordinated upgrade guidance.
+
 TypeScript client SDK for [Fitz](https://github.com/cntryl/fitz).
 
 ## Install

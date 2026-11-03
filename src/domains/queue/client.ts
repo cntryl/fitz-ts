@@ -2,6 +2,12 @@
  * Queue domain client.
  */
 
+import {
+  CAP_QUEUE_MESSAGE_TTL,
+  FLAG_EXTENSIONS_PRESENT,
+  encodeExtensions,
+} from "../../frame/extensions";
+
 import { createDomainClient } from "../base";
 import type {
   AsyncDispatchPort,
@@ -11,6 +17,8 @@ import type {
   ReconnectListenerPort,
   ReconnectRestoreRequestPort,
   RequestPort,
+  RequestFlagsPort,
+  ServerCapabilitiesPort,
   RetryExecutionPort,
 } from "../base";
 import { attachResilienceMeta } from "../../client/resilience";
@@ -64,6 +72,8 @@ type QueueSubscriptionState = {
 };
 
 type QueueConnectionPort = RequestPort &
+  RequestFlagsPort &
+  ServerCapabilitiesPort &
   Partial<BackgroundErrorPort> &
   ReconnectListenerPort &
   DisconnectListenerPort &
@@ -73,7 +83,7 @@ type QueueConnectionPort = RequestPort &
   Partial<ReconnectRestoreRequestPort>;
 
 /**
- * Durable queue facade for producing, reserving, and observing messages.
+ * Queue facade with best-effort persistence for producing, reserving, and observing messages.
  * Concrete routes use `queue://realm/area/resource`; reservation and
  * subscription selectors may replace whole segments with `*` or `**`.
  */
@@ -206,8 +216,35 @@ export function createQueueClient(connection: QueueConnectionPort): QueueClient 
         retryClass: "confirmed_negative_retry",
       },
       async () => {
-        const payload = QueueCodec.encodeEnqueue(route, options.body, options);
-        const response = await requestFrame(MSG_QUEUE_ENQUEUE, payload, options.signal);
+        let payload = QueueCodec.encodeEnqueue(route, options.body, options);
+        let response: Uint8Array;
+        if (options.ttlHours === undefined) {
+          response = await requestFrame(MSG_QUEUE_ENQUEUE, payload, options.signal);
+        } else {
+          if (
+            !Number.isInteger(options.ttlHours) ||
+            options.ttlHours <= 0 ||
+            options.ttlHours > 0xffffffff
+          )
+            throw new QueueError("ttlHours must be a positive u32 number of hours", "INVALID_TTL");
+          if (
+            !connection.getServerCapabilities?.().capabilityIds?.includes(CAP_QUEUE_MESSAGE_TTL) ||
+            !connection.requestWithFlags
+          )
+            throw new QueueError(
+              "Queue TTL capability was not negotiated",
+              "UNSUPPORTED_CAPABILITY",
+            );
+          const ttl = new Uint8Array(4);
+          new DataView(ttl.buffer).setUint32(0, options.ttlHours);
+          payload = encodeExtensions(payload, [[1, ttl]]);
+          response = await connection.requestWithFlags(
+            MSG_QUEUE_ENQUEUE,
+            payload,
+            FLAG_EXTENSIONS_PRESENT,
+            options.signal,
+          );
+        }
         const decoded = QueueCodec.decodeEnqueueResponse(response);
         checkStatus(decoded, "ENQUEUE");
       },
